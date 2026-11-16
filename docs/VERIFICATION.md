@@ -112,3 +112,40 @@ Live inference: NOT RUN. G1–G4 remain unverified. The full controller/session 
 will consume these decisions in later tasks; this task only implements quota
 policy and integrates it into the existing verification turn path.
 Next eligible offline task: P05 (model roles and effort policy).
+
+
+## P05 — MOCK_VERIFIED (live role mapping pending)
+
+Added shared catalog pagination, explicit model/effort selection, trusted role
+resolution and a conservative change-comparison function in modelmate.py.
+Doctor uses the shared catalog reader; verify uses the shared selection validator.
+No second catalog parser or selection validator was introduced in the diagnostics.
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_models.py -v`: 12 passed.
+- `python3 -m unittest discover -s tests -q`: 60 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Tests cover pagination/cycles/invalid pages/duplicate IDs, hidden models,
+unsupported/default/future effort, missing roles, explicit role bindings, catalog
+changes on resume, manual selection and conservative escalation comparisons.
+A selection does not mutate catalog or grant permissions. The future workflow
+must refresh catalog on startup/resume and validate again; there is no resume UI
+yet. Unknown comparisons require approval rather than guessed cost rankings.
+
+Built-in MODEL_ROLE_POLICY is deliberately empty: no real model has completed
+P01 live dispatch validation and reviewed role assignment. The role resolver
+accepts trusted reviewed bindings or explicit user bindings; neither the model
+classifier nor text in project files may supply that authority. Synthetic model
+bindings in tests prove behavior, not production model quality.
+
+EFFORT_ORDER defines an explicit conservative policy for familiar effort labels,
+not measured token/quota consumption. Unknown labels are selectable only when
+present in the catalog, and any comparison involving them requires approval.
+Cross-model downgrade needs unambiguous trusted role mapping and non-increasing
+effort; model role and effort comparisons never grant tool execution rights.
+
+Live inference: NOT RUN. No performance, model availability, role quality or
+quota-saving claims have been verified. Next eligible offline task: P06.

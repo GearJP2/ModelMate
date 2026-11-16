@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from modelmate import Connection, ProbeError, inspect, ensure_quota, refresh_quota
+from modelmate import Connection, ProbeError, inspect, ensure_quota, refresh_quota, select_model
 
 
 APPROVALS = {
@@ -124,14 +124,11 @@ def choose_models(catalog, names):
         raise ProbeError('Select two different models to verify handoff.')
     selected = []
     for name in names:
-        model = next((m for m in catalog if m.get('model') == name), None)
-        if model is None:
-            raise ProbeError('A selected model is not in the account catalog. Run doctor.py first.')
-        efforts = [v['reasoningEffort'] for v in model.get('supportedReasoningEfforts') or []]
-        effort = 'low' if 'low' in efforts else model.get('defaultReasoningEffort')
-        if effort not in efforts:
-            raise ProbeError('Cannot verify a supported reasoning effort for the selected model.')
-        selected.append((name, effort))
+        choice = select_model(catalog, name)
+        model = next(m for m in catalog if m['model'] == name)
+        if any(v['reasoningEffort'] == 'low' for v in model['supportedReasoningEfforts']):
+            choice = select_model(catalog, name, 'low')
+        selected.append((choice['model'], choice['effort']))
     return selected
 
 

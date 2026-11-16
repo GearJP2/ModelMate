@@ -113,23 +113,7 @@ def inspect(connection):
     account = connection.request('account/read', {'refreshToken': False}).get('account')
     if not isinstance(account, dict) or account.get('type') != 'chatgpt':
         raise ProbeError('ChatGPT login required. Run codex login and choose ChatGPT; API-key auth is not supported.')
-    models = []
-    cursor = None
-    seen = set()
-    while True:
-        params = {'limit': 100}
-        if cursor:
-            params['cursor'] = cursor
-        page = connection.request('model/list', params)
-        models.extend({k: model.get(k) for k in
-                       ('model', 'displayName', 'defaultReasoningEffort', 'supportedReasoningEfforts')}
-                      for model in page['data'] if not model.get('hidden'))
-        cursor = page.get('nextCursor')
-        if not cursor:
-            break
-        if cursor in seen or len(seen) >= 100:
-            raise ProbeError('Model catalog pagination did not terminate.')
-        seen.add(cursor)
+    models = read_models(connection)
     quota = connection.request('account/rateLimits/read')
     buckets = quota.get('rateLimitsByLimitId')
     if buckets is None:
@@ -247,3 +231,101 @@ def ensure_quota(quota):
     decision = quota_decision(quota, checked_at)
     if decision['state'] != 'allow':
         raise ProbeError('Quota check paused: ' + decision['reason'] + '; no new turn started.')
+
+
+def read_models(connection):
+    """Read fresh visible catalog entries; do not infer quality or price."""
+    models = []
+    cursor = None
+    seen = set()
+    model_ids = set()
+    while True:
+        params = {'limit': 100}
+        if cursor:
+            params['cursor'] = cursor
+        page = connection.request('model/list', params)
+        data = page.get('data')
+        if not isinstance(data, list):
+            raise ProbeError('Invalid model catalog page.')
+        for model in data:
+            if (not isinstance(model, dict) or not isinstance(model.get('model'), str)
+                    or not model['model'].strip() or type(model.get('hidden', False)) is not bool):
+                raise ProbeError('Invalid model catalog entry.')
+            if model['model'] in model_ids:
+                raise ProbeError('Duplicate model ID in catalog.')
+            model_ids.add(model['model'])
+            if not model.get('hidden'):
+                models.append({k: model.get(k) for k in
+                               ('model', 'displayName', 'defaultReasoningEffort', 'supportedReasoningEfforts')})
+        cursor = page.get('nextCursor')
+        if cursor is None:
+            break
+        if not isinstance(cursor, str) or not cursor:
+            raise ProbeError('Invalid model catalog cursor.')
+        if cursor in seen or len(seen) >= 100:
+            raise ProbeError('Model catalog pagination did not terminate.')
+        seen.add(cursor)
+    return models
+
+
+# No model has completed the live validation/review gate yet; do not guess roles.
+MODEL_ROLE_POLICY = {}
+ROLE_ORDER = {'economy': 0, 'standard': 1, 'strong': 2}
+EFFORT_ORDER = {'none': 0, 'minimal': 1, 'low': 2, 'medium': 3,
+                'high': 4, 'xhigh': 5, 'max': 6}
+
+
+def select_model(catalog, model_id, effort=None):
+    """Validate an explicit selection against the current catalog, not saved state."""
+    if not isinstance(catalog, list) or not isinstance(model_id, str) or not model_id:
+        raise ProbeError('Invalid model selection.')
+    matches = [m for m in catalog if isinstance(m, dict) and m.get('model') == model_id]
+    if len(matches) != 1 or (type(matches[0].get('hidden', False)) is not bool or matches[0].get('hidden', False)):
+        raise ProbeError('Selected model is unavailable; refresh the catalog or choose manually.')
+    model = matches[0]
+    options = model.get('supportedReasoningEfforts')
+    if not isinstance(options, list) or not options:
+        raise ProbeError('Supported reasoning efforts are unavailable.')
+    efforts = []
+    for option in options:
+        value = option.get('reasoningEffort') if isinstance(option, dict) else None
+        if not isinstance(value, str) or not value or value in efforts:
+            raise ProbeError('Invalid reasoning effort catalog.')
+        efforts.append(value)
+    if effort is None:
+        effort = model.get('defaultReasoningEffort')
+    if not isinstance(effort, str) or effort not in efforts:
+        raise ProbeError('Selected reasoning effort is unsupported.')
+    return {'model': model_id, 'effort': effort}
+
+
+def select_role(catalog, role, role_policy=None, effort=None):
+    """Resolve only a trusted reviewed policy or explicit user role binding."""
+    policy = MODEL_ROLE_POLICY if role_policy is None else role_policy
+    if not isinstance(role, str) or role not in ROLE_ORDER or not isinstance(policy, dict):
+        raise ProbeError('Invalid role policy.')
+    if any(k not in ROLE_ORDER or not isinstance(v, str) or not v for k, v in policy.items()):
+        raise ProbeError('Invalid role binding.')
+    model_id = policy.get(role)
+    if model_id is None:
+        raise ProbeError('Role is unassigned; choose a model explicitly or pause.')
+    return select_model(catalog, model_id, effort)
+
+
+def model_change_requires_approval(previous, proposed, role_policy=None):
+    """Conservative comparison for later mode logic; never grants tool access."""
+    policy = MODEL_ROLE_POLICY if role_policy is None else role_policy
+    if not isinstance(policy, dict) or any(k not in ROLE_ORDER or not isinstance(v, str)
+                                           for k, v in policy.items()):
+        return True
+    for selection in (previous, proposed):
+        if (not isinstance(selection, dict) or not isinstance(selection.get('model'), str)
+                or not selection['model'] or not isinstance(selection.get('effort'), str)
+                or selection['effort'] not in EFFORT_ORDER):
+            return True
+    if previous['model'] != proposed['model']:
+        old_roles = [ROLE_ORDER[k] for k, v in policy.items() if v == previous['model']]
+        new_roles = [ROLE_ORDER[k] for k, v in policy.items() if v == proposed['model']]
+        if len(old_roles) != 1 or len(new_roles) != 1 or new_roles[0] > old_roles[0]:
+            return True
+    return EFFORT_ORDER[proposed['effort']] > EFFORT_ORDER[previous['effort']]
