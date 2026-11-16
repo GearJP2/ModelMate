@@ -180,3 +180,25 @@ python3 modelmate.py --doctor
 ถ้า Codex เริ่มไม่สำเร็จจะคืน exit code 1 การล็อกอินสำเร็จเพียงอย่างเดียว
 ไม่ยืนยันว่า App Server เปิดได้ ใน sandbox พัฒนาปัจจุบันติด read-only filesystem
 ตอนเริ่ม SQLite ของ Codex จึงต้องรันการตรวจสดจาก Terminal ปกติ
+
+
+## ตรวจคำสั่งทั่วไปโดยไม่ทดสอบ handoff ซ้ำ
+
+```bash
+python3 verify.py --run-live --probe-read-approval gpt-6.1-sol
+```
+
+ใช้โควตาจริงหนึ่ง turn (อาจมีหลาย request ภายใน) ขอให้ shell พิมพ์ marker ด้วย
+`printf` เท่านั้น ไม่อ่านหรือเขียนไฟล์ และไม่ขอ elevated permissions
+หากเกิด approval request ชุดตรวจตอบ decline เหมือนเดิม
+
+ผล `readCommandApproval` แยกเป็น `executed_without_approval`,
+`denial_observed_for_this_command` หรือ `inconclusive` โดยดู tool events จริง
+ไม่ใช้ข้อความที่โมเดลอ้างว่ารันแล้วเป็นหลักฐาน Exit 0 เฉพาะกรณีพบ denial
+พร้อมสถานะเครื่องมือที่ไม่สำเร็จ ส่วนอีกสองกรณีคืน 1 และไม่ผ่าน gate
+
+รายงานใหม่มี `turnEvidence` ซึ่งแยก requested model/effort,
+`threadSettingsObserved` และ `toolsObserved` โดยไม่บันทึก command/output/IDs
+Settings เป็นการตั้งค่า thread ที่สังเกตระหว่าง turn ไม่ใช่ execution telemetry
+ดังนั้น `reportedModels` ยังเป็น null และไม่อ้างว่า actual dispatch verified
+อ่าน matrix สิทธิ์ที่ยังต้องตรวจใน [PERMISSIONS.md](docs/PERMISSIONS.md)

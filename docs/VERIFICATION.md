@@ -388,3 +388,36 @@ catalog is not a role-quality benchmark; they remain eligible for explicit
 selection/testing without a claimed production role mapping.
 
 Documentation-only checks: `git diff --check` passed. No new inference was run.
+
+
+## P01/P03 — configuration evidence and read-command probe preparation
+
+Inspected the installed 0.169.0 JSON schemas: Thread.model explicitly describes
+configured state rather than per-turn execution telemetry. Thread settings
+notifications carry model/effort but no turn ID; raw response completion carries
+usage and IDs but no actual model field. The harness now records requested
+selection and settings observations separately and leaves reportedModels unknown.
+No self-identification prompt or guessed dispatch assertion was added.
+
+Added a separate --probe-read-approval path: one synthetic printf turn, no handoff
+rerun, no file reads/writes requested. It records command completion/denial by
+matching actual tool item IDs internally, but reports only type/status/denial flag.
+It never accepts an approval. A successful command without denial is a bypass
+observation; no tool evidence is inconclusive. Neither result passes the gate.
+Expanded the path-by-path matrix in docs/PERMISSIONS.md.
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -q`: 112 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `python3 verify.py --help`: passed.
+- `git diff --check`: passed.
+
+Tests use JSONL subprocesses to exercise settings events before RPC replies,
+missing metadata, wrong-thread/malformed metadata, and sanitized tool observations.
+Probe classification tests distinguish execution, denial and inconclusive cases.
+No raw tool command/output or thread/account identifiers are in evidence reports.
+
+Live inference this round: NOT RUN. The previous user live result remains valid
+only for its scenarios. The new read-command probe still needs user Terminal
+execution; existing sandbox restrictions are unchanged. P03 remains IN_PROGRESS.

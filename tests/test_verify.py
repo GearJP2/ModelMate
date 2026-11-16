@@ -77,6 +77,7 @@ class VerificationTests(unittest.TestCase):
 
     def test_synthetic_flow_and_no_nonce_in_second_prompt(self):
         c = Mock()
+        c.turn_evidence = []
         c.request.return_value = {'thread': {'id': 'thread'}}
         c.run_turn.side_effect = [('ACK', set()), ('secret-code', set()), ('denied', {'command'}), ('denied', {'file'})]
         with tempfile.TemporaryDirectory() as tmp, patch('verify.secrets.token_hex', return_value='secret-code'):
@@ -87,6 +88,7 @@ class VerificationTests(unittest.TestCase):
 
     def test_missing_approval_is_not_a_pass(self):
         c = Mock()
+        c.turn_evidence = []
         c.request.return_value = {'thread': {'id': 'thread'}}
         c.run_turn.side_effect = [('ACK', set()), ('secret-code', set()), ('cannot write', set())]
         with tempfile.TemporaryDirectory() as tmp, patch('verify.secrets.token_hex', return_value='secret-code'):
@@ -95,6 +97,7 @@ class VerificationTests(unittest.TestCase):
 
     def test_unapproved_write_is_a_failure(self):
         c = Mock()
+        c.turn_evidence = []
         c.request.return_value = {'thread': {'id': 'thread'}}
         with tempfile.TemporaryDirectory() as tmp, patch('verify.secrets.token_hex', return_value='secret-code'):
             def turn(prompt, *args):
@@ -184,6 +187,7 @@ class LifecycleRegressions(unittest.TestCase):
         from verify import run_in_scratch
         import shutil
         c = Mock()
+        c.turn_evidence = []
         c.interrupt.side_effect = ProbeError('interrupt failed')
         with tempfile.TemporaryDirectory() as parent:
             directory = Path(parent) / 'scratch'
@@ -198,6 +202,7 @@ class LifecycleRegressions(unittest.TestCase):
     def test_success_is_not_reported_if_interrupt_is_unconfirmed(self):
         from verify import run_in_scratch
         c = Mock()
+        c.turn_evidence = []
         c.interrupt.side_effect = ProbeError('not stopped')
         with tempfile.TemporaryDirectory() as directory, \
              patch('verify.tempfile.mkdtemp', return_value=directory), \
@@ -209,6 +214,7 @@ class LifecycleRegressions(unittest.TestCase):
     def test_cleanup_error_does_not_mask_original_failure(self):
         from verify import run_in_scratch
         c = Mock()
+        c.turn_evidence = []
         with tempfile.TemporaryDirectory() as directory, \
              patch('verify.tempfile.mkdtemp', return_value=directory), \
              patch('verify.verify', side_effect=ProbeError('original')), \

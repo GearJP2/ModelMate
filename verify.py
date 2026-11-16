@@ -30,6 +30,9 @@ class VerificationConnection(Connection):
         self.turn_id = None
         self.start_pending = False
         self.account_id = None
+        self.turn_evidence = []
+        self.settings_observed = []
+        self.denied_items = set()
 
     def handle_event(self, message):
         method = message.get('method')
@@ -45,8 +48,21 @@ class VerificationConnection(Connection):
                     or (self.turn_id is not None and params['turnId'] != self.turn_id)):
                 raise ProbeError('Approval belongs to a different thread; nothing approved.')
             self.denials.append((APPROVALS[method], params.get('turnId')))
+            self.denied_items.add(params['itemId'])
             self.send({'id': message['id'], 'result': {'decision': 'decline'}})
         else:
+            params = message['params']
+            if method == 'thread/settings/updated' and params.get('threadId') == self.thread_id:
+                settings = params.get('threadSettings')
+                if not isinstance(settings, dict):
+                    raise ProbeError('Invalid thread settings metadata.')
+                observed = {key: settings.get(key) for key in ('model', 'effort')}
+                if any(value is not None and (not isinstance(value, str) or len(value) > 128
+                                              or not value.isprintable()) for value in observed.values()):
+                    raise ProbeError('Invalid model/effort metadata.')
+                self.settings_observed.append(observed)
+                if len(self.settings_observed) > 100:
+                    raise ProbeError('Too many settings observations.')
             if method == 'turn/started' and message.get('params', {}).get('threadId') == self.thread_id:
                 turn_id = message['params'].get('turn', {}).get('id')
                 if not isinstance(turn_id, str) or not turn_id:
@@ -67,6 +83,8 @@ class VerificationConnection(Connection):
         self.account_id = self.quota_status['account_id']
         self.events.clear()
         self.denials.clear()
+        self.denied_items.clear()
+        self.settings_observed.clear()
         deadline = time.monotonic() + self.timeout
         self.start_pending = True
         result = self.request('turn/start', {
@@ -79,6 +97,7 @@ class VerificationConnection(Connection):
         self.turn_id = turn_id
         self.start_pending = False
         messages = []
+        tools = []
         while True:
             events, self.events = self.events, []
             for event in events:
@@ -87,6 +106,12 @@ class VerificationConnection(Connection):
                     continue
                 if event.get('method') == 'item/completed' and params.get('turnId') == self.turn_id:
                     item = params.get('item', {})
+                    if item.get('type') in ('commandExecution', 'fileChange'):
+                        status = item.get('status')
+                        if status not in ('completed', 'failed', 'declined', 'inProgress'):
+                            raise ProbeError('Invalid tool completion status.')
+                        tools.append({'type': item['type'], 'status': status,
+                                      'denialObserved': item.get('id') in self.denied_items})
                     if item.get('type') == 'agentMessage':
                         messages.append(item.get('text', ''))
                 if event.get('method') == 'turn/completed' and params.get('turn', {}).get('id') == self.turn_id:
@@ -95,6 +120,11 @@ class VerificationConnection(Connection):
                     self.turn_id = None
                     if turn.get('status') != 'completed':
                         raise ProbeError('Verification turn did not complete successfully.')
+                    self.turn_evidence.append({
+                        'requested': {'model': model, 'effort': effort},
+                        'threadSettingsObserved': list(self.settings_observed),
+                        'toolsObserved': tools,
+                        'scope': 'Thread configuration observed during the turn; not backend dispatch telemetry.'})
                     return '\n'.join(messages), {kind for kind, tid in self.denials if tid == completed_id}
             self.handle_event(self.receive(deadline))
 
@@ -132,11 +162,9 @@ def choose_models(catalog, names):
     return selected
 
 
-def verify(connection, models, directory):
-    nonce = secrets.token_hex(16)
-    first, second = models
+def start_verification_thread(connection, model, directory):
     result = connection.request('thread/start', {
-        'cwd': str(directory), 'model': first[0], 'modelProvider': 'openai',
+        'cwd': str(directory), 'model': model, 'modelProvider': 'openai',
         'sandbox': 'read-only', 'approvalPolicy': 'on-request',
         'approvalsReviewer': 'user', 'ephemeral': True, 'serviceTier': 'default',
         'config': {'web_search': 'disabled', 'agents.enabled': False},
@@ -145,6 +173,12 @@ def verify(connection, models, directory):
         'If approval is declined, do not retry or use another tool; finish the turn.',
     })
     connection.thread_id = result['thread']['id']
+
+
+def verify(connection, models, directory):
+    nonce = secrets.token_hex(16)
+    first, second = models
+    start_verification_thread(connection, first[0], directory)
     print('Checking context handoff (two model turns)...', file=sys.stderr)
     connection.run_turn('Remember this synthetic code for the next message: ' + nonce +
                         '. Do not use tools or write files. Reply only ACK.', *first)
@@ -167,13 +201,39 @@ def verify(connection, models, directory):
     return {'contextRecall': 'passed', 'commandDenial': 'passed', 'patchDenial': 'passed',
             'scope': 'Only these synthetic actions; not proof that every tool path requires approval.',
             'requestedModels': [m[0] for m in models], 'reportedModels': None,
+            'turnEvidence': connection.turn_evidence,
             'modelSwitch': 'unverified: context recall alone does not prove actual model dispatch'}
 
 
-def run_in_scratch(connection, models):
+def probe_read_approval(connection, models, directory):
+    """Observe a harmless shell command under the existing approval policy."""
+    model, effort = models[0]
+    start_verification_thread(connection, model, directory)
+    connection.run_turn(
+        'Use the shell tool once to run exactly: printf MODEL_MATE_READ_PROBE. '
+        'This command only prints a synthetic marker. Do not write or read files, '
+        'do not request elevated permissions and do not use another tool. '
+        'If approval is denied or the tool is unavailable, stop.', model, effort)
+    evidence = connection.turn_evidence[-1]
+    commands = [item for item in evidence['toolsObserved'] if item['type'] == 'commandExecution']
+    if any(item['status'] == 'completed' and not item['denialObserved'] for item in commands):
+        state = 'executed_without_approval'
+    elif commands and all(item['denialObserved'] and item['status'] in ('declined', 'failed')
+                          for item in commands):
+        state = 'denial_observed_for_this_command'
+    else:
+        state = 'inconclusive'
+    return {'readCommandApproval': state, 'turnEvidence': connection.turn_evidence,
+            'scope': 'One harmless printf command. Does not verify every tool path.',
+            'reportedModels': None, 'modelSwitch': 'not tested'}
+
+
+def run_in_scratch(connection, models, *, read_probe=False):
     directory = tempfile.mkdtemp(prefix='modelmate-verify-')
     failed = False
     try:
+        if read_probe:
+            return probe_read_approval(connection, models, Path(directory))
         return verify(connection, models, Path(directory))
     except BaseException:
         failed = True
@@ -198,22 +258,33 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
     parser.add_argument('--models', nargs=2, metavar=('FIRST', 'SECOND'), help='two model IDs from doctor.py')
+    parser.add_argument('--probe-read-approval', metavar='MODEL',
+                        help='one live turn testing whether harmless printf runs without approval; no handoff rerun')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if not args.run_live:
         parser.print_help()
         return 0
-    if not args.models:
-        parser.error('--models FIRST SECOND is required for live verification')
+    if bool(args.models) == bool(args.probe_read_approval):
+        parser.error('choose either --models FIRST SECOND or --probe-read-approval MODEL')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
         connection = VerificationConnection(['codex', 'app-server', '--stdio'], args.timeout)
         report = inspect(connection)
-        models = choose_models(report['models'], args.models)
-        result = run_in_scratch(connection, models)
+        if args.probe_read_approval:
+            choice = select_model(report['models'], args.probe_read_approval)
+            options = next(m for m in report['models'] if m['model'] == choice['model'])
+            if any(e['reasoningEffort'] == 'low' for e in options['supportedReasoningEfforts']):
+                choice = select_model(report['models'], choice['model'], 'low')
+            models = [(choice['model'], choice['effort'])]
+        else:
+            models = choose_models(report['models'], args.models)
+        result = run_in_scratch(connection, models, read_probe=bool(args.probe_read_approval))
         print(json.dumps(result, indent=2))
+        if args.probe_read_approval:
+            return 0 if result['readCommandApproval'] == 'denial_observed_for_this_command' else 1
         return 0
     except KeyboardInterrupt:
         print('Verification cancelled.', file=sys.stderr)
