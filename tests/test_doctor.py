@@ -3,7 +3,7 @@ import sys
 import unittest
 from unittest.mock import Mock
 
-from doctor import Connection, ProbeError, inspect
+from modelmate import Connection, ProbeError, inspect
 
 
 class DoctorTests(unittest.TestCase):

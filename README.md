@@ -112,3 +112,9 @@ python3 verify.py --run-live --models gpt-6.1-sol gpt-6-astra
 ชุดตรวจต้องได้ account identity ที่คงเดิมจาก quota reads ก่อนเริ่มแต่ละ turn
 และต้องรอ event จบงานหลัง interrupt ก่อนลบ scratch directory
 หากไม่ทราบ turn ID หรือยืนยันการหยุดไม่ได้ จะเก็บ scratch ไว้และไม่ retry งานเอง
+
+
+Protocol และการอ่านสถานะใช้ implementation ร่วมใน `modelmate.py` แล้ว
+`doctor.py` และ `verify.py` ต้องอยู่ข้างไฟล์นี้เมื่อรันจาก source checkout
+ตัว runtime ยังไม่มีคำสั่งแชต `sr`; การนำเข้า module ไม่เปิด process/network
+ดูสถานะงานและผลตรวจล่าสุดใน [VERIFICATION.md](docs/VERIFICATION.md)

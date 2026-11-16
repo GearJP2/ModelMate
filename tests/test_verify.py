@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from doctor import ProbeError
+from modelmate import ProbeError
 from verify import VerificationConnection, choose_models, ensure_quota, verify
 
 

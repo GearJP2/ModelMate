@@ -37,3 +37,31 @@ Live inference: NOT RUN. G1–G4 remain unverified. No account identifiers or ra
 account reports are recorded here. P00 still needs the designated lifecycle review
 before being treated as release-ready. Next eligible offline task: P02. P01 needs
 normal-terminal live evidence; no sandbox bypass has been added.
+
+
+## P02 — MOCK_VERIFIED
+
+Shared protocol and account inspection now live in `modelmate.py`; doctor and
+verify import that code, and no protocol reader is duplicated. The base method
+allowlist remains read-only; only the verification subclass permits live turns.
+Runtime import creates no process, selector or network connection, even when only
+modelmate.py is copied to a fresh directory. This is a runtime foundation, not a
+finished chat CLI.
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -q`: 34 tests passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+- `python3 doctor.py --help` and `python3 verify.py --help`: passed without login.
+
+Additional tests exercise invalid response envelopes (including boolean IDs),
+unknown server requests, bounded receive buffers, a notification flood with a
+fixed RPC deadline, single-file import isolation and shared-class identity.
+Existing byte-fragmentation, interleaving, EOF, cancellation and process shutdown
+regressions remain passing. Verification event storage retains its 10,000-event
+limit; the receive buffer retains its 4 MiB limit.
+
+Live inference: NOT RUN. G1–G4 are unchanged. Next eligible offline task: P04.
+P01 still requires normal-terminal evidence; P03 still requires the permission
+capability investigation before real tool execution can be exposed.

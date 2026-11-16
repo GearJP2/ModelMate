@@ -201,7 +201,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | --- | --- | --- | --- | --- |
 | P00 | ทำ diagnostic harness ให้เชื่อถือได้ | — | MOCK_VERIFIED | ใช่: lifecycle |
 | P01 | เก็บ live compatibility evidence | P00 | BLOCKED: ต้องรันนอก sandbox ปัจจุบัน | ใช่ |
-| P02 | รวม protocol เป็น runtime ไฟล์เดียว | P00 | TODO | เฉพาะ failure/lifecycle |
+| P02 | รวม protocol เป็น runtime ไฟล์เดียว | P00 | MOCK_VERIFIED | เฉพาะ failure/lifecycle |
 | P03 | พิสูจน์ permission boundary | P01 | TODO | จำเป็น |
 | P04 | Quota policy และ pause | P02 | TODO | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | TODO | ตรวจตารางบทบาทครั้งแรก |

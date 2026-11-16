@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from doctor import Connection, ProbeError, inspect
+from modelmate import Connection, ProbeError, inspect
 
 
 APPROVALS = {
