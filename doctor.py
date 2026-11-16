@@ -16,6 +16,8 @@ class ProbeError(Exception):
 
 
 class Connection:
+    allowed_methods = {"initialize", "account/read", "model/list", "account/rateLimits/read"}
+
     def __init__(self, command, timeout):
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -44,17 +46,9 @@ class Connection:
         except BrokenPipeError as exc:
             raise ProbeError('Codex closed the connection; check login and local filesystem permissions.') from exc
 
-    def request(self, method, params=None):
-        if method not in {'initialize', 'account/read', 'model/list', 'account/rateLimits/read'}:
-            raise ProbeError('This diagnostic only permits read-only requests.')
-        self.request_id += 1
-        request = {'id': self.request_id, 'method': method}
-        if params is not None:
-            request['params'] = params
-        self.send(request)
-        deadline = time.monotonic() + self.timeout
+    def receive(self, deadline):
         while time.monotonic() < deadline:
-            while b'\n' in self.buffer:
+            if b'\n' in self.buffer:
                 line, self.buffer = self.buffer.split(b'\n', 1)
                 try:
                     response = json.loads(line)
@@ -62,16 +56,7 @@ class Connection:
                     raise ProbeError('Codex returned invalid JSON.') from exc
                 if not isinstance(response, dict):
                     raise ProbeError('Codex returned an invalid protocol message.')
-                if 'method' in response and 'id' in response:
-                    raise ProbeError('Unexpected server request; no action was approved.')
-                if response.get('id') != self.request_id:
-                    continue
-                if 'error' in response:
-                    # Server errors can contain paths or account details; do not print raw payloads.
-                    raise ProbeError(f'{method} failed; check Codex login, network and version.')
-                if not isinstance(response.get('result'), dict):
-                    raise ProbeError(f'{method} returned an invalid result.')
-                return response['result']
+                return response
             for key, _ in self.selector.select(max(0, deadline - time.monotonic())):
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
@@ -83,7 +68,34 @@ class Connection:
                     if len(self.buffer) > 4 * 1024 * 1024:
                         raise ProbeError('Codex response exceeded the diagnostic size limit.')
                 # Drain stderr without retaining possible secrets from Codex logs.
-        raise ProbeError(f'{method} timed out after {self.timeout:g}s.')
+        raise ProbeError('Codex request timed out.')
+
+    def handle_event(self, message):
+        if 'method' in message and 'id' in message:
+            raise ProbeError('Unexpected server request; no action was approved.')
+
+    def request(self, method, params=None):
+        if method not in self.allowed_methods:
+            raise ProbeError('This diagnostic does not permit that request.')
+        self.request_id += 1
+        request = {'id': self.request_id, 'method': method}
+        if params is not None:
+            request['params'] = params
+        self.send(request)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            response = self.receive(deadline)
+            if 'method' in response:
+                self.handle_event(response)
+                continue
+            if response.get('id') != self.request_id:
+                raise ProbeError('Unexpected RPC response ID.')
+            if 'error' in response:
+                # Raw errors can include account details or paths.
+                raise ProbeError(f'{method} failed; check Codex login, network and version.')
+            if not isinstance(response.get('result'), dict):
+                raise ProbeError(f'{method} returned an invalid result.')
+            return response['result']
 
 
 def inspect(connection):
