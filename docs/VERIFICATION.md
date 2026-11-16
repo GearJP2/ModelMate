@@ -149,3 +149,42 @@ effort; model role and effort comparisons never grant tool execution rights.
 
 Live inference: NOT RUN. No performance, model availability, role quality or
 quota-saving claims have been verified. Next eligible offline task: P06.
+
+
+## P06 — IN_PROGRESS (offline plan pipeline MOCK_VERIFIED)
+
+Implemented version-1 plan validation, proposal-to-role resolution and inert
+classifier request preparation in modelmate.py. Unknown keys, duplicate JSON keys,
+invalid enums, empty checks, non-finite JSON constants, oversized text/proposals
+and more than 12 steps are rejected. High-risk proposals require a strong review
+step with checks. Clarifications return no resolved execution selections.
+
+The routing result is ready_for_approval, never authorization to execute. Only
+trusted role mappings resolve model/effort pairs; proposal fields cannot grant
+permissions, assign IDs, set retry counters or mark tests passed. This is schema
+and policy validation, not proof that a model classified real task risk correctly.
+
+Preparation refreshes catalog and quota and validates explicit classifier selection
+and role bindings. User text is encoded as task data separate from classifier
+instructions. Status/approval/unchanged-scope triggers cause no RPC. The controller
+must supply those triggers; the model is not allowed to classify its own approval
+reply as a new task. The input descriptor is not an RPC request.
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_routing.py -v`: 14 passed.
+- `python3 -m unittest discover -s tests -q`: 74 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Remaining integration: live classifier invocation and output collection are not
+implemented because no supported no-tools execution boundary has been proven.
+read-only sandbox alone can still permit shell reads; prompt instructions alone
+cannot satisfy the P06 no-tools requirement. Preparation therefore explicitly
+reports blocked_until_no_tools_boundary_verified and never sends turn/start.
+No prompt-only enforcement or assumption that unknown tool calls cannot occur was
+introduced. P03 must establish the boundary before exposing live classification.
+P07's offline grant/mode logic can be developed using the validated proposals;
+full P06 must not be marked DONE or LIVE_VERIFIED from these tests.
+
+Live inference: NOT RUN. G1–G4 and actual task-quality evaluation remain pending.

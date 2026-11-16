@@ -132,3 +132,9 @@ Model selection policy ตรวจชื่อโมเดลและ effort �
 ตอนนี้ built-in mapping ยังว่างระหว่างรอทดสอบสด จึงไม่เลือกบทบาทจากชื่อโมเดลเอง
 โมเดลที่ไม่รู้จักยังเลือกเองได้ถ้า catalog รองรับ; การเปลี่ยนที่เทียบไม่ได้ต้องถามก่อน
 ส่วนนี้เป็น runtime primitives ยังไม่ใช่ routing UI หรือ CLI ที่ใช้งานครบแล้ว
+
+
+เพิ่ม schema แผน version 1 และตัวตรวจ routing proposal แล้ว แผนต้องมีเป้าหมาย
+เกณฑ์สำเร็จ ขั้นงาน และ checks; คำถามเพิ่มเติมจะหยุดการเลือกขั้นลงมือไว้ก่อน
+ผล `ready_for_approval` ยังไม่อนุมัติให้ใช้เครื่องมือ ส่วน classifier preparation
+ยังไม่เริ่ม inference จนกว่าจะพิสูจน์ no-tools boundary ตาม P03
