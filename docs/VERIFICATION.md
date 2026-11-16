@@ -310,3 +310,45 @@ runtime state, then run verify.py --run-live using model IDs that catalog actual
 returns. The latter consumes subscription quota. Only sanitized results belong
 in this file. P03 still needs lifecycle/security review and live evidence before
 any claim that every action asks for approval or that classifier tools are absent.
+
+
+## P01 — user-supplied live read evidence received 2026-11-17
+
+The user supplied a successful diagnostic result generated on 2026-11-16 UTC
+from their normal Terminal. This supersedes the account/catalog/quota part of
+the earlier environment block; the development sandbox itself remains restricted.
+Evidence source is the user's diagnostic output, not an independently reproduced
+run here. The output does not identify which diagnostic entry point was used.
+
+Verified at the time of that snapshot:
+
+- Account type ChatGPT; Plus plan.
+- Catalog and supported effort options returned successfully, including
+  gpt-6.1-sol, gpt-6-astra and gpt-6-luna.
+- ordinaryUsageAllowed true; primary and secondary usage windows returned.
+- No reached-limit/spend-control flag and no additional credits reported.
+
+No raw report, quota percentages, account identifiers or session IDs are stored.
+This is historical evidence, not a reusable quota grant; refresh before inference.
+
+Several catalog models also advertise ultra with automatic task delegation.
+Catalog availability is not permission to delegate. Existing policy treats ultra
+as an unknown comparative effort and requests approval, but this alone does not
+prove delegation is disabled. Live classifier/tool execution remains gated by P03.
+Use the verification harness's explicit low effort where catalog supports it;
+do not enable ultra automatically from this report.
+
+Still unverified: actual inference dispatch, model/effort changes, context recall,
+command/patch denial and the complete permission/no-tools boundary. P01 remains
+IN_PROGRESS, not fully LIVE_VERIFIED. Next live check, using the freshly returned
+catalog IDs, is:
+
+```bash
+python3 verify.py --run-live --models gpt-6.1-sol gpt-6-astra
+```
+
+This consumes subscription quota and performs synthetic scratch-file denial checks.
+A pass proves only the tested scenarios, not all tool paths or actual model dispatch
+if the backend does not report it. An INCONCLUSIVE result is not a pass.
+
+Documentation-only update: checked `git diff --check`; no inference or tests rerun.
