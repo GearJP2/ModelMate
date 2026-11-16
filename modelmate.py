@@ -817,7 +817,25 @@ def main():
     import sys
     parser = argparse.ArgumentParser(description='ModelMate Terminal shell prototype; live execution is unavailable.')
     parser.add_argument('prompt', nargs='?', help='initial task text')
+    parser.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.doctor:
+        if args.prompt is not None:
+            parser.error('--doctor does not accept a prompt')
+        connection = None
+        try:
+            connection = Connection(['codex', 'app-server', '--stdio'], 15)
+            print(json.dumps(inspect(connection), ensure_ascii=False, indent=2))
+            return 0
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else 'Check Codex installation, login, filesystem and protocol compatibility.'
+            print('ModelMate connection check: ' + message, file=sys.stderr)
+            return 1
+        finally:
+            if connection is not None:
+                connection.close()
     return run_chat(sys.stdin, sys.stdout, prompt=args.prompt)
 
 

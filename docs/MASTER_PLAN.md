@@ -202,7 +202,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P00 | ทำ diagnostic harness ให้เชื่อถือได้ | — | MOCK_VERIFIED | ใช่: lifecycle |
 | P01 | เก็บ live compatibility evidence | P00 | BLOCKED: ต้องรันนอก sandbox ปัจจุบัน | ใช่ |
 | P02 | รวม protocol เป็น runtime ไฟล์เดียว | P00 | MOCK_VERIFIED | เฉพาะ failure/lifecycle |
-| P03 | พิสูจน์ permission boundary | P01 | TODO | จำเป็น |
+| P03 | พิสูจน์ permission boundary | P01 | IN_PROGRESS: source matrix; live ยังไม่ผ่าน | จำเป็น |
 | P04 | Quota policy และ pause | P02 | MOCK_VERIFIED | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
 | P06 | Plan schema / classifier / routing | P04, P05 | IN_PROGRESS: validator/preparation MOCK_VERIFIED; live classifier รอ P03 | จำเป็น |

@@ -265,3 +265,48 @@ cancellation must be wired only after the relevant gates pass. This is not a
 production agent or complete P08 delivery; pending commands are not counted as
 working features. Next independent offline task: P11 local session persistence.
 Live inference: NOT RUN. G1–G4 unchanged.
+
+
+## Live connection attempt and P03 source investigation — 2026-11-17
+
+P01 remains BLOCKED in this development sandbox. `codex login status` reports
+ChatGPT login, but both `python3 doctor.py --timeout 10` and the new standalone
+`python3 modelmate.py --doctor` fail before a protocol response. A separate startup
+probe classifies stderr without printing raw logs: exit 1, SQLite initialization
+failure, read-only filesystem error, no protocol response. No credentials were
+copied and no permission bypass was attempted. No inference was requested.
+
+The runtime now supports --doctor as an explicit connection-only entry point,
+using the same inspected read-only protocol path. It rejects an initial prompt
+in this mode, reports a failure as exit 1 and closes its child process. This is
+not live conversational inference. Default chat remains offline.
+
+P03 capability matrix (source inspection, not live enforcement proof):
+
+| Path | Evidence | Current disposition |
+| --- | --- | --- |
+| Shell/exec | Tagged spec_plan.rs add_shell_tools checks ShellTool feature/model shell type | Candidate feature control; live behavior unverified |
+| apply_patch | Tagged spec_plan.rs registers ApplyPatchHandler when model apply_patch_tool_type exists | No verified universal client no-tools override |
+| Hosted search | Hosted search bypasses local tool hooks per official hook documentation | Disabled in private contexts; isolation still unproven |
+| MCP/plugins/subagents/hooks | Separate feature/config surfaces exist | Full disable/bypass matrix not live verified |
+| No-tools classifier | read-only permits some tools; prompt cannot enforce absence | Live classifier remains unavailable |
+
+Tagged source inspected:
+https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/core/src/tools/spec_plan.rs
+(add_shell_tools and ApplyPatchHandler registration). An open upstream feature
+request https://github.com/openai/codex/issues/60069 corroborates the no-tools
+concern, but its report concerns an older alpha/Windows and is not proof of
+behavior on this installation. The tagged code is the primary evidence here.
+
+Checks:
+
+- `python3 -m unittest discover -s tests -q`: 104 passed.
+- `python3 -m py_compile modelmate.py`: passed.
+- `python3 modelmate.py --doctor`: attempted, failed at local Codex startup.
+- `git diff --check`: passed.
+
+To complete P01, run --doctor in a normal Terminal where Codex can write its
+runtime state, then run verify.py --run-live using model IDs that catalog actually
+returns. The latter consumes subscription quota. Only sanitized results belong
+in this file. P03 still needs lifecycle/security review and live evidence before
+any claim that every action asks for approval or that classifier tools are absent.

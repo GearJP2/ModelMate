@@ -168,3 +168,15 @@ Catalog/streaming/approval integration ถูกทดสอบผ่าน inje
 ข้อความจาก controller ถูกกรอง terminal controls และ UI ไม่แสดง private reasoning
 การขอหยุดต้องรอ controller ยืนยัน หากรอเกิน 5 วินาทีจะออกด้วยสถานะ 130
 และแจ้งว่าผลงานยังไม่ทราบ ไม่อ้างว่าหยุดสำเร็จ
+
+
+ตรวจการเชื่อมบัญชีจริงได้จาก runtime ไฟล์เดียวด้วย:
+
+```bash
+python3 modelmate.py --doctor
+```
+
+โหมดนี้อ่านเฉพาะบัญชี รายการโมเดล และ quota ไม่เริ่ม inference และใช้ prompt ร่วมไม่ได้
+ถ้า Codex เริ่มไม่สำเร็จจะคืน exit code 1 การล็อกอินสำเร็จเพียงอย่างเดียว
+ไม่ยืนยันว่า App Server เปิดได้ ใน sandbox พัฒนาปัจจุบันติด read-only filesystem
+ตอนเริ่ม SQLite ของ Codex จึงต้องรันการตรวจสดจาก Terminal ปกติ

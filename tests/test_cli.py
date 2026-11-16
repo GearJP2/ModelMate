@@ -235,5 +235,42 @@ class SubprocessShellTests(unittest.TestCase):
         self.assertNotIn(b'allow_model', output)
 
 
+class ConnectionEntryTests(unittest.TestCase):
+    def test_doctor_entry_connects_read_only_and_closes(self):
+        from modelmate import main
+        connection = Mock()
+        with patch('sys.argv', ['modelmate.py', '--doctor']), \
+             patch('modelmate.Connection', return_value=connection) as factory, \
+             patch('modelmate.inspect', return_value={'models': [], 'quota': {}}) as inspect, \
+             patch('sys.stdout', new_callable=io.StringIO) as output:
+            self.assertEqual(main(), 0)
+            factory.assert_called_once_with(['codex', 'app-server', '--stdio'], 15)
+            inspect.assert_called_once_with(connection)
+            connection.close.assert_called_once()
+            self.assertEqual(json.loads(output.getvalue()), {'models': [], 'quota': {}})
+            connection.request.assert_not_called()
+
+    def test_doctor_failure_is_not_reported_as_connected(self):
+        from modelmate import main
+        connection = Mock()
+        with patch('sys.argv', ['modelmate.py', '--doctor']), \
+             patch('modelmate.Connection', return_value=connection), \
+             patch('modelmate.inspect', side_effect=ProbeError('Codex exited')), \
+             patch('sys.stderr', new_callable=io.StringIO) as error:
+            self.assertEqual(main(), 1)
+            self.assertIn('Codex exited', error.getvalue())
+            connection.close.assert_called_once()
+
+    def test_doctor_rejects_prompt_before_connection(self):
+        from modelmate import main
+        with patch('sys.argv', ['modelmate.py', '--doctor', 'task']), \
+             patch('modelmate.Connection') as factory, \
+             patch('sys.stderr', new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as raised:
+                main()
+            self.assertEqual(raised.exception.code, 2)
+            factory.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
