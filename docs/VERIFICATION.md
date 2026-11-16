@@ -421,3 +421,24 @@ No raw tool command/output or thread/account identifiers are in evidence reports
 Live inference this round: NOT RUN. The previous user live result remains valid
 only for its scenarios. The new read-command probe still needs user Terminal
 execution; existing sandbox restrictions are unchanged. P03 remains IN_PROGRESS.
+
+
+## P03 — negative live evidence received from user 2026-11-17
+
+The user ran the new single-turn printf probe with gpt-6.1-sol requested at low.
+Result: readCommandApproval executed_without_approval; a commandExecution item
+completed with denialObserved false. No thread settings were observed; actual
+model dispatch remains unknown. Evidence is user-supplied, not a local rerun.
+No raw user/account/thread identifiers or tool output are stored here.
+
+Conclusion: read-only + on-request in the tested configuration does not satisfy
+R06 ask-before-every-command. This is a failing requirement check, not a passing
+permission gate. It does not imply all shell commands bypass approval, and it does
+not negate the earlier scratch-write denial results. The tested command only
+printed a synthetic marker; no file read/write was requested.
+
+The runtime still does not expose live tools. R06 has not been relaxed. Next
+architecture decision requires user agreement if default permission semantics
+change; otherwise enforcement must be developed and proved before P09 can ship.
+Independent offline tasks remain possible while resolving the boundary.
+Documentation-only check: git diff --check passed; no new inference was run.

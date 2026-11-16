@@ -7,7 +7,7 @@
 | --- | --- | --- | --- | --- |
 | Shell write | read-only sandbox + on-request | ผู้ใช้รัน scratch marker probe: denial event และไม่มีไฟล์ | probe ขอ approval เอง ไม่แทน default behavior | LIVE_VERIFIED เฉพาะกรณี |
 | apply_patch | registered from model catalog; file-change approval | ผู้ใช้รัน scratch patch probe: denial event และไม่มีไฟล์ | native paths / writes ผ่าน tool อื่น | LIVE_VERIFIED เฉพาะกรณี |
-| Shell read/printf | shell feature/model shell type คุม tool registration | เพิ่มหนึ่ง-turn printf probe; ยังไม่รันสด | read-only อาจอนุญาตโดยไม่ถาม | UNPROVEN |
+| Shell read/printf | read-only + on-request ที่ใช้ใน probe | ผู้ใช้รายงาน commandExecution completed โดย denialObserved false | policy เดิมไม่ถามก่อนทุกคำสั่ง | LIVE: ไม่ผ่าน R06 ในกรณีนี้ |
 | write_stdin | ต่อยอด process เดิม; hook ไม่รัน PreToolUse ใหม่ทุกครั้ง | ยังไม่มี live evidence | ส่งคำสั่งเพิ่มเข้า shell ที่อนุมัติไปก่อนแล้ว | UNPROVEN |
 | MCP / apps / plugins | configuration และ approval แยกจาก shell | ยังไม่มี live evidence | capability ที่แฝงใน project/user settings | UNPROVEN |
 | Subagents / ultra | agents config แยก; catalog บางโมเดลบอก automatic delegation | ยังไม่มี live evidence | tool execution หรือ inherited permissions ใน child | UNPROVEN |
@@ -52,3 +52,17 @@ python3 verify.py --run-live --probe-read-approval gpt-6.1-sol
 `denial_observed_for_this_command` ยืนยันเฉพาะคำสั่งนี้
 `inconclusive` หมายถึงไม่มีหลักฐานพอสรุป ไม่ใช่ผ่าน
 ชุดตรวจไม่แก้ account permissions, trust rules หรือ auto-reload
+
+
+## ผล probe จากผู้ใช้ — รับ 2026-11-17
+
+`--probe-read-approval gpt-6.1-sol` รายงาน executed_without_approval
+พร้อม commandExecution completed และ denialObserved false
+นี่เป็น counterexample ต่อการใช้ read-only + on-request เพื่อบังคับ R06
+ไม่ใช่หลักฐานว่าคำสั่งทุกชนิดข้าม approval ได้ และไม่ยกเลิกผล denial ของ write probes
+
+ยังไม่เปลี่ยน R06 หรือเปิด live tool execution ใน ModelMate
+ทางเลือกที่ต้องให้ผู้ใช้ตัดสินคือรักษา ask-every-command แล้วพัฒนาขอบเขต
+execution ที่บังคับได้จริง หรือปรับ requirement ให้ sandbox อนุญาตงานอ่านบางอย่าง
+โดยอัตโนมัติ การปรับ default ต้องไม่ถูกตีความว่าอนุญาตเขียน/ติดตั้ง/ส่งข้อมูลออก
+และยังต้องพิสูจน์ paths ที่เกี่ยวข้องหลังเลือกแนวทาง
