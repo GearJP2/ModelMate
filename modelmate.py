@@ -46,37 +46,51 @@ class Connection:
         except BrokenPipeError as exc:
             raise ProbeError('Codex closed the connection; check login and local filesystem permissions.') from exc
 
+    def pop_message(self):
+        if b'\n' not in self.buffer:
+            return None
+        line, self.buffer = self.buffer.split(b'\n', 1)
+        try:
+            response = json.loads(line)
+        except (ValueError, UnicodeError) as exc:
+            raise ProbeError('Codex returned invalid JSON.') from exc
+        if not isinstance(response, dict):
+            raise ProbeError('Codex returned an invalid protocol message.')
+        if 'method' in response:
+            if (not isinstance(response['method'], str) or not response['method']
+                    or not isinstance(response.get('params', {}), dict)):
+                raise ProbeError('Codex returned an invalid event.')
+        elif (type(response.get('id')) is not int
+              or ('result' in response) == ('error' in response)):
+            raise ProbeError('Codex returned an invalid RPC response.')
+        return response
+
+    def read_ready(self, stream):
+        chunk = os.read(stream.fileno(), 65536)
+        if not chunk:
+            try:
+                self.selector.unregister(stream)
+            except KeyError:
+                pass
+            if stream is self.process.stdout:
+                self.stdout_closed = True
+            return False
+        if stream is self.process.stdout:
+            self.buffer += chunk
+            if len(self.buffer) > 4 * 1024 * 1024:
+                raise ProbeError('Codex response exceeded the diagnostic size limit.')
+        # Drain stderr without retaining possible secrets from Codex logs.
+        return True
+
     def receive(self, deadline):
         while time.monotonic() < deadline:
-            if b'\n' in self.buffer:
-                line, self.buffer = self.buffer.split(b'\n', 1)
-                try:
-                    response = json.loads(line)
-                except (ValueError, UnicodeError) as exc:
-                    raise ProbeError('Codex returned invalid JSON.') from exc
-                if not isinstance(response, dict):
-                    raise ProbeError('Codex returned an invalid protocol message.')
-                if 'method' in response:
-                    if (not isinstance(response['method'], str) or not response['method']
-                            or not isinstance(response.get('params', {}), dict)):
-                        raise ProbeError('Codex returned an invalid event.')
-                elif (type(response.get('id')) is not int
-                      or ('result' in response) == ('error' in response)):
-                    raise ProbeError('Codex returned an invalid RPC response.')
+            response = self.pop_message()
+            if response is not None:
                 return response
             if self.stdout_closed:
                 raise ProbeError('Codex exited; check local filesystem permissions and login.')
             for key, _ in self.selector.select(max(0, deadline - time.monotonic())):
-                chunk = os.read(key.fileobj.fileno(), 65536)
-                if not chunk:
-                    self.selector.unregister(key.fileobj)
-                    if key.data == 'stdout':
-                        self.stdout_closed = True
-                elif key.data == 'stdout':
-                    self.buffer += chunk
-                    if len(self.buffer) > 4 * 1024 * 1024:
-                        raise ProbeError('Codex response exceeded the diagnostic size limit.')
-                # Drain stderr without retaining possible secrets from Codex logs.
+                self.read_ready(key.fileobj)
         raise ProbeError('Codex request timed out.')
 
     def handle_event(self, message):
@@ -580,7 +594,7 @@ class ChatShell:
         self.catalog = [] if catalog is None else catalog
         self.role_policy = role_policy
         self.mode = 'ask_to_escalate'
-        self.permissions = 'ask'
+        self.permissions = 'read_only'
         self.selection = None
         self.active = False
         self.stopping = False
@@ -597,8 +611,14 @@ class ChatShell:
         self.output.flush()
 
     def start(self, prompt=None):
-        self.write('ModelMate · Terminal shell prototype · live execution unavailable')
-        self.write('/help แสดงคำสั่ง · /exit ออก · ไม่มีการเชื่อมต่อโมเดลในรุ่นนี้')
+        if getattr(self, 'live', False):
+            self.write('ModelMate · live ChatGPT/Codex · read-only + on-request')
+            self.write('คำสั่งที่ sandbox อนุญาตทำงานได้เอง; การขยายสิทธิ์จะถามก่อน')
+            self.write('เลือกโมเดลเองในรุ่นนี้; ยังไม่มี auto routing หรือ autosave · /help /exit')
+            self.write('โมเดลที่ร้องขอ: ' + json.dumps(self.selection, ensure_ascii=False))
+        else:
+            self.write('ModelMate · Terminal shell prototype · live execution unavailable')
+            self.write('/help แสดงคำสั่ง · /exit ออก · ไม่มีการเชื่อมต่อโมเดลในรุ่นนี้')
         if prompt:
             self.line(prompt)
 
@@ -645,14 +665,17 @@ class ChatShell:
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
-                                       'stopping': self.stopping, 'quota': 'unknown',
-                                       'backend': 'injected test controller' if self.send else 'unavailable'},
+                                       'stopping': self.stopping, 'quota': getattr(self, 'quota_status', 'unknown'),
+                                       'backend': 'codex' if getattr(self, 'live', False) else
+                                       ('injected test controller' if self.send else 'unavailable')},
                                       ensure_ascii=False))
             elif cmd == '/mode':
                 if not values:
                     self.write(self.mode)
                 elif len(values) != 1 or values[0] not in ('auto', 'ask_to_escalate', 'approve_plan'):
                     self.write('โหมดไม่ถูกต้อง')
+                elif getattr(self, 'live', False):
+                    self.write('Live chat ยังใช้โมเดลที่เลือกเอง; auto workflow ยังไม่เปิด')
                 else:
                     self.mode = values[0]
                     self.pending = None
@@ -665,7 +688,7 @@ class ChatShell:
                 elif len(values) != 1 or values[0] not in ('ask', 'read_only', 'workspace'):
                     self.write('สิทธิ์ไม่ถูกต้อง')
                 else:
-                    self.write('ยังเปลี่ยนสิทธิ์ไม่ได้: รอพิสูจน์ enforcement ใน P03/P09')
+                    self.write('รุ่นนี้ใช้ read-only + on-request; การขยายสิทธิ์อนุมัติเป็นรายคำขอ')
             elif cmd == '/model':
                 if not values:
                     self.write(json.dumps({'selected': self.selection, 'catalog': self.catalog}, ensure_ascii=False))
@@ -686,9 +709,15 @@ class ChatShell:
                     self.write('คำขออนุมัติไม่ถูกต้องหรือหมดอายุ')
                 else:
                     try:
-                        self.approvals.answer(values[0], cmd[1:])
-                        self.pending = None
-                        self.present_route()
+                        if self.pending.get('kind') == 'tool':
+                            self.send({'action': 'tool_decision', 'token': values[0], 'choice': cmd[1:]})
+                            self.pending = None
+                            if cmd == '/pause':
+                                self.cancel()
+                        else:
+                            self.approvals.answer(values[0], cmd[1:])
+                            self.pending = None
+                            self.present_route()
                     except ProbeError as exc:
                         self.write(str(exc))
             elif cmd in ('/cancel', '/exit'):
@@ -726,6 +755,14 @@ class ChatShell:
             if not isinstance(text, str):
                 raise ProbeError('Invalid text event.')
             self.write(text)
+        elif kind == 'tool_approval':
+            if (self.send is None or self.pending is not None
+                    or not isinstance(message.get('token'), str) or not message['token']
+                    or not isinstance(message.get('preview'), str)):
+                raise ProbeError('Invalid tool approval event.')
+            self.pending = {'kind': 'tool', 'token': message['token']}
+            self.write(message['preview'])
+            self.write('/approve ' + message['token'] + ' · /decline ' + message['token'])
         elif kind == 'plan':
             if self.stopping:
                 return
@@ -757,9 +794,16 @@ class ChatShell:
 
 
 def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
-             role_policy=None, prompt=None):
-    """Multiplex Linux input/events in one thread. No live backend is installed."""
+             role_policy=None, prompt=None, backend=None):
+    """Multiplex Linux input and controller events in one owning thread."""
+    if backend is not None:
+        send, catalog = backend.action, backend.catalog
     shell = ChatShell(output, send, catalog, role_policy)
+    if backend is not None:
+        backend.shell = shell
+        shell.live = True
+        shell.mode = 'manual'
+        shell.selection = dict(backend.selection)
     selector = selectors.SelectSelector()
     buffers = {}
     try:
@@ -767,12 +811,20 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
             if stream is not None:
                 selector.register(stream, selectors.EVENT_READ, kind)
                 buffers[kind] = b''
+        if backend is not None:
+            for stream in (backend.process.stdout, backend.process.stderr):
+                selector.register(stream, selectors.EVENT_READ, 'codex')
         shell.start(prompt)
         while not shell.closed:
             try:
                 ready = selector.select(.1)
                 for key, _ in ready:
                     kind = key.data
+                    if kind == 'codex':
+                        if not backend.read_ready(key.fileobj):
+                            selector.unregister(key.fileobj)
+                        backend.drain()
+                        continue
                     data = os.read(key.fd, 4096)
                     if not data:
                         selector.unregister(key.fileobj)
@@ -796,11 +848,15 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                             shell.line(line.decode('utf-8'))
                         else:
                             shell.event(json.loads(line))
+                if backend is not None:
+                    backend.drain()
+                    backend.tick()
                 shell.tick()
             except KeyboardInterrupt:
                 shell.cancel()
-    except (ProbeError, OSError, ValueError, UnicodeError):
-        shell.write('Terminal หยุด: ข้อมูลหรือการเชื่อมต่อไม่ถูกต้อง; ผลงานที่กำลังทำยังไม่ทราบ')
+    except (ProbeError, OSError, ValueError, UnicodeError) as exc:
+        reason = str(exc) if isinstance(exc, ProbeError) else 'ข้อมูลหรือการเชื่อมต่อไม่ถูกต้อง'
+        shell.write('Terminal หยุด: ' + reason + '; ผลงานที่กำลังทำยังไม่ทราบ')
         if shell.active and send is not None:
             try:
                 send({'action': 'cancel'})
@@ -812,13 +868,277 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
     return shell.exit_code
 
 
+
+class LiveChatConnection(Connection):
+    """Manual-model chat using native Codex read-only/on-request permissions."""
+    allowed_methods = Connection.allowed_methods | {'thread/start'}
+
+    def __init__(self, command, timeout=15):
+        super().__init__(command, timeout)
+        self.shell = None
+        self.catalog = []
+        self.selection = None
+        self.thread_id = None
+        self.turn_id = None
+        self.start_pending = False
+        self.cancel_after_start = False
+        self.account_id = None
+        self.quota_status = None
+        self._rpcs = {}
+        self._approvals = {}
+        self._previews = {}
+        self._streamed = set()
+        self._finished = set()
+
+    def connect(self, model, effort, cwd):
+        self.catalog = inspect(self)['models']
+        self.selection = select_model(self.catalog, model, effort)
+        if effort == 'ultra':
+            raise ProbeError('Automatic delegation effort is not enabled in this live chat.')
+        result = self.request('thread/start', {
+            'model': model, 'modelProvider': 'openai', 'cwd': os.path.realpath(cwd),
+            'sandbox': 'read-only', 'approvalPolicy': 'on-request', 'approvalsReviewer': 'user',
+            'ephemeral': True, 'serviceTier': 'default',
+            'config': {'web_search': 'disabled', 'agents.enabled': False,
+                       'features.apps': False, 'features.plugins': False,
+                       'features.multi_agent_v2': False},
+        })
+        thread = result.get('thread')
+        if not isinstance(thread, dict) or not isinstance(thread.get('id'), str) or not thread['id']:
+            raise ProbeError('Invalid live thread response.')
+        self.thread_id = thread['id']
+
+    def _async(self, method, params):
+        if method not in ('turn/start', 'turn/steer', 'turn/interrupt') or len(self._rpcs) >= 8:
+            raise ProbeError('Unsupported or overloaded live request.')
+        self.request_id += 1
+        self._rpcs[self.request_id] = (method, time.monotonic() + self.timeout)
+        self.send({'id': self.request_id, 'method': method, 'params': params})
+
+    def action(self, action):
+        kind = action['action']
+        if kind == 'submit':
+            if self.start_pending or self.turn_id:
+                raise ProbeError('Previous turn outcome unknown; cannot start another.')
+            if self._rpcs:
+                self.shell.active = False
+                self.shell.write('ยังรอ RPC เดิม กรุณาส่งงานใหม่อีกครั้งเมื่อคำขอเดิมจบ')
+                return
+            self.catalog = read_models(self)
+            self.shell.catalog = self.catalog
+            selection = action.get('selection') or self.selection
+            selected = select_model(self.catalog, selection['model'], selection['effort'])
+            if selected['effort'] == 'ultra':
+                self.shell.active = False
+                self.shell.write('ยังไม่เปิด automatic delegation; เลือก effort อื่น')
+                return
+            self.quota_status = refresh_quota(self, self.account_id)
+            self.shell.quota_status = {k: self.quota_status[k] for k in ('state', 'reason', 'checked_at')}
+            if self.quota_status['state'] != 'allow':
+                self.shell.active = False
+                self.shell.write('พักงาน: ' + self.quota_status['reason'])
+                return
+            self.account_id = self.quota_status['account_id']
+            self.selection = selected
+            self._streamed.clear()
+            self._previews.clear()
+            self._finished.clear()
+            self.start_pending = True
+            self._async('turn/start', {'threadId': self.thread_id, 'model': selected['model'],
+                                      'effort': selected['effort'],
+                                      'input': [{'type': 'text', 'text': action['text']}]})
+        elif kind == 'steer':
+            if self.turn_id is None or self.start_pending:
+                self.shell.write('ยังรอ turn ID; กรุณาส่งข้อความเพิ่มหลังเริ่มตอบ')
+                return
+            self._async('turn/steer', {'threadId': self.thread_id, 'expectedTurnId': self.turn_id,
+                                      'input': [{'type': 'text', 'text': action['text']}]})
+        elif kind == 'cancel':
+            for token in list(self._approvals):
+                self._answer_tool(token, 'decline')
+            if self.turn_id:
+                self._async('turn/interrupt', {'threadId': self.thread_id, 'turnId': self.turn_id})
+            elif self.start_pending:
+                self.cancel_after_start = True
+            elif self.shell.active:
+                self.shell.event({'type': 'stopped'})
+        elif kind == 'tool_decision':
+            self._answer_tool(action['token'], action['choice'])
+        else:
+            raise ProbeError('Unsupported live action.')
+
+    def _answer_tool(self, token, choice):
+        request = self._approvals.get(token)
+        if (request is None or choice not in ('approve', 'decline', 'pause')
+                or request['turn_id'] != self.turn_id):
+            raise ProbeError('Stale or invalid tool approval.')
+        self._approvals.pop(token)
+        self.send({'id': request['id'], 'result': {
+            'decision': 'accept' if choice == 'approve' else 'decline'}})
+
+    def handle_event(self, message):
+        import uuid
+        if self.shell is None:
+            return super().handle_event(message)
+        method, params = message['method'], message.get('params', {})
+        if params.get('threadId') != self.thread_id:
+            if 'id' in message:
+                raise ProbeError('Request from unrelated thread; nothing approved.')
+            return
+        if 'id' in message:
+            if (method not in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval')
+                    or not self.turn_id or params.get('turnId') != self.turn_id
+                    or not isinstance(params.get('itemId'), str) or not params['itemId']):
+                raise ProbeError('Unsupported or stale server request; nothing approved.')
+            if self.shell.stopping:
+                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                return
+            if self._approvals or self.shell.pending:
+                # Never replace a visible approval with a second pending action.
+                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                self.shell.write('ปฏิเสธคำขอซ้อนระหว่างรออนุมัติ')
+                return
+            if method == 'item/commandExecution/requestApproval':
+                command, cwd = params.get('command'), params.get('cwd')
+                if not isinstance(command, str) or not command or not isinstance(cwd, str):
+                    raise ProbeError('Cannot display the exact command; nothing approved.')
+                preview = json.dumps({'command': command, 'cwd': cwd, 'reason': params.get('reason')}, ensure_ascii=True)
+            else:
+                preview = self._previews.get(params['itemId'])
+                if preview is None:
+                    self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                    self.shell.write('ปฏิเสธ patch เพราะไม่มี diff ให้ตรวจ')
+                    return
+            if len(preview.encode('utf-8')) > 65536:
+                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                self.shell.write('ปฏิเสธคำขอที่ใหญ่เกินแสดงอย่างครบถ้วน')
+                return
+            token = uuid.uuid4().hex
+            self._approvals[token] = {'id': message['id'], 'turn_id': self.turn_id}
+            self.shell.event({'type': 'tool_approval', 'token': token, 'preview': preview})
+            return
+        if method == 'turn/started':
+            turn = params.get('turn', {})
+            tid = turn.get('id')
+            if not isinstance(tid, str) or not tid or (self.turn_id and self.turn_id != tid):
+                raise ProbeError('Invalid active turn metadata.')
+            self.turn_id = tid
+            if self.cancel_after_start:
+                self.cancel_after_start = False
+                self._async('turn/interrupt', {'threadId': self.thread_id, 'turnId': tid})
+            return
+        if params.get('turnId') != self.turn_id and method != 'turn/completed':
+            return
+        if method == 'item/started':
+            item = params.get('item', {})
+            if item.get('type') == 'fileChange' and isinstance(item.get('id'), str):
+                changes = item.get('changes')
+                if isinstance(changes, list) and changes:
+                    preview = json.dumps(changes, ensure_ascii=True)
+                    if len(preview.encode('utf-8')) <= 65536:
+                        self._previews[item['id']] = preview
+                    else:
+                        self._previews.pop(item['id'], None)
+                    if len(self._previews) > 100:
+                        raise ProbeError('Too many pending file changes.')
+        elif method == 'item/agentMessage/delta':
+            delta, item_id = params.get('delta'), params.get('itemId')
+            if not isinstance(delta, str) or not isinstance(item_id, str):
+                raise ProbeError('Invalid text delta.')
+            self._streamed.add(item_id)
+            if len(self._streamed) > 10000:
+                raise ProbeError('Too many streamed items.')
+            self.shell.output.write(terminal_text(delta))
+            self.shell.output.flush()
+        elif method == 'item/completed':
+            item = params.get('item', {})
+            if item.get('type') == 'agentMessage' and item.get('id') not in self._streamed:
+                if not isinstance(item.get('text'), str):
+                    raise ProbeError('Invalid assistant text.')
+                self.shell.write(item['text'])
+        elif method == 'turn/completed':
+            turn = params.get('turn', {})
+            if turn.get('id') != self.turn_id:
+                return
+            self._finished.add(self.turn_id)
+            self.turn_id = None
+            self.start_pending = False
+            self._approvals.clear()
+            status = turn.get('status')
+            if status not in ('completed', 'failed', 'interrupted'):
+                raise ProbeError('Invalid terminal status.')
+            self.shell.write('')
+            if status == 'failed':
+                self.shell.write('Turn ล้มเหลว; ไม่ retry อัตโนมัติ')
+            self.shell.event({'type': 'stopped' if status == 'interrupted' else 'completed'})
+
+    def drain(self):
+        while True:
+            message = self.pop_message()
+            if message is None:
+                break
+            if 'method' in message:
+                self.handle_event(message)
+                continue
+            pending = self._rpcs.pop(message['id'], None)
+            if pending is None:
+                raise ProbeError('Unexpected live RPC response.')
+            if 'error' in message:
+                raise ProbeError('Live request failed; no automatic retry; inspect turn state.')
+            if not isinstance(message.get('result'), dict):
+                raise ProbeError('Invalid live RPC result.')
+            if pending[0] == 'turn/start':
+                tid = message['result'].get('turn', {}).get('id')
+                if not isinstance(tid, str) or not tid:
+                    raise ProbeError('Missing turn ID; outcome unknown.')
+                self.start_pending = False
+                if tid not in self._finished:
+                    if self.turn_id and tid != self.turn_id:
+                        raise ProbeError('Conflicting live turn ID.')
+                    self.turn_id = tid
+                    if self.cancel_after_start:
+                        self.cancel_after_start = False
+                        self._async('turn/interrupt', {'threadId': self.thread_id, 'turnId': tid})
+        if self.stdout_closed:
+            raise ProbeError('Codex disconnected; active turn outcome may be unknown.')
+
+    def tick(self):
+        if any(time.monotonic() >= deadline for _, deadline in self._rpcs.values()):
+            raise ProbeError('Live RPC timed out; outcome unknown; do not replay automatically.')
+
+
+
 def main():
     import argparse
     import sys
-    parser = argparse.ArgumentParser(description='ModelMate Terminal shell prototype; live execution is unavailable.')
+    parser = argparse.ArgumentParser(description='ModelMate Terminal chat: offline by default; --live uses ChatGPT subscription quota.')
     parser.add_argument('prompt', nargs='?', help='initial task text')
+    parser.add_argument('--live', action='store_true', help='manual-model live chat using ChatGPT subscription quota')
+    parser.add_argument('--model', help='explicit model ID for --live')
+    parser.add_argument('--effort', default='low', help='explicit effort for --live (default: low)')
     parser.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.live and (args.doctor or not args.model):
+        parser.error('--live requires --model and cannot be combined with --doctor')
+    if args.model and not args.live:
+        parser.error('--model requires --live')
+    if args.live:
+        backend = None
+        try:
+            backend = LiveChatConnection(['codex', 'app-server', '--stdio',
+                '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
+                '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
+            backend.connect(args.model, args.effort, os.getcwd())
+            return run_chat(sys.stdin, sys.stdout, backend=backend, prompt=args.prompt)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else 'Cannot start live Codex chat.'
+            print('ModelMate live: ' + terminal_text(message), file=sys.stderr)
+            return 1
+        finally:
+            if backend is not None:
+                backend.close()
     if args.doctor:
         if args.prompt is not None:
             parser.error('--doctor does not accept a prompt')

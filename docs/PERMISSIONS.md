@@ -1,13 +1,14 @@
 # P03 — Permission capability matrix
 
 สถานะ: IN_PROGRESS; source inspection และสอง live denial scenarios จากผู้ใช้
-ยังไม่มีการรับรอง default ask-before-every-command หรือ no-tools classifier
+ผู้ใช้เลือก native read-only + on-request เมื่อ 2026-11-17
+จึงไม่บังคับ ask-before-every-command อีกต่อไป; no-tools classifier ยังไม่พิสูจน์
 
 | Action path | กลไกที่ตรวจพบ | เวลา approval / deny evidence | ช่องที่ยังไม่พิสูจน์ | สถานะ |
 | --- | --- | --- | --- | --- |
 | Shell write | read-only sandbox + on-request | ผู้ใช้รัน scratch marker probe: denial event และไม่มีไฟล์ | probe ขอ approval เอง ไม่แทน default behavior | LIVE_VERIFIED เฉพาะกรณี |
 | apply_patch | registered from model catalog; file-change approval | ผู้ใช้รัน scratch patch probe: denial event และไม่มีไฟล์ | native paths / writes ผ่าน tool อื่น | LIVE_VERIFIED เฉพาะกรณี |
-| Shell read/printf | read-only + on-request ที่ใช้ใน probe | ผู้ใช้รายงาน commandExecution completed โดย denialObserved false | policy เดิมไม่ถามก่อนทุกคำสั่ง | LIVE: ไม่ผ่าน R06 ในกรณีนี้ |
+| Shell read/printf | read-only + on-request ที่ใช้ใน probe | ผู้ใช้รายงาน commandExecution completed โดย denialObserved false | policy เดิมไม่ถามก่อนทุกคำสั่ง | LIVE: ไม่ผ่าน R06 เดิม; ยอมรับตาม R06 ใหม่ |
 | write_stdin | ต่อยอด process เดิม; hook ไม่รัน PreToolUse ใหม่ทุกครั้ง | ยังไม่มี live evidence | ส่งคำสั่งเพิ่มเข้า shell ที่อนุมัติไปก่อนแล้ว | UNPROVEN |
 | MCP / apps / plugins | configuration และ approval แยกจาก shell | ยังไม่มี live evidence | capability ที่แฝงใน project/user settings | UNPROVEN |
 | Subagents / ultra | agents config แยก; catalog บางโมเดลบอก automatic delegation | ยังไม่มี live evidence | tool execution หรือ inherited permissions ใน child | UNPROVEN |
@@ -61,8 +62,8 @@ python3 verify.py --run-live --probe-read-approval gpt-6.1-sol
 นี่เป็น counterexample ต่อการใช้ read-only + on-request เพื่อบังคับ R06
 ไม่ใช่หลักฐานว่าคำสั่งทุกชนิดข้าม approval ได้ และไม่ยกเลิกผล denial ของ write probes
 
-ยังไม่เปลี่ยน R06 หรือเปิด live tool execution ใน ModelMate
-ทางเลือกที่ต้องให้ผู้ใช้ตัดสินคือรักษา ask-every-command แล้วพัฒนาขอบเขต
-execution ที่บังคับได้จริง หรือปรับ requirement ให้ sandbox อนุญาตงานอ่านบางอย่าง
-โดยอัตโนมัติ การปรับ default ต้องไม่ถูกตีความว่าอนุญาตเขียน/ติดตั้ง/ส่งข้อมูลออก
-และยังต้องพิสูจน์ paths ที่เกี่ยวข้องหลังเลือกแนวทาง
+ผู้ใช้ยืนยันเลือก native Codex policy แล้ว: read-only + on-request
+ปรับ R06 ให้ sandbox-permitted commands ทำเองได้; การขยายสิทธิ์ยังใช้คำขอ
+ของ Codex และไม่เปิด workspace-write/full-access อัตโนมัติ
+Manual live prototype รองรับ command/fileChange approval แบบครั้งเดียว
+และหยุด/ปฏิเสธ request ที่ไม่รองรับ; ยังไม่อ้างว่าทุก path ผ่านการทดสอบสดแล้ว

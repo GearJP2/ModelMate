@@ -32,6 +32,10 @@ and continue only with independent work. Do not silently weaken a requirement.
 - Model escalation approval and tool execution approval are separate.
 - The model cannot grant permissions, change retry counters or mark its own tests
   passed. Evidence and state transitions are validated by the controller.
+- Native permission policy (user confirmed 2026-11-17): read-only + on-request;
+  sandbox-permitted commands may run without prompts. Do not expand to workspace
+  write/full access automatically. Manual live chat is opt-in; auto workflow and
+  private web isolation remain gated.
 - No tool side effect before required approval. Timeout, EOF, malformed replies
   and disconnect never imply approval. Do not use prompt-only enforcement.
 - Two correction cycles per step after the initial attempt; no hidden third retry.

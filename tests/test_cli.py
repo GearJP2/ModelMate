@@ -37,7 +37,7 @@ class ShellPolicyTests(unittest.TestCase):
         shell.line('/delete')
         send.assert_not_called()
         self.assertEqual(shell.mode, 'auto')
-        self.assertEqual(shell.permissions, 'ask')
+        self.assertEqual(shell.permissions, 'read_only')
         shell.line('ช่วยเขียนเอกสาร')
         self.assertEqual(send.call_args.args[0]['text'], 'ช่วยเขียนเอกสาร')
         shell.line('เพิ่มตัวอย่างด้วย')
@@ -184,7 +184,7 @@ class SubprocessShellTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / 'modelmate.py'), '--help'],
                                 capture_output=True, timeout=3, env=dict(os.environ, PATH='/nonexistent'))
         self.assertEqual(result.returncode, 0)
-        self.assertIn(b'live execution is unavailable', result.stdout)
+        self.assertIn(b'offline by default', result.stdout)
         result = subprocess.run([sys.executable, str(ROOT / 'modelmate.py'), 'ช่วยวางแผน'],
                                 input=b'/status\n/exit\n', capture_output=True, timeout=3,
                                 env=dict(os.environ, PATH='/nonexistent'))

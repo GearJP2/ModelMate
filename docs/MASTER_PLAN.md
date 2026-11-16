@@ -26,7 +26,7 @@ DONE ของใบงานพัฒนาไม่ได้หมายคว
 | R03 | รองรับงานโค้ด วิเคราะห์ วางแผน และเอกสาร | P06, P10, P16 |
 | R04 | เลือกตัวที่คาดว่าผ่านเกณฑ์ ใช้ตัวเก่งเฉพาะจุดยาก/เสี่ยง | P05, P06, P16 |
 | R05 | Auto / Ask to escalate / Approve plan; default Ask to escalate | P07 |
-| R06 | เลือกสิทธิ์ได้; default ถามก่อนแก้ไฟล์และรันทุกคำสั่ง | P03, P09 |
+| R06 | เลือกสิทธิ์ได้; default read-only + on-request ตาม Codex; คำสั่งที่ sandbox อนุญาตรันเองได้ | P03, P09 |
 | R07 | แก้แล้วตรวจซ้ำไม่เกิน 2 รอบต่อขั้นก่อนหยุดถาม | P10 |
 | R08 | ตัวเก่งตรวจเฉพาะงานซับซ้อน/เสี่ยง | P06, P10 |
 | R09 | เซฟ local แยกโปรเจกต์ เลือก resume และลบได้ | P11, P12 |
@@ -48,13 +48,15 @@ plugin marketplace, จัดการ billing, streaming reasoning ภายใ
 
 ### G2 — บังคับสิทธิ์ก่อนลงมือ
 
-ต้องพิสูจน์ว่าคำสั่ง/patch ที่ไม่ได้อนุมัติไม่มีผลข้างเคียง
-รวมคำสั่งอ่านอย่างเดียว เพราะ default ที่ตกลงคือถามก่อนรันคำสั่ง
-on-request, read-only หรือ hooks ไม่ใช่หลักฐานว่า intercept ครบทุกเส้นทาง
-ต้องรวม exec, write_stdin ที่ส่งคำสั่งเพิ่ม, patch, MCP, plugin, network,
-subagents, project hooks/config และการอ่านนอกโปรเจกต์ในขอบเขตประเมิน
-ปิดเส้นทางที่ควบคุมไม่ได้ ห้ามแทนด้วยคำสั่งใน prompt
-หากไม่มีทางทำโดยไม่ลดข้อกำหนด ให้ BLOCKED พร้อมข้อเสนอแก่ผู้ใช้
+อัปเดตตามผู้ใช้เลือก native Codex policy เมื่อ 2026-11-17:
+ใช้ read-only + on-request; ไม่บังคับถามก่อนคำสั่งที่ sandbox อนุญาต
+ต้องพิสูจน์ว่า server-requested approval แสดง command/diff ได้และตอบเฉพาะ
+คำขอที่ตรงกับ active thread/turn/token; deny/EOF/cancel ไม่เป็น accept
+ห้ามยกระดับ workspace/full-access เอง และคง managed restrictions ที่เข้มกว่า
+คำขอที่ไม่รองรับต้องหยุด/ปฏิเสธโดยไม่อนุมัติ
+User ยอมรับ native readable roots; ไม่อ้าง project-only isolation ที่ไม่ได้บังคับ
+Manual live prototype เปิด opt-in ได้ตามนโยบายใหม่ แต่ไม่ถือว่า G2 ทั้งหมดผ่าน
+Auto workflow, no-tools classifier และ private web isolation ยังมี gates แยก
 
 ### G3 — การค้นเว็บไม่รับข้อมูลส่วนตัวโดยอัตโนมัติ
 
@@ -77,7 +79,8 @@ Hosted web search ไม่ผ่าน local tool hooks; ไม่มีกา�
 รุ่นทดลองที่ผ่าน mocks อย่างเดียวไม่ใช่ production-ready
 
 ทำใบงานที่เป็น pure logic และ offline tests ต่อได้ระหว่างรอ live evidence
-แต่ห้ามเปิด side effects หรือเผยแพร่เป็น agent สมบูรณ์ก่อน G1/G2
+manual live prototype เปิด opt-in ได้ตามนโยบายที่ผู้ใช้เลือก
+แต่ห้ามเผยแพร่เป็น agent สมบูรณ์ก่อนตรวจ G1/G2 และ gates ที่เกี่ยวข้อง
 
 ## 4. โครงสร้างไฟล์และข้อตกลงร่วม
 
@@ -202,13 +205,13 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P00 | ทำ diagnostic harness ให้เชื่อถือได้ | — | MOCK_VERIFIED | ใช่: lifecycle |
 | P01 | เก็บ live compatibility evidence | P00 | IN_PROGRESS: live recall และ shell/patch denial ผ่าน; actual dispatch ยังไม่ทราบ | ใช่ |
 | P02 | รวม protocol เป็น runtime ไฟล์เดียว | P00 | MOCK_VERIFIED | เฉพาะ failure/lifecycle |
-| P03 | พิสูจน์ permission boundary | P01 | IN_PROGRESS: live printf ไม่ถาม; native policy ไม่ผ่าน R06 | จำเป็น |
+| P03 | พิสูจน์ permission boundary | P01 | IN_PROGRESS: user ยอมรับ native policy; live prototype tests | จำเป็น |
 | P04 | Quota policy และ pause | P02 | MOCK_VERIFIED | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
 | P06 | Plan schema / classifier / routing | P04, P05 | IN_PROGRESS: validator/preparation MOCK_VERIFIED; live classifier รอ P03 | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell MOCK_VERIFIED; integration รอ P09/P11/P12 | ไม่จำเป็นถ้าไม่แตะ policy |
-| P09 | Tool approval UI และ enforcement | P03, P08 | TODO | จำเป็น |
+| P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | TODO | จำเป็น |
 | P11 | Local session persistence | P02 | TODO | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | TODO | จำเป็น |
@@ -219,7 +222,8 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 
 Dependency ไม่ได้อนุญาตทำงานขนานโดยอัตโนมัติ
 ลำดับแนะนำระหว่างรอ P01: P00 → P02 → P04 → P05 → P06 → P07 → P08 → P11
-P08 ช่วงนี้ทดสอบกับ fake server เท่านั้น ห้ามเปิดเครื่องมือจริงก่อน P03/P09
+P08 มี opt-in manual live prototype ตาม native policy ที่ผู้ใช้เลือก
+ต้องแยกผล fake/live และยังไม่เปิด auto workflow จน dependencies ผ่าน
 
 ## 8. ใบงาน
 

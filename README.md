@@ -1,204 +1,121 @@
 # ModelMate
 
-`sr` เป็น CLI แบบแชตต่อเนื่องที่ช่วยเลือกโมเดล ระดับการคิด และขั้นตอนทำงาน
-สำหรับงานโค้ด วิเคราะห์ วางแผน และเขียนเอกสาร ผ่าน ChatGPT/Codex subscription
+`sr` เป็นเป้าหมาย CLI ที่ช่วยเลือกโมเดล ระดับการคิด และขั้นตอนทำงาน
+สำหรับงานโค้ด วิเคราะห์ วางแผน และเอกสาร ผ่าน ChatGPT/Codex subscription
 
-**สถานะ: Terminal shell ต้นแบบ — ยังไม่เปิด live agent execution**
+**สถานะ: มี manual live chat แบบทดลอง; auto routing/workflow ยังไม่เชื่อมครบ**
 
-## เป้าหมาย
+## เริ่มใช้งาน
 
-- เลือกโมเดลที่คาดว่าทำงานผ่านเกณฑ์ได้ ใช้ตัวเก่งเฉพาะจุดยากหรือเสี่ยง
-- จัดขั้นตอนวางแผน ลงมือ และตรวจตามความจำเป็น ไม่บังคับครบทุกขั้นทุกงาน
-- ใช้ Codex App Server กับการเข้าสู่ระบบ ChatGPT ไม่ใช้ OpenAI API key
-- ผู้ใช้ควบคุมสิทธิ์ลงมือและการยกระดับโมเดลได้แยกกัน
-- เก็บสถานะในเครื่อง แยกตามโปรเจกต์ และกลับมาทำต่อได้
+ต้องมี Python 3.9+ และ Codex CLI (ตรวจ protocol กับ 0.169.0)
+ใช้ Python standard library ไม่ต้องติดตั้ง `openai` หรือ Python dependency เพิ่ม
+เข้าสู่ระบบด้วย ChatGPT ผ่าน `codex login` หากยังไม่ได้ล็อกอิน
 
-## ค่าเริ่มต้นที่ตกลงกัน
-
-| ส่วน | ค่าเริ่มต้น |
-| --- | --- |
-| รูปแบบ | แชตต่อเนื่องใน Terminal |
-| การเลือกโมเดล | สมดุลระหว่างคุณภาพและการใช้โควตา |
-| โหมด | Ask to escalate: ถามก่อนยกระดับ |
-| สิทธิ์ | อ่านในขอบเขตงานได้ ถามก่อนแก้ไฟล์หรือรันคำสั่ง |
-| การแก้งาน | แก้แล้วตรวจซ้ำได้ไม่เกิน 2 รอบต่อขั้น |
-| การตรวจด้วยตัวเก่ง | เฉพาะงานซับซ้อนหรือเสี่ยง |
-| ค่าใช้จ่าย | ไม่ซื้อเครดิต ไม่เปิดเติมอัตโนมัติ ไม่ fallback ไป API |
-
-อ่าน [แผนหลักและใบงานสำหรับ implementation](docs/MASTER_PLAN.md)
-และ [แบบระบบและแผนพิสูจน์ความสามารถ](docs/DESIGN.md)
-ซึ่งแยกข้อกำหนดที่ตกลงแล้วออกจากข้อจำกัดที่ยังต้องทดสอบ
-
-## ขอบเขตรุ่นแรก
-
-ออกแบบเป็น Python CLI ไฟล์เดียวที่ควบคุม Codex App Server ผ่าน stdio
-ใช้โมเดลและระดับการคิดที่บัญชีรองรับจริง โดยไม่ฝังรายการโมเดลตายตัว
-ยังไม่รองรับผู้ให้บริการอื่น งานขนาน หรือหน้าจอเว็บ
-
-การประหยัดโควตาเป็นเป้าหมายที่ต้องวัดกับงานจริง ยังไม่มีผล benchmark
-หรือหลักประกันว่าจะประหยัดกว่าการเลือกโมเดลเอง
-
-
-## ตรวจการเชื่อมต่อ (ขั้นที่ 1)
-
-ต้องมี Python 3.9+ และ Codex CLI ที่เข้าสู่ระบบด้วย ChatGPT แล้ว
-ไม่ต้องติดตั้ง Python dependencies เพิ่ม ตรวจจาก Terminal ปกติ:
-
-```bash
-python3 doctor.py
-```
-
-ตัวตรวจเปิด `codex app-server --stdio` แล้วอ่านประเภทบัญชี รายการโมเดล
-ระดับการคิด และโควตา ไม่ส่ง prompt ไม่เริ่ม turn ไม่แก้ไฟล์โปรเจกต์
-และไม่ซื้อเครดิต Codex อาจเขียน runtime state ของตัวเองตามการทำงานปกติ
-
-ผลสำเร็จเป็น JSON ทาง stdout ข้อผิดพลาดแสดงทาง stderr พร้อม exit code 1
-Ctrl+C คืน 130; `--timeout 30` ปรับเวลารอสูงสุดต่อ RPC ได้
-Exit code 0 หมายถึงอ่านข้อมูลสำเร็จ ไม่ได้หมายความว่ามีโควตาพอเริ่มงาน
-ค่า `null` หมายถึงไม่ทราบ ไม่ใช่โควตาว่างหรือสิทธิ์อนุญาต
-รายงานไม่แสดงอีเมล account ID, workspace ID หรือ credentials
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-ทดสอบด้วย subprocess จำลองและข้อมูลจำลอง ไม่ใช้โควตา inference
-การอ่านสถานะจากบัญชีจริงยังต้องยืนยันนอก sandbox ของสภาพแวดล้อมพัฒนา
-
-## ตรวจการส่งต่อบริบทและการอนุมัติ (ขั้นที่ 2–3)
-
-`verify.py` เป็นชุดตรวจเฉพาะทาง ไม่ใช่ agent CLI เต็มรูปแบบ
-การรันโดยไม่มี flag จะแสดง help และไม่เชื่อมต่อ Codex:
-
-```bash
-python3 verify.py
-```
-
-หลัง `doctor.py` อ่านสถานะสำเร็จ ให้เลือกสอง model IDs ที่อยู่ในผลรายงาน
-แล้วรันจาก Terminal ปกติ ตัวอย่างนี้ใช้ได้เมื่อบัญชีแสดงทั้งสองโมเดล:
-
-```bash
-python3 verify.py --run-live --models gpt-6.1-sol gpt-6-astra
-```
-
-**คำสั่งนี้ใช้โควตา subscription จริง** มี 4 turn หากทุกขั้นสำเร็จ
-หนึ่ง turn อาจมีหลายคำขอภายใน จึงไม่ใช่เพดาน token หรือค่าใช้จ่าย
-ระบบเลือก effort `low` หากโมเดลรองรับ มิฉะนั้นใช้ค่าเริ่มต้นจาก catalog
-ไม่มีการซื้อเครดิตหรือใช้ API key เป็น fallback
-
-ชุดตรวจจะ:
-
-1. ตรวจ ChatGPT login และโมเดลที่บัญชีแสดง
-2. เปิด thread ชั่วคราวในโฟลเดอร์ชั่วคราว ตั้ง sandbox เป็น read-only และปิดเว็บ
-3. ให้โมเดลแรกจำรหัสสุ่ม แล้วให้โมเดลที่สองตอบรหัสจากบริบทเดิม โดยไม่ส่งรหัสซ้ำ
-4. ขอให้สร้างไฟล์ทดลองด้วย shell และ patch แยก turn และตอบ **decline** ทุกคำขออนุมัติ
-5. ตรวจว่าพบคำขออนุมัติจริงและไฟล์ทดลองไม่ถูกสร้าง
-
-ตรวจโควตาก่อนเริ่มแต่ละ turn และหยุดหากสิทธิ์ใช้งานรวมใน subscription
-ไม่ชัดเจน หมด หรือพบสิทธิ์เครดิตเพิ่มเติม ไม่อนุมานว่าอ่านโควตาไม่ได้แปลว่าใช้ต่อได้
-หากไม่พบคำขออนุมัติ จะรายงาน `INCONCLUSIVE` และ exit 1 ไม่ถือว่าผ่าน
-เมื่อหมดเวลาหรือยกเลิก จะพยายาม interrupt turn ที่ทราบ ID ก่อนปิดการเชื่อมต่อ
-ถ้ายืนยันการ interrupt ไม่ได้ ต้องตรวจ Codex ก่อนลองซ้ำ
-
-ผลผ่านพิสูจน์เฉพาะกรณีทดลอง ไม่รับประกันว่าเครื่องมือทุกเส้นทางถามก่อนเสมอ
-การเรียก App Server ยังได้รับผลจาก config และ managed policy ในเครื่อง
-ชุดตรวจใช้โฟลเดอร์ชั่วคราวและไม่ให้โจทย์ที่อ่านโปรเจกต์จริง แต่ไม่ใช่ sandbox
-แยกบัญชีหรือเครื่องโดยสมบูรณ์ ข้อมูลทดสอบมีเพียงข้อความสังเคราะห์
-
-สถานะปัจจุบัน: unit tests ของชุดตรวจผ่าน แต่ **ยังไม่ผ่านการตรวจสดกับบัญชีจริง**
-
-ผลตรวจ `verify.py` แยก requested model ออกจาก reported model ที่ยังไม่ทราบ
-การจำรหัสสำเร็จจึงไม่ใช่หลักฐานว่า backend dispatch ไปโมเดลที่ร้องขอจริง
-ชุดตรวจต้องได้ account identity ที่คงเดิมจาก quota reads ก่อนเริ่มแต่ละ turn
-และต้องรอ event จบงานหลัง interrupt ก่อนลบ scratch directory
-หากไม่ทราบ turn ID หรือยืนยันการหยุดไม่ได้ จะเก็บ scratch ไว้และไม่ retry งานเอง
-
-
-Protocol และการอ่านสถานะใช้ implementation ร่วมใน `modelmate.py` แล้ว
-`doctor.py` และ `verify.py` ต้องอยู่ข้างไฟล์นี้เมื่อรันจาก source checkout
-ตัว runtime ยังไม่มีคำสั่งแชต `sr`; การนำเข้า module ไม่เปิด process/network
-ดูสถานะงานและผลตรวจล่าสุดใน [VERIFICATION.md](docs/VERIFICATION.md)
-
-
-Quota policy ใช้ร่วมใน runtime แล้ว: ก่อนเริ่มแต่ละ turn ชุดตรวจจะอ่าน auth และ quota ใหม่
-เก็บสถานะ `allow`/`pause` พร้อมเหตุผลในหน่วยความจำ และพักหาก snapshot เก่าเกิน 15 วินาที
-บัญชีเปลี่ยน ข้อมูลไม่ครบ หรืออ่านไม่ได้ เมื่อไม่มี mapping ระหว่างโมเดลกับ quota buckets
-จะตรวจทุก bucket ที่ได้รับ จึงอาจพักแบบเผื่อความปลอดภัยแม้บางโมเดลยังใช้งานได้
-การผ่าน preflight ไม่ใช่การจองโควตาหรือ hard spending cap
-
-
-Model selection policy ตรวจชื่อโมเดลและ effort จาก catalog ปัจจุบัน
-รองรับบทบาท economy/standard/strong ผ่าน mapping ที่ review แล้วหรือผู้ใช้กำหนดชัดเจน
-ตอนนี้ built-in mapping ยังว่างระหว่างรอทดสอบสด จึงไม่เลือกบทบาทจากชื่อโมเดลเอง
-โมเดลที่ไม่รู้จักยังเลือกเองได้ถ้า catalog รองรับ; การเปลี่ยนที่เทียบไม่ได้ต้องถามก่อน
-ส่วนนี้เป็น runtime primitives ยังไม่ใช่ routing UI หรือ CLI ที่ใช้งานครบแล้ว
-
-
-เพิ่ม schema แผน version 1 และตัวตรวจ routing proposal แล้ว แผนต้องมีเป้าหมาย
-เกณฑ์สำเร็จ ขั้นงาน และ checks; คำถามเพิ่มเติมจะหยุดการเลือกขั้นลงมือไว้ก่อน
-ผล `ready_for_approval` ยังไม่อนุมัติให้ใช้เครื่องมือ ส่วน classifier preparation
-ยังไม่เริ่ม inference จนกว่าจะพิสูจน์ no-tools boundary ตาม P03
-
-
-เพิ่ม policy สามโหมด Auto / Ask to escalate / Approve plan แล้วใน runtime
-ค่าเริ่มต้นถามก่อนยกระดับ สิทธิ์อนุมัติผูกกับ task/แผน/ขั้นงานและเพิกถอนเมื่อแผนเปลี่ยน
-การอนุมัติโมเดลไม่ใช่การอนุมัติเครื่องมือ ส่วนนี้ผ่าน offline tests
-แต่ยังไม่มี Terminal UI ที่เชื่อมกับนโยบายดังกล่าว
-
-
-## ลอง Terminal shell (P08 prototype)
-
-```bash
-python3 modelmate.py
-python3 modelmate.py "ช่วยวางแผนงาน"
-python3 modelmate.py --help
-```
-
-หน้าจอรองรับภาษาไทย คำสั่ง `/help`, `/status`, `/mode`, `/model`, `/cancel`, `/exit`
-และคำตอบ `/approve TOKEN`, `/decline TOKEN`, `/pause TOKEN` สำหรับคำขอเลือกโมเดล
-การเริ่มโปรแกรมหรือส่งโจทย์ในรุ่นนี้ **ไม่เชื่อมต่อ Codex และไม่เริ่ม inference**
-หน้าจอจะแจ้งว่า live classifier ยังไม่พร้อม ไม่มีคำตอบจากโมเดลจริงหรือการแก้ไฟล์
-Catalog/streaming/approval integration ถูกทดสอบผ่าน injected controller จำลองเท่านั้น
-`/model` ในโปรแกรมปกติยังไม่มี live catalog จึงไม่แสดงว่าโมเดลใช้งานได้โดยเดาเอง
-
-โหมดเริ่มต้นเป็น Ask to escalate และสิทธิ์เป็น ask
-`/permissions` แสดงสิทธิ์ปัจจุบัน แต่ยังไม่ขยายสิทธิ์ก่อน P03/P09 ผ่าน
-`/sessions`, `/delete` แจ้งว่ายังไม่พร้อมจน P11/P12 เสร็จ
-ขณะนี้ออกโปรแกรมแล้วยังไม่มี autosave/resume จึงไม่ควรใช้เก็บงานจริง
-ข้อความจาก controller ถูกกรอง terminal controls และ UI ไม่แสดง private reasoning
-การขอหยุดต้องรอ controller ยืนยัน หากรอเกิน 5 วินาทีจะออกด้วยสถานะ 130
-และแจ้งว่าผลงานยังไม่ทราบ ไม่อ้างว่าหยุดสำเร็จ
-
-
-ตรวจการเชื่อมบัญชีจริงได้จาก runtime ไฟล์เดียวด้วย:
+ตรวจบัญชี โมเดล และ quota จาก Terminal ปกติก่อน:
 
 ```bash
 python3 modelmate.py --doctor
 ```
 
-โหมดนี้อ่านเฉพาะบัญชี รายการโมเดล และ quota ไม่เริ่ม inference และใช้ prompt ร่วมไม่ได้
-ถ้า Codex เริ่มไม่สำเร็จจะคืน exit code 1 การล็อกอินสำเร็จเพียงอย่างเดียว
-ไม่ยืนยันว่า App Server เปิดได้ ใน sandbox พัฒนาปัจจุบันติด read-only filesystem
-ตอนเริ่ม SQLite ของ Codex จึงต้องรันการตรวจสดจาก Terminal ปกติ
+คำสั่งนี้ไม่เรียก inference ข้อมูล `null` หมายถึงไม่ทราบ
+Exit 0 หมายถึงอ่านสำเร็จ ไม่ใช่รับประกันว่าเริ่มงานได้
+การเปิด App Server อาจเขียน runtime state ของ Codex ตามปกติ
+ใน sandbox พัฒนาปัจจุบันติดสิทธิ์เขียน SQLite จึงยังรันการเชื่อมสดจากที่นั่นไม่ได้
 
+## แชตกับโมเดลจริง (ทดลอง)
 
-## ตรวจคำสั่งทั่วไปโดยไม่ทดสอบ handoff ซ้ำ
+เลือก model ID และ effort ที่บัญชีแสดงในผล doctor:
 
 ```bash
+python3 modelmate.py --live --model gpt-6.1-sol --effort low
+python3 modelmate.py --live --model gpt-6-astra --effort medium "ช่วยวิเคราะห์โจทย์นี้"
+python3 modelmate.py --live --model gpt-6-luna --effort low
+python3 modelmate.py --live --model gpt-6.1-terra --effort low
+```
+
+**--live ใช้ quota subscription จริง** อ่านบัญชี/catalog/quota ใหม่ก่อนเริ่ม turn
+หากอ่านไม่ได้ หมด quota ข้อมูลเก่า หรือบัญชีเปลี่ยน จะไม่เริ่ม turn ใหม่
+ไม่ fallback ไป API key ไม่ซื้อเครดิตหรือเปลี่ยน Automatic reload
+Preflight ไม่ใช่การจอง quota หรือ hard spending cap ของบริการ
+
+โปรแกรมใช้ thread เดิมคุยต่อและส่งข้อความเพิ่มระหว่างตอบได้
+รุ่นนี้เลือกโมเดลเอง ไม่มี classifier/auto routing หรือวงจร plan→implement→review
+อัตโนมัติ ไม่เปิด effort ultra ที่มี automatic delegation
+การส่ง model ID เป็นการร้องขอโมเดล ไม่ใช่ execution telemetry ที่ยืนยัน actual dispatch
+
+## สิทธิ์ที่ใช้ใน live chat
+
+ผู้ใช้เลือกพฤติกรรม Codex เมื่อ 2026-11-17:
+
+- ค่าเริ่มต้น **read-only + on-request** คำสั่งที่ sandbox อนุญาตทำเองได้โดยไม่ถามทุกครั้ง
+- คำขอขยายสิทธิ์ที่ Codex ส่งมาจะให้อนุมัติเป็นรายครั้ง
+- แสดง exact command/cwd หรือ patch preview ก่อน `/approve TOKEN`
+- `/decline TOKEN` ปฏิเสธ; `/pause TOKEN` ปฏิเสธและขอหยุด turn
+- ไม่ใช้ acceptForSession และไม่เปิด workspace-write/full-access อัตโนมัติ
+- ไม่มี patch preview, คำขอซ้อน หรือคำขอที่ยังไม่รองรับ จะปฏิเสธ/หยุด
+- คง managed restrictions; ไม่อ้างว่า native readable roots จำกัดเฉพาะโปรเจกต์
+
+ปิด hosted web search, apps/plugins และ agents ผ่าน config ของเส้นทาง live
+แต่ยังไม่อ้างว่าเป็น universal no-tools isolation; native local tools ยังมีได้
+project/user Codex configuration และ managed policy ยังมีผล
+อ่านสถานะหลักฐานใน [PERMISSIONS.md](docs/PERMISSIONS.md)
+
+## คำสั่งแชต
+
+| คำสั่ง | สถานะปัจจุบัน |
+| --- | --- |
+| `/help`, `/status` | แสดงคำสั่งและสถานะล่าสุด; quota ที่แสดงอาจเป็น snapshot เก่า |
+| `/model` | แสดง catalog และโมเดลที่เลือก |
+| `/model ID [EFFORT]` | เลือกอย่างชัดเจนสำหรับงานถัดไปเมื่อไม่มีงาน active |
+| `/approve TOKEN`, `/decline TOKEN`, `/pause TOKEN` | ตอบคำขอขยายสิทธิ์ครั้งเดียว |
+| `/cancel`, Ctrl+C | ขอหยุดและรอ confirmation ไม่ถือว่า RPC acknowledgement แปลว่าหยุดแล้ว |
+| `/exit`, EOF | ขอหยุดถ้ามีงาน active แล้วออก |
+| `/mode` | สามโหมดมี policy ออฟไลน์; live ยังเป็น manual selection |
+| `/permissions` | แสดง read_only; ยังไม่เปลี่ยน profile ทั้ง session |
+| `/sessions`, `/delete` | ยังไม่พร้อม รอ P11/P12 |
+
+**ยังไม่มี autosave/resume ของ ModelMate** live thread เป็น ephemeral
+หากขาดการเชื่อมต่อหรือหยุดไม่ได้ ผลของคำสั่งอาจไม่ทราบ
+ไม่ retry หรือ replay คำสั่งให้อัตโนมัติ การอนุมัติให้เขียนอาจเปลี่ยนไฟล์จริง
+
+เมื่อรันโดยไม่มี --live จะเปิด shell ออฟไลน์โดยไม่เปิด Codex/inference:
+
+```bash
+python3 modelmate.py
+python3 modelmate.py --help
+```
+
+## ชุดตรวจ
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m py_compile modelmate.py doctor.py verify.py
+```
+
+Default tests ใช้ JSONL subprocess/fake controller ไม่ใช้ quota จริง
+ตัวเชื่อม live chat ผ่านการทดสอบจำลองแล้ว แต่ยังรอผลใช้งานสดจาก Terminal ของผู้ใช้
+ผลตรวจสดที่ได้รับแล้วครอบคลุม account/catalog/quota, synthetic context recall,
+การปฏิเสธ scratch command/patch และการรัน printf ตาม native policy
+
+คำสั่งต่อไปนี้ **ใช้ quota จริง** เลือกรันเฉพาะกรณีที่ต้องตรวจ:
+
+```bash
+python3 verify.py --run-live --models gpt-6.1-sol gpt-6-astra
 python3 verify.py --run-live --probe-read-approval gpt-6.1-sol
 ```
 
-ใช้โควตาจริงหนึ่ง turn (อาจมีหลาย request ภายใน) ขอให้ shell พิมพ์ marker ด้วย
-`printf` เท่านั้น ไม่อ่านหรือเขียนไฟล์ และไม่ขอ elevated permissions
-หากเกิด approval request ชุดตรวจตอบ decline เหมือนเดิม
+Read probe คืน `executed_without_approval` ได้ตาม native policy ที่ผู้ใช้เลือก
+เป็นข้อมูลเกี่ยวกับพฤติกรรม ไม่ใช่ข้อรับประกันทุกเส้นทาง
+Harness ยังคืน exit 1 สำหรับผลนี้เพื่อแยกจาก denial-scenario success
+รายงานแยก requested model, observed thread settings และ actual dispatch ที่ยังไม่ทราบ
+ไม่ commit raw account report, credentials, prompts หรือ local session logs
 
-ผล `readCommandApproval` แยกเป็น `executed_without_approval`,
-`denial_observed_for_this_command` หรือ `inconclusive` โดยดู tool events จริง
-ไม่ใช้ข้อความที่โมเดลอ้างว่ารันแล้วเป็นหลักฐาน Exit 0 เฉพาะกรณีพบ denial
-พร้อมสถานะเครื่องมือที่ไม่สำเร็จ ส่วนอีกสองกรณีคืน 1 และไม่ผ่าน gate
+## เอกสารโครงการ
 
-รายงานใหม่มี `turnEvidence` ซึ่งแยก requested model/effort,
-`threadSettingsObserved` และ `toolsObserved` โดยไม่บันทึก command/output/IDs
-Settings เป็นการตั้งค่า thread ที่สังเกตระหว่าง turn ไม่ใช่ execution telemetry
-ดังนั้น `reportedModels` ยังเป็น null และไม่อ้างว่า actual dispatch verified
-อ่าน matrix สิทธิ์ที่ยังต้องตรวจใน [PERMISSIONS.md](docs/PERMISSIONS.md)
+- [Design](docs/DESIGN.md)
+- [Master plan และใบงาน](docs/MASTER_PLAN.md)
+- [ผลตรวจและข้อจำกัด](docs/VERIFICATION.md)
+- [กติกาสำหรับ agent ที่พัฒนาโครงการ](AGENTS.md)
+
+ยังไม่รองรับผู้ให้บริการอื่น งานขนานหลาย agent หรือ web UI
+การประหยัด quota และคุณภาพ routing ยังต้องประเมินกับงานจริง ไม่มี benchmark รับรอง

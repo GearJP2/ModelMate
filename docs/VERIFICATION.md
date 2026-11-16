@@ -442,3 +442,58 @@ architecture decision requires user agreement if default permission semantics
 change; otherwise enforcement must be developed and proved before P09 can ship.
 Independent offline tasks remain possible while resolving the boundary.
 Documentation-only check: git diff --check passed; no new inference was run.
+
+
+## User-approved native permission policy and opt-in manual live chat
+
+User explicitly selected option 1: use native Codex permission behavior.
+This supersedes ask-before-every-command in R06. Default is read-only + on-request;
+commands allowed by that sandbox need not ask. Required server approvals still
+need human input. No automatic workspace-write/full-access or session-wide grant
+was introduced. Stronger host/managed restrictions still apply. The earlier printf
+result is an expected observation under the new policy, not a failure of new R06.
+Historical evidence above refers to the policy in effect when recorded.
+
+Implemented --live --model ID [--effort LEVEL] in the single-file runtime.
+This path is manual-model chat, not automatic routing or the no-tools classifier.
+It uses a ChatGPT-only/openai provider configuration, inspects catalog/auth,
+creates one ephemeral read-only thread, and refreshes catalog/quota before each
+new turn. Text during a known active turn uses turn/steer. Turn-start uncertainty
+is not retried. Requested ultra delegation effort is not enabled.
+
+The UI/backend share one owning selector loop. The existing protocol reader was
+factored into pop_message/read_ready so synchronous diagnostics and asynchronous
+live chat do not duplicate parsing or size limits. Async RPC IDs and deadlines
+are correlated; disconnect/unknown result does not lead to automatic replay.
+Model selection, inference dispatch and tool decisions remain distinct.
+
+Command approvals display exact escaped command/cwd; file approvals require a
+bounded preview captured from the corresponding fileChange item. Human approve
+is a one-time accept, decline/pause do not approve. Missing previews, oversized
+requests, overlapping requests and unsupported/stale request types are refused
+or stop the session. Cancellation declines pending requests and waits for the
+matching terminal event. Interrupt acknowledgement alone does not mean stopped.
+Hosted search/apps/plugins/agents are requested disabled in this path, but a
+universal no-tools/private-context isolation claim is not made.
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_live.py -v`: 13 passed.
+- `python3 -m unittest discover -s tests -q`: 125 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Tests cover native thread settings, fail-closed quota, exact one-time approvals,
+missing/stale previews/tokens, stop confirmation, streamed-text deduplication,
+completion-before-start-response ordering and delayed-start cancellation.
+A subprocess integration runs the actual --live entry point against an injected
+JSONL fake Codex server for two turns, with explicit accept then decline, verifying
+one thread and renewed quota checks. This does not use real credentials/quota.
+
+The new live-chat integration has NOT been run against the actual account here;
+startup remains blocked by the development sandbox. The user's previous harness
+results establish account/turn/denial behavior only for those scenarios.
+P03/P08/P09 remain partial. No autosave/resume, automatic workflow or universal
+support for permission/tool-input request types is claimed. Unsupported server
+requests stop without granting rights. Next validation: a normal-terminal --live
+chat with an explicitly selected available model and a harmless text prompt.
