@@ -119,3 +119,25 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 
 ยังไม่รองรับผู้ให้บริการอื่น งานขนานหลาย agent หรือ web UI
 การประหยัด quota และคุณภาพ routing ยังต้องประเมินกับงานจริง ไม่มี benchmark รับรอง
+
+
+## Session metadata storage (P11)
+
+มี `SessionStore` ใน runtime แล้ว แต่ **ยังไม่เชื่อม autosave หรือ /sessions ในแชต**
+ส่วนการ resume/cancel/delete จริงอยู่ใน P12
+
+เก็บ schema version 1 ใต้ `$XDG_STATE_HOME/modelmate` หรือ
+`~/.local/state/modelmate` แยกโปรเจกต์ด้วย SHA-256 ของ canonical real path
+ใช้ session ID ที่ controller สร้าง ไม่ใช้ชื่อจากโมเดลเป็น filename
+เก็บเฉพาะเป้าหมาย เกณฑ์ ขั้นงาน จำนวนรอบแก้ สถานะ สรุป และ Codex thread ID
+ไม่มีสำเนา transcript, credentials หรือ approval grants
+metadata เป้าหมาย/สรุปอาจมีข้อมูลส่วนตัว จึงใช้ directory 0700 และไฟล์ 0600
+ไม่มีการเข้ารหัสหรือ cloud sync
+
+Storage API รองรับ create/read/list และ `with store.edit(id)` เพื่อถือ exclusive
+writer lock ตลอด context พร้อม atomic save ตอนออกตามปกติ
+เรียก `store.save(record)` ภายใน context เพื่อ checkpoint ระหว่างงานได้
+Exception ก่อน save จะไม่เขียนข้อมูลค้าง; process ที่สองแก้ session เดียวกันไม่ได้
+symlink path ของโปรเจกต์เดียวกันใช้ identity เดียวกัน แต่ state-file symlink ถูกปฏิเสธ
+ไฟล์ JSON เสียหรือ schema รุ่นที่ไม่รู้จักจะไม่ถูกเขียนทับ
+ค่า permission profile ที่บันทึกเป็น metadata ไม่ใช่สิทธิ์อนุมัติให้กลับมาทำงานเอง

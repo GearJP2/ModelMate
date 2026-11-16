@@ -534,3 +534,50 @@ reproduction of the user's unknown underlying exception.
 Actual-account retest: pending. If it still stops, use the new phase/class/errno
 line to locate the failing operation; do not request raw secrets or full logs.
 Git workflow now requires branch → detailed PR → checks/review → PR merge.
+
+
+## P11 — MOCK_VERIFIED (local metadata storage API)
+
+Implemented SessionStore in the single-file runtime. State uses XDG_STATE_HOME
+(or ~/.local/state)/modelmate and a SHA-256 project key derived from canonical
+real path. Controller-created session UUIDs name the files. Metadata schema v1
+contains task/step/criteria/correction status and optional Codex thread ID, not
+transcripts, credentials, quota grants or execution approvals. Goal/summary can
+still be sensitive; this is private local storage, not encryption or redaction.
+
+Directory/file permissions are restrictive (0700/0600). File descriptors use
+O_NOFOLLOW; regular/private/single-link files are required. Project-directory fd
+operations keep reads/replaces anchored if a pathname is later retargeted. Project
+symlink aliases resolve to the same identity. Relative state-home values are
+rejected rather than writing implicitly under the current working directory.
+
+Nonblocking Linux flock rejects another writer and is held for the entire edit
+context. Checkpoints require that lock; normal context exit saves atomically.
+Locks remain as small files to avoid lock-inode races. Exceptions leave the last
+completed checkpoint in place. Save writes a same-directory temporary file,
+flushes/fsyncs it, replaces atomically and fsyncs the project directory. JSON that
+is corrupt, has unknown fields/version or mismatched identity is not overwritten.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_sessions.py -v`: 19 passed.
+- `python3 -m unittest discover -s tests -q`: 147 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Tests cover Thai/spaced paths, canonical project aliases, separate projects,
+private permissions, corrupt/future-schema preservation, ID collision, invalid
+metadata, symlink rejection, directory retargeting, failed replace, checkpoints,
+exceptions, real subprocess lock contention and process death before replace.
+A nested writer failure must not revoke the outer writer's lock ownership.
+
+Scope/limits: storage primitives only. Existing live chat is still ephemeral and
+has no autosave/resume integration; /sessions and /delete remain unavailable.
+P12 must handle durable thread creation/resume and unknown in-flight outcomes
+before exposing these commands. Saved mode/profile are hints, not automatic
+restoration of grants. A directory-fsync failure after replace may mean the new
+complete file is installed but durability is uncertain; no rollback is claimed.
+An abrupt process death can leave an ignored .tmp file; no speculative cleanup
+or schema migration framework was added. Actual power-loss and hardware storage
+faults were not tested. No live inference was run. Next eligible task: P12 planning
+and lifecycle integration, subject to its P10 dependency for workflow-specific state.
