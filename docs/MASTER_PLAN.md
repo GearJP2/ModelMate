@@ -203,7 +203,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P01 | เก็บ live compatibility evidence | P00 | BLOCKED: ต้องรันนอก sandbox ปัจจุบัน | ใช่ |
 | P02 | รวม protocol เป็น runtime ไฟล์เดียว | P00 | MOCK_VERIFIED | เฉพาะ failure/lifecycle |
 | P03 | พิสูจน์ permission boundary | P01 | TODO | จำเป็น |
-| P04 | Quota policy และ pause | P02 | TODO | จำเป็น |
+| P04 | Quota policy และ pause | P02 | MOCK_VERIFIED | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | TODO | ตรวจตารางบทบาทครั้งแรก |
 | P06 | Plan schema / classifier / routing | P04, P05 | TODO | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | TODO | จำเป็น |

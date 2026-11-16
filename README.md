@@ -118,3 +118,10 @@ Protocol และการอ่านสถานะใช้ implementation �
 `doctor.py` และ `verify.py` ต้องอยู่ข้างไฟล์นี้เมื่อรันจาก source checkout
 ตัว runtime ยังไม่มีคำสั่งแชต `sr`; การนำเข้า module ไม่เปิด process/network
 ดูสถานะงานและผลตรวจล่าสุดใน [VERIFICATION.md](docs/VERIFICATION.md)
+
+
+Quota policy ใช้ร่วมใน runtime แล้ว: ก่อนเริ่มแต่ละ turn ชุดตรวจจะอ่าน auth และ quota ใหม่
+เก็บสถานะ `allow`/`pause` พร้อมเหตุผลในหน่วยความจำ และพักหาก snapshot เก่าเกิน 15 วินาที
+บัญชีเปลี่ยน ข้อมูลไม่ครบ หรืออ่านไม่ได้ เมื่อไม่มี mapping ระหว่างโมเดลกับ quota buckets
+จะตรวจทุก bucket ที่ได้รับ จึงอาจพักแบบเผื่อความปลอดภัยแม้บางโมเดลยังใช้งานได้
+การผ่าน preflight ไม่ใช่การจองโควตาหรือ hard spending cap

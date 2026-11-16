@@ -21,6 +21,7 @@ class ProtocolTests(unittest.TestCase):
             shutil.copyfile(Path(__file__).resolve().parents[1] / 'modelmate.py',
                             Path(directory) / 'modelmate.py')
             source = '''import subprocess,socket,selectors
+from unittest.mock import patch
 with patch.object(subprocess,'Popen',side_effect=AssertionError('process')), \\
      patch.object(socket,'socket',side_effect=AssertionError('network')), \\
      patch.object(selectors,'DefaultSelector',side_effect=AssertionError('selector')):

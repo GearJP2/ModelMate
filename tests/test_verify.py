@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from modelmate import ProbeError
-from verify import VerificationConnection, choose_models, ensure_quota, verify
+from verify import VerificationConnection, choose_models, verify
+from modelmate import ensure_quota
 
 
 GOOD_QUOTA = {'ordinaryUsageAllowed': True, 'accountId': 'synthetic-account', 'rateLimits': {'primary': {'usedPercent': 30}}}
@@ -54,6 +55,8 @@ class VerificationTests(unittest.TestCase):
     def test_events_before_rpc_response_are_retained(self):
         c = self.connection()
         def request(method, params=None):
+            if method == 'account/read':
+                return {'account': {'type': 'chatgpt'}}
             if method == 'account/rateLimits/read':
                 return GOOD_QUOTA
             c.handle_event({'method': 'item/completed', 'params': {
@@ -70,7 +73,7 @@ class VerificationTests(unittest.TestCase):
         c.request = Mock(return_value={})
         with self.assertRaises(ProbeError):
             c.run_turn('prompt', 'one', 'low')
-        c.request.assert_called_once_with('account/rateLimits/read')
+        c.request.assert_called_once_with('account/read', {'refreshToken': False})
 
     def test_synthetic_flow_and_no_nonce_in_second_prompt(self):
         c = Mock()
@@ -128,7 +131,7 @@ class LifecycleRegressions(unittest.TestCase):
 
     def test_failed_start_without_id_cannot_be_retried_or_cleaned(self):
         c = self.connection()
-        c.request = Mock(side_effect=[GOOD_QUOTA, ProbeError('timed out')])
+        c.request = Mock(side_effect=[{'account': {'type': 'chatgpt'}}, GOOD_QUOTA, ProbeError('timed out')])
         with self.assertRaises(ProbeError):
             c.run_turn('prompt', 'one', 'low')
         self.assertTrue(c.start_pending)
@@ -136,7 +139,7 @@ class LifecycleRegressions(unittest.TestCase):
             c.interrupt()
         with self.assertRaisesRegex(ProbeError, 'unknown'):
             c.run_turn('again', 'one', 'low')
-        self.assertEqual(c.request.call_count, 2)
+        self.assertEqual(c.request.call_count, 3)
 
     def test_interrupt_ack_alone_does_not_confirm_stop(self):
         c = self.connection()
@@ -164,10 +167,10 @@ class LifecycleRegressions(unittest.TestCase):
         c.account_id = 'original'
         for identity in [None, 'different']:
             quota = dict(GOOD_QUOTA, accountId=identity)
-            c.request = Mock(return_value=quota)
-            with self.assertRaisesRegex(ProbeError, 'identity|Account changed'):
+            c.request = Mock(side_effect=[{'account': {'type': 'chatgpt'}}, quota])
+            with self.assertRaisesRegex(ProbeError, 'account_unknown|account_changed'):
                 c.run_turn('prompt', 'one', 'low')
-            c.request.assert_called_once_with('account/rateLimits/read')
+            self.assertEqual(c.request.call_count, 2)
 
     def test_multiple_buckets_and_bad_credits_fail_closed(self):
         for buckets in [
@@ -215,7 +218,7 @@ class LifecycleRegressions(unittest.TestCase):
 
     def test_turn_deadline_includes_start_rpc_wait(self):
         c = self.connection()
-        c.request = Mock(side_effect=[GOOD_QUOTA, {'turn': {'id': 'turn'}}])
+        c.request = Mock(side_effect=[{'account': {'type': 'chatgpt'}}, GOOD_QUOTA, {'turn': {'id': 'turn'}}])
         c.receive = Mock(side_effect=ProbeError('timed out'))
         with patch('verify.time.monotonic', return_value=100):
             with self.assertRaises(ProbeError):
@@ -236,6 +239,8 @@ class LifecycleRegressions(unittest.TestCase):
     def test_started_event_allows_interrupt_after_missing_rpc_response(self):
         c = self.connection()
         def request(method, params=None):
+            if method == 'account/read':
+                return {'account': {'type': 'chatgpt'}}
             if method == 'account/rateLimits/read':
                 return GOOD_QUOTA
             if method == 'turn/start':

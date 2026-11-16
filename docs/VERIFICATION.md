@@ -65,3 +65,50 @@ limit; the receive buffer retains its 4 MiB limit.
 Live inference: NOT RUN. G1–G4 are unchanged. Next eligible offline task: P04.
 P01 still requires normal-terminal evidence; P03 still requires the permission
 capability investigation before real tool execution can be exposed.
+
+
+## P04 — MOCK_VERIFIED
+
+Shared quota policy now lives in `modelmate.py`. `quota_decision` returns
+allow/pause, a machine-readable reason, monotonic checked_at and account identity
+for in-memory use. `refresh_quota` reads ChatGPT auth and quota for each new turn;
+verify uses it rather than maintaining a duplicate policy. The compatibility
+ensure_quota entry point validates a snapshot but does not start or authorize a
+future turn by itself.
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_quota.py -v`: 14 tests passed.
+- `python3 -m unittest discover -s tests -v`: 48 tests passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- Doctor and verify help commands: passed without connecting to Codex.
+- `git diff --check`: passed.
+
+The JSONL subprocess tests record actual request methods and assert no turn/start
+is transmitted for unknown/exhausted quota, missing identity, RPC failure,
+closed connection or API-key auth. Further tests confirm every turn refreshes,
+account changes stop the next turn, and an exhausted snapshot can recover only
+through a new read. Pure tests cover multiple buckets, malformed values, credit
+access and slow/stale refreshes. The P02 isolated-import subprocess test had a
+missing patch import after cleanup; it is corrected and passing in this run.
+
+Policy boundaries:
+
+- A snapshot older than 15 seconds (including time spent refreshing), with a
+  future/non-finite timestamp, is paused. Monotonic timestamps are process-local
+  and must not be persisted as resumable grants.
+- Without reliable model-to-bucket mapping every returned bucket must pass. This
+  may conservatively pause even when another model would work. No guessed bypass.
+- Reset time passing does not override exhausted/unknown status.
+- Account identity is pinned from the first allowed quota response and compared
+  thereafter. Backend validation of ordinaryUsageAllowed is still required; the
+  local comparison is not an independent credential check.
+- Credits absent/null in a response are not proof that no paid-credit facility
+  exists. Known positive credit access pauses the diagnostic. Backend included
+  usage permission and preflight are not a hard spending cap or reservation.
+- No credit purchases, resets, API-key fallback or billing changes were added.
+
+Live inference: NOT RUN. G1–G4 remain unverified. The full controller/session UI
+will consume these decisions in later tasks; this task only implements quota
+policy and integrates it into the existing verification turn path.
+Next eligible offline task: P05 (model roles and effort policy).

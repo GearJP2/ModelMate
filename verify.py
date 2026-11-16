@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from modelmate import Connection, ProbeError, inspect
+from modelmate import Connection, ProbeError, inspect, ensure_quota, refresh_quota
 
 
 APPROVALS = {
@@ -61,14 +61,10 @@ class VerificationConnection(Connection):
     def run_turn(self, prompt, model, effort):
         if self.start_pending or self.turn_id:
             raise ProbeError('Previous turn outcome unknown; no new turn started.')
-        quota = self.request('account/rateLimits/read')
-        ensure_quota(quota)
-        account_id = quota.get('accountId')
-        if not isinstance(account_id, str) or not account_id:
-            raise ProbeError('Account identity unavailable; no new turn started.')
-        if self.account_id is not None and account_id != self.account_id:
-            raise ProbeError('Account changed; no new turn started.')
-        self.account_id = account_id
+        self.quota_status = refresh_quota(self, self.account_id)
+        if self.quota_status['state'] != 'allow':
+            raise ProbeError('Quota check paused: ' + self.quota_status['reason'] + '; no new turn started.')
+        self.account_id = self.quota_status['account_id']
         self.events.clear()
         self.denials.clear()
         deadline = time.monotonic() + self.timeout
@@ -121,38 +117,6 @@ class VerificationConnection(Connection):
                     self.start_pending = False
                     return
             self.handle_event(self.receive(deadline))
-
-
-def ensure_quota(quota):
-    if not isinstance(quota, dict) or quota.get('ordinaryUsageAllowed') is not True:
-        raise ProbeError('Included usage is unavailable or unknown; no new turn started.')
-    buckets = quota.get('rateLimitsByLimitId')
-    if buckets is None:
-        buckets = {'default': quota.get('rateLimits')}
-    if not isinstance(buckets, dict) or not buckets:
-        raise ProbeError('Quota buckets unavailable; no new turn started.')
-    for bucket in buckets.values():
-        if not isinstance(bucket, dict):
-            raise ProbeError('Invalid quota snapshot.')
-        if bucket.get('spendControlReached') or bucket.get('rateLimitReachedType'):
-            raise ProbeError('A quota limit is reached; no new turn started.')
-        if not any(isinstance(bucket.get(k), dict) for k in ('primary', 'secondary')):
-            raise ProbeError('Quota windows unavailable; no new turn started.')
-        for name in ('primary', 'secondary'):
-            window = bucket.get(name)
-            if window is not None:
-                if not isinstance(window, dict):
-                    raise ProbeError('Invalid quota window.')
-                used = window.get('usedPercent')
-                if type(used) not in (int, float) or not math.isfinite(used) or not 0 <= used < 100:
-                    raise ProbeError('Quota window exhausted or invalid; no new turn started.')
-        credits = bucket.get('credits')
-        if credits is None:
-            credits = {}
-        if not isinstance(credits, dict):
-            raise ProbeError('Invalid credit snapshot.')
-        if credits.get('hasCredits') or credits.get('unlimited'):
-            raise ProbeError('Extra credit access detected; this subscription-only verification will not run.')
 
 
 def choose_models(catalog, names):

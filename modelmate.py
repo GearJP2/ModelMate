@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """ModelMate runtime primitives. Importing this module performs no I/O."""
 import json
+import math
 import os
 import selectors
 import subprocess
@@ -155,3 +156,94 @@ def inspect(connection):
         'note': 'Diagnostic only: null means unknown. No inference was requested. This is not a spending guarantee.',
     }
 
+
+
+def quota_decision(quota, checked_at, *, now=None, expected_account=None):
+    """Return a fail-closed decision; checked_at/now use the monotonic clock."""
+    now = time.monotonic() if now is None else now
+    result = {'state': 'pause', 'reason': 'quota_unknown', 'checked_at': checked_at,
+              'account_id': None}
+    if (type(checked_at) not in (int, float) or type(now) not in (int, float)
+            or not math.isfinite(checked_at) or not math.isfinite(now)
+            or not 0 <= now - checked_at <= 15):
+        return dict(result, reason='quota_stale')
+    if not isinstance(quota, dict):
+        return result
+    account = quota.get('accountId')
+    if not isinstance(account, str) or not account.strip():
+        return dict(result, reason='account_unknown')
+    result['account_id'] = account
+    if expected_account is not None and account != expected_account:
+        return dict(result, reason='account_changed')
+    allowed = quota.get('ordinaryUsageAllowed')
+    if allowed is False:
+        return dict(result, reason='quota_exhausted')
+    if allowed is not True:
+        return result
+    buckets = quota.get('rateLimitsByLimitId')
+    if buckets is None:
+        buckets = {'default': quota.get('rateLimits')}
+    if not isinstance(buckets, dict) or not buckets:
+        return result
+    # No reliable model-to-bucket mapping: require every returned bucket to pass.
+    for name, bucket in buckets.items():
+        if not isinstance(name, str) or not name or not isinstance(bucket, dict):
+            return result
+        spend = bucket.get('spendControlReached')
+        if spend is not None and type(spend) is not bool:
+            return result
+        reached = bucket.get('rateLimitReachedType')
+        if reached is not None and (not isinstance(reached, str) or not reached):
+            return result
+        if spend is True or reached is not None:
+            return dict(result, reason='quota_exhausted')
+        windows = [bucket.get(k) for k in ('primary', 'secondary')]
+        if all(window is None for window in windows):
+            return result
+        for window in windows:
+            if window is None:
+                continue
+            if not isinstance(window, dict):
+                return result
+            used = window.get('usedPercent')
+            if type(used) not in (int, float) or not math.isfinite(used) or not 0 <= used <= 100:
+                return result
+            if used == 100:
+                return dict(result, reason='quota_exhausted')
+            for key in ('resetsAt', 'windowDurationMins'):
+                value = window.get(key)
+                if value is not None and (type(value) is not int or value <= 0):
+                    return result
+        credits = bucket.get('credits')
+        if credits is not None:
+            if not isinstance(credits, dict):
+                return result
+            for key in ('hasCredits', 'unlimited'):
+                if type(credits.get(key)) is not bool:
+                    return result
+            if credits['hasCredits'] or credits['unlimited']:
+                return dict(result, reason='extra_credit_access')
+    return dict(result, state='allow', reason='included_usage_available')
+
+
+def refresh_quota(connection, expected_account=None):
+    """Read fresh account/quota state for a single controller-started turn."""
+    checked_at = time.monotonic()
+    try:
+        account = connection.request('account/read', {'refreshToken': False}).get('account')
+        if not isinstance(account, dict) or account.get('type') != 'chatgpt':
+            return {'state': 'pause', 'reason': 'chatgpt_login_required',
+                    'checked_at': checked_at, 'account_id': None}
+        quota = connection.request('account/rateLimits/read')
+    except (ProbeError, OSError, ValueError, TypeError, AttributeError):
+        return {'state': 'pause', 'reason': 'quota_unavailable',
+                'checked_at': checked_at, 'account_id': None}
+    return quota_decision(quota, checked_at, expected_account=expected_account)
+
+
+def ensure_quota(quota):
+    """Compatibility entry point: reject a snapshot without authorizing a turn."""
+    checked_at = time.monotonic()
+    decision = quota_decision(quota, checked_at)
+    if decision['state'] != 'allow':
+        raise ProbeError('Quota check paused: ' + decision['reason'] + '; no new turn started.')
