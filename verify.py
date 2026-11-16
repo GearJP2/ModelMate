@@ -28,14 +28,19 @@ class VerificationConnection(Connection):
         self.denials = []
         self.thread_id = None
         self.turn_id = None
+        self.start_pending = False
+        self.account_id = None
 
     def handle_event(self, message):
         method = message.get('method')
+        if not isinstance(message.get('params'), dict):
+            raise ProbeError('Malformed server event; no action approved.')
         if 'id' in message:
             if method not in APPROVALS:
                 raise ProbeError('Unexpected permission/tool request; nothing approved.')
             params = message.get('params', {})
             if (not isinstance(params, dict) or params.get('threadId') != self.thread_id
+                    or not params.get('turnId') or not params.get('itemId')
                     or not isinstance(params.get('turnId'), str)
                     or (self.turn_id is not None and params['turnId'] != self.turn_id)):
                 raise ProbeError('Approval belongs to a different thread; nothing approved.')
@@ -43,21 +48,40 @@ class VerificationConnection(Connection):
             self.send({'id': message['id'], 'result': {'decision': 'decline'}})
         else:
             if method == 'turn/started' and message.get('params', {}).get('threadId') == self.thread_id:
-                self.turn_id = message['params']['turn']['id']
+                turn_id = message['params'].get('turn', {}).get('id')
+                if not isinstance(turn_id, str) or not turn_id:
+                    raise ProbeError('Invalid turn ID.')
+                if self.turn_id is not None and self.turn_id != turn_id:
+                    raise ProbeError('Conflicting active turn ID.')
+                self.turn_id = turn_id
             self.events.append(message)
             if len(self.events) > 10000:
                 raise ProbeError('Too many events; stopping verification.')
 
     def run_turn(self, prompt, model, effort):
-        ensure_quota(self.request('account/rateLimits/read'))
+        if self.start_pending or self.turn_id:
+            raise ProbeError('Previous turn outcome unknown; no new turn started.')
+        quota = self.request('account/rateLimits/read')
+        ensure_quota(quota)
+        account_id = quota.get('accountId')
+        if not isinstance(account_id, str) or not account_id:
+            raise ProbeError('Account identity unavailable; no new turn started.')
+        if self.account_id is not None and account_id != self.account_id:
+            raise ProbeError('Account changed; no new turn started.')
+        self.account_id = account_id
         self.events.clear()
         self.denials.clear()
         deadline = time.monotonic() + self.timeout
+        self.start_pending = True
         result = self.request('turn/start', {
             'threadId': self.thread_id, 'model': model, 'effort': effort,
             'input': [{'type': 'text', 'text': prompt}],
         })
-        self.turn_id = result['turn']['id']
+        turn_id = result.get('turn', {}).get('id')
+        if not isinstance(turn_id, str) or not turn_id or (self.turn_id and self.turn_id != turn_id):
+            raise ProbeError('Invalid or conflicting turn ID; outcome unknown.')
+        self.turn_id = turn_id
+        self.start_pending = False
         messages = []
         while True:
             events, self.events = self.events, []
@@ -79,9 +103,24 @@ class VerificationConnection(Connection):
             self.handle_event(self.receive(deadline))
 
     def interrupt(self):
-        if self.thread_id and self.turn_id:
-            self.request('turn/interrupt', {'threadId': self.thread_id, 'turnId': self.turn_id})
-            self.turn_id = None
+        if self.start_pending and not self.turn_id:
+            raise ProbeError('Turn start outcome unknown; no automatic retry is safe.')
+        if not self.turn_id:
+            return
+        target = self.turn_id
+        self.request('turn/interrupt', {'threadId': self.thread_id, 'turnId': target})
+        deadline = time.monotonic() + self.timeout
+        while True:
+            events, self.events = self.events, []
+            for event in events:
+                params = event.get('params', {})
+                if (event.get('method') == 'turn/completed' and params.get('threadId') == self.thread_id
+                        and params.get('turn', {}).get('id') == target
+                        and params['turn'].get('status') in {'completed', 'failed', 'interrupted'}):
+                    self.turn_id = None
+                    self.start_pending = False
+                    return
+            self.handle_event(self.receive(deadline))
 
 
 def ensure_quota(quota):
@@ -92,8 +131,6 @@ def ensure_quota(quota):
         buckets = {'default': quota.get('rateLimits')}
     if not isinstance(buckets, dict) or not buckets:
         raise ProbeError('Quota buckets unavailable; no new turn started.')
-    if not isinstance(quota, dict):
-        raise ProbeError('Invalid quota response.')
     for bucket in buckets.values():
         if not isinstance(bucket, dict):
             raise ProbeError('Invalid quota snapshot.')
@@ -109,7 +146,11 @@ def ensure_quota(quota):
                 used = window.get('usedPercent')
                 if type(used) not in (int, float) or not math.isfinite(used) or not 0 <= used < 100:
                     raise ProbeError('Quota window exhausted or invalid; no new turn started.')
-        credits = bucket.get('credits') or {}
+        credits = bucket.get('credits')
+        if credits is None:
+            credits = {}
+        if not isinstance(credits, dict):
+            raise ProbeError('Invalid credit snapshot.')
         if credits.get('hasCredits') or credits.get('unlimited'):
             raise ProbeError('Extra credit access detected; this subscription-only verification will not run.')
 
@@ -168,6 +209,30 @@ def verify(connection, models, directory):
             'modelSwitch': 'unverified: context recall alone does not prove actual model dispatch'}
 
 
+def run_in_scratch(connection, models):
+    directory = tempfile.mkdtemp(prefix='modelmate-verify-')
+    failed = False
+    try:
+        return verify(connection, models, Path(directory))
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            connection.interrupt()
+        except (ProbeError, OSError):
+            print('Interruption unconfirmed; scratch directory retained: ' + directory, file=sys.stderr)
+            if not failed:
+                raise ProbeError('Turn outcome unknown; check Codex before retrying.')
+        else:
+            try:
+                shutil.rmtree(directory)
+            except OSError:
+                print('Could not remove scratch directory: ' + directory, file=sys.stderr)
+                if not failed:
+                    raise ProbeError('Scratch cleanup failed.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
@@ -186,20 +251,7 @@ def main():
         connection = VerificationConnection(['codex', 'app-server', '--stdio'], args.timeout)
         report = inspect(connection)
         models = choose_models(report['models'], args.models)
-        directory = tempfile.mkdtemp(prefix='modelmate-verify-')
-        try:
-            result = verify(connection, models, Path(directory))
-        finally:
-            try:
-                connection.interrupt()
-            except (ProbeError, OSError):
-                print('Interruption unconfirmed; scratch directory retained: ' + directory, file=sys.stderr)
-                # Do not mask the original failure or delete a possibly active workspace.
-                result = None
-            else:
-                shutil.rmtree(directory)
-        if result is None:
-            raise ProbeError('Turn outcome unknown; check Codex before retrying.')
+        result = run_in_scratch(connection, models)
         print(json.dumps(result, indent=2))
         return 0
     except KeyboardInterrupt:

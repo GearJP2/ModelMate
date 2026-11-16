@@ -66,6 +66,32 @@ for line in sys.stdin:
                 finally:
                     c.close()
 
+class StreamRegressions(unittest.TestCase):
+    def test_fragmented_messages_followed_by_eof_are_drained(self):
+        import time
+        code = '''import os,sys,time
+sys.stdin.readline()
+os.write(1,b'{"method":"notice","params":{}}\\n{"id":')
+time.sleep(.01)
+os.write(1,b'1,"result":{"ok":true}}\\n')
+'''
+        c = Connection([sys.executable, '-u', '-c', code], 2)
+        try:
+            self.assertEqual(c.request('account/read'), {'ok': True})
+            with self.assertRaises(ProbeError):
+                c.receive(time.monotonic() + 1)
+        finally:
+            c.close()
 
-if __name__ == '__main__':
+    def test_unexpected_response_id_is_rejected(self):
+        code = 'import sys;sys.stdin.readline();print(\'{"id":999,"result":{}}\',flush=True)'
+        c = Connection([sys.executable, '-u', '-c', code], 2)
+        try:
+            with self.assertRaisesRegex(ProbeError, 'response ID'):
+                c.request('account/read')
+        finally:
+            c.close()
+
+
+if __name__ == "__main__":
     unittest.main()

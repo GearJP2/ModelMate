@@ -9,7 +9,7 @@ from doctor import ProbeError
 from verify import VerificationConnection, choose_models, ensure_quota, verify
 
 
-GOOD_QUOTA = {'ordinaryUsageAllowed': True, 'rateLimits': {'primary': {'usedPercent': 30}}}
+GOOD_QUOTA = {'ordinaryUsageAllowed': True, 'accountId': 'synthetic-account', 'rateLimits': {'primary': {'usedPercent': 30}}}
 
 
 class VerificationTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class VerificationTests(unittest.TestCase):
     def test_approval_is_declined_never_accepted(self):
         c = self.connection()
         c.handle_event({'id': 99, 'method': 'item/fileChange/requestApproval',
-                        'params': {'threadId': 'thread', 'turnId': 'turn'}})
+                        'params': {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item'}})
         self.assertEqual(c.send.call_args.args[0], {'id': 99, 'result': {'decision': 'decline'}})
         self.assertEqual(c.denials, [('file', 'turn')])
         for message in [{'id': 100, 'method': 'unknown'},
@@ -103,10 +103,6 @@ class VerificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ProbeError, 'FAILED'):
                 verify(c, [('one', 'low'), ('two', 'low')], Path(tmp))
 
-
-if __name__ == '__main__':
-    unittest.main()
-
 class HarnessRegressions(unittest.TestCase):
     def test_empty_or_malformed_windows_fail_closed(self):
         for windows in [{}, {'primary': []}, {'primary': {'usedPercent': True}},
@@ -126,3 +122,136 @@ class HarnessRegressions(unittest.TestCase):
             c.send.assert_not_called()
         finally:
             c.close()
+
+class LifecycleRegressions(unittest.TestCase):
+    connection = VerificationTests.connection
+
+    def test_failed_start_without_id_cannot_be_retried_or_cleaned(self):
+        c = self.connection()
+        c.request = Mock(side_effect=[GOOD_QUOTA, ProbeError('timed out')])
+        with self.assertRaises(ProbeError):
+            c.run_turn('prompt', 'one', 'low')
+        self.assertTrue(c.start_pending)
+        with self.assertRaisesRegex(ProbeError, 'unknown'):
+            c.interrupt()
+        with self.assertRaisesRegex(ProbeError, 'unknown'):
+            c.run_turn('again', 'one', 'low')
+        self.assertEqual(c.request.call_count, 2)
+
+    def test_interrupt_ack_alone_does_not_confirm_stop(self):
+        c = self.connection()
+        c.turn_id = 'turn'
+        c.request = Mock(return_value={})
+        c.receive = Mock(side_effect=ProbeError('timed out'))
+        with self.assertRaises(ProbeError):
+            c.interrupt()
+        self.assertEqual(c.turn_id, 'turn')
+
+    def test_interrupt_waits_for_matching_terminal_event(self):
+        c = self.connection()
+        c.turn_id = 'turn'
+        c.request = Mock(return_value={})
+        c.receive = Mock(side_effect=[
+            {'method': 'turn/completed', 'params': {'threadId': 'other', 'turn': {'id': 'turn', 'status': 'interrupted'}}},
+            {'method': 'turn/completed', 'params': {'threadId': 'thread', 'turn': {'id': 'turn', 'status': 'interrupted'}}},
+        ])
+        c.interrupt()
+        self.assertIsNone(c.turn_id)
+        self.assertEqual(c.receive.call_count, 2)
+
+    def test_identity_change_or_missing_identity_blocks_start(self):
+        c = self.connection()
+        c.account_id = 'original'
+        for identity in [None, 'different']:
+            quota = dict(GOOD_QUOTA, accountId=identity)
+            c.request = Mock(return_value=quota)
+            with self.assertRaisesRegex(ProbeError, 'identity|Account changed'):
+                c.run_turn('prompt', 'one', 'low')
+            c.request.assert_called_once_with('account/rateLimits/read')
+
+    def test_multiple_buckets_and_bad_credits_fail_closed(self):
+        for buckets in [
+            {'a': GOOD_QUOTA['rateLimits'], 'b': {'primary': {'usedPercent': 100}}},
+            {'a': {'primary': {'usedPercent': 1}, 'credits': []}},
+        ]:
+            with self.assertRaises(ProbeError):
+                ensure_quota({'ordinaryUsageAllowed': True, 'rateLimitsByLimitId': buckets})
+
+    def test_original_error_survives_interrupt_failure_and_scratch_is_retained(self):
+        from verify import run_in_scratch
+        import shutil
+        c = Mock()
+        c.interrupt.side_effect = ProbeError('interrupt failed')
+        with tempfile.TemporaryDirectory() as parent:
+            directory = Path(parent) / 'scratch'
+            directory.mkdir()
+            with patch('verify.tempfile.mkdtemp', return_value=str(directory)), \
+                 patch('verify.verify', side_effect=ProbeError('original error')):
+                with self.assertRaisesRegex(ProbeError, 'original error'):
+                    run_in_scratch(c, [])
+            self.assertTrue(directory.exists())
+            shutil.rmtree(directory)
+
+    def test_success_is_not_reported_if_interrupt_is_unconfirmed(self):
+        from verify import run_in_scratch
+        c = Mock()
+        c.interrupt.side_effect = ProbeError('not stopped')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('verify.tempfile.mkdtemp', return_value=directory), \
+             patch('verify.verify', return_value={'passed': True}):
+            with self.assertRaisesRegex(ProbeError, 'unknown'):
+                run_in_scratch(c, [])
+            self.assertTrue(Path(directory).exists())
+
+    def test_cleanup_error_does_not_mask_original_failure(self):
+        from verify import run_in_scratch
+        c = Mock()
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('verify.tempfile.mkdtemp', return_value=directory), \
+             patch('verify.verify', side_effect=ProbeError('original')), \
+             patch('verify.shutil.rmtree', side_effect=OSError('cleanup')):
+            with self.assertRaisesRegex(ProbeError, 'original'):
+                run_in_scratch(c, [])
+
+    def test_turn_deadline_includes_start_rpc_wait(self):
+        c = self.connection()
+        c.request = Mock(side_effect=[GOOD_QUOTA, {'turn': {'id': 'turn'}}])
+        c.receive = Mock(side_effect=ProbeError('timed out'))
+        with patch('verify.time.monotonic', return_value=100):
+            with self.assertRaises(ProbeError):
+                c.run_turn('prompt', 'one', 'low')
+        c.receive.assert_called_once_with(101)
+
+    def test_unknown_request_and_malformed_event_are_rejected(self):
+        c = self.connection()
+        for event in [
+            {'id': 1, 'method': 'unknown', 'params': {}},
+            {'method': 'turn/started', 'params': None},
+            {'method': 'turn/started', 'params': {'threadId': 'thread', 'turn': {}}},
+        ]:
+            with self.subTest(event=event), self.assertRaises(ProbeError):
+                c.handle_event(event)
+        c.send.assert_not_called()
+
+    def test_started_event_allows_interrupt_after_missing_rpc_response(self):
+        c = self.connection()
+        def request(method, params=None):
+            if method == 'account/rateLimits/read':
+                return GOOD_QUOTA
+            if method == 'turn/start':
+                c.handle_event({'method': 'turn/started', 'params': {
+                    'threadId': 'thread', 'turn': {'id': 'turn'}}})
+                raise ProbeError('response lost')
+            c.handle_event({'method': 'turn/completed', 'params': {
+                'threadId': 'thread', 'turn': {'id': 'turn', 'status': 'interrupted'}}})
+            return {}
+        c.request = Mock(side_effect=request)
+        with self.assertRaises(ProbeError):
+            c.run_turn('prompt', 'one', 'low')
+        c.interrupt()
+        self.assertIsNone(c.turn_id)
+        self.assertFalse(c.start_pending)
+
+
+if __name__ == "__main__":
+    unittest.main()

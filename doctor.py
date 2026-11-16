@@ -27,9 +27,11 @@ class Connection:
         self.selector.register(self.process.stderr, selectors.EVENT_READ, 'stderr')
         self.buffer = b''
         self.request_id = 0
+        self.stdout_closed = False
 
     def close(self):
-        self.process.terminate()
+        if self.process.poll() is None:
+            self.process.terminate()
         try:
             self.process.wait(timeout=3)
         except subprocess.TimeoutExpired:
@@ -57,12 +59,14 @@ class Connection:
                 if not isinstance(response, dict):
                     raise ProbeError('Codex returned an invalid protocol message.')
                 return response
+            if self.stdout_closed:
+                raise ProbeError('Codex exited; check local filesystem permissions and login.')
             for key, _ in self.selector.select(max(0, deadline - time.monotonic())):
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
                     self.selector.unregister(key.fileobj)
                     if key.data == 'stdout':
-                        raise ProbeError('Codex exited; check local filesystem permissions and login.')
+                        self.stdout_closed = True
                 elif key.data == 'stdout':
                     self.buffer += chunk
                     if len(self.buffer) > 4 * 1024 * 1024:

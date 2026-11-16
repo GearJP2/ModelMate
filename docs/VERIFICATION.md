@@ -1,31 +1,39 @@
 # Verification evidence
 
-## P00 — IN_PROGRESS
+## P00 — MOCK_VERIFIED
 
-Offline checks:
+Offline checks (2026-11-17):
 
-- `python3 -m unittest discover -s tests -q`: 15 tests passed.
+- `python3 -m unittest discover -s tests -q`: 28 tests passed.
 - `python3 -m py_compile doctor.py verify.py`: passed.
 - `git diff --check`: passed.
 
-Changes verified with regression tests:
+Regression coverage:
 
-- Missing, malformed, exhausted or boolean quota windows cannot authorize a turn.
-- Approval requests from a stale turn, without a turn ID, or with malformed params
-  are not answered.
-- Existing protocol, pagination, recall and denial tests remain passing.
+- Fragmented JSONL notifications/results followed by EOF are consumed before
+  reporting the closed stream. Unexpected response IDs are rejected.
+- Missing, malformed, exhausted, boolean and multiple quota windows fail closed.
+- Account identity must be supplied by each quota read and remain stable between
+  turns. The backend's ordinaryUsageAllowed remains the authority for included
+  usage; this is not independent credential or user-identity validation.
+- Unknown/malformed approval requests and stale thread/turn requests are not
+  answered. Diagnostic methods remain restricted to read-only RPCs.
+- Turn deadline includes time waiting for turn/start; it is not renewed per event.
+- Events arriving before the start RPC response are retained.
+- Missing start response without a turn ID leaves outcome unknown, blocks retry,
+  and retains the scratch directory. If turn/started supplies an ID, interruption
+  can target that turn despite the lost response.
+- Interrupt acknowledgement alone is insufficient: a matching terminal event is
+  required before clearing active state and deleting scratch data.
+- Interruption/cleanup errors preserve the original failure. Unconfirmed stop
+  cannot produce a successful report.
+- Recall success reports requested models separately from unknown reported models;
+  actual model dispatch is not claimed as verified.
 
-Additional corrections awaiting broader lifecycle regression coverage:
-
-- Turn deadline begins before turn/start RPC rather than after its response.
-- Scratch directory is retained if interruption cannot be confirmed; interruption
-  failure does not replace the original verification exception.
-- Report distinguishes requested models from unknown reported models and does not
-  claim actual model switching merely because context recall succeeded.
-
-Remaining P00 work: EOF/data interleaving, partial startup with unknown turn ID,
-account identity across quota reads, malformed payload coverage and interruption
-confirmation/cleanup failure tests. Do not advance P00 to DONE yet.
+The test output includes intentional cleanup/interruption warnings from injected
+failures. They are expected assertions, not live Codex failures.
 
 Live inference: NOT RUN. G1–G4 remain unverified. No account identifiers or raw
-account reports are recorded here.
+account reports are recorded here. P00 still needs the designated lifecycle review
+before being treated as release-ready. Next eligible offline task: P02. P01 needs
+normal-terminal live evidence; no sandbox bypass has been added.

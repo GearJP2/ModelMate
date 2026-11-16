@@ -106,3 +106,9 @@ python3 verify.py --run-live --models gpt-6.1-sol gpt-6-astra
 แยกบัญชีหรือเครื่องโดยสมบูรณ์ ข้อมูลทดสอบมีเพียงข้อความสังเคราะห์
 
 สถานะปัจจุบัน: unit tests ของชุดตรวจผ่าน แต่ **ยังไม่ผ่านการตรวจสดกับบัญชีจริง**
+
+ผลตรวจ `verify.py` แยก requested model ออกจาก reported model ที่ยังไม่ทราบ
+การจำรหัสสำเร็จจึงไม่ใช่หลักฐานว่า backend dispatch ไปโมเดลที่ร้องขอจริง
+ชุดตรวจต้องได้ account identity ที่คงเดิมจาก quota reads ก่อนเริ่มแต่ละ turn
+และต้องรอ event จบงานหลัง interrupt ก่อนลบ scratch directory
+หากไม่ทราบ turn ID หรือยืนยันการหยุดไม่ได้ จะเก็บ scratch ไว้และไม่ retry งานเอง
