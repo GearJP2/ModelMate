@@ -465,3 +465,100 @@ def prepare_classification(connection, prompt, selection, role_policy=None, *, t
             'instructions': CLASSIFIER_INSTRUCTIONS,
             'input': json.dumps({'task': prompt, 'role_efforts': options}, ensure_ascii=False),
             'execution': 'blocked_until_no_tools_boundary_verified'}
+
+
+class ModelApprovals:
+    """Task-local model decisions. Only the controller may call answer/manual_select."""
+
+    def __init__(self, catalog, role_policy=None):
+        import uuid
+        self.task_id = uuid.uuid4().hex
+        self.baseline = select_role(catalog, 'standard', role_policy)
+        self._grants = set()
+        self._declined = set()
+        self._pending = None
+        self._plan_digest = None
+
+    def _invalidate(self):
+        self._grants.clear()
+        self._declined.clear()
+        self._pending = None
+        self._plan_digest = None
+
+    def decision(self, raw, catalog, role_policy=None, *, step_id, step_index=0,
+                 mode='ask_to_escalate'):
+        import hashlib
+        import uuid
+        if (mode not in ('auto', 'ask_to_escalate', 'approve_plan')
+                or not isinstance(step_id, str) or not step_id.strip()
+                or type(step_index) is not int or step_index < 0):
+            self._invalidate()
+            return {'state': 'pause', 'reason': 'invalid_mode_or_step'}
+        route = routing_decision(raw, catalog, role_policy)
+        if route['state'] != 'ready_for_approval':
+            self._invalidate()
+            return route
+        if step_index >= len(route['selections']):
+            self._invalidate()
+            return {'state': 'pause', 'reason': 'invalid_step'}
+        try:
+            select_model(catalog, self.baseline['model'], self.baseline['effort'])
+        except ProbeError:
+            self._invalidate()
+            return {'state': 'pause', 'reason': 'baseline_unavailable'}
+        plan = route['plan']
+        selection = route['selections'][step_index]
+        # Bind approval to task, complete plan, resolved models and trusted policy.
+        payload = {'task_id': self.task_id, 'plan': plan, 'selections': route['selections'],
+                   'policy': MODEL_ROLE_POLICY if role_policy is None else role_policy}
+        plan_digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=True,
+                                               separators=(',', ':')).encode()).hexdigest()
+        if self._plan_digest != plan_digest:
+            self._invalidate()
+            self._plan_digest = plan_digest
+        step_digest = hashlib.sha256(json.dumps([plan_digest, step_id, step_index],
+                                               separators=(',', ':')).encode()).hexdigest()
+        scope, digest = ('plan', plan_digest) if mode == 'approve_plan' else ('model', step_digest)
+        key = (scope, digest)
+        if self._pending is not None and self._pending['key'] != key:
+            self._pending = None
+        display = {'selection': dict(selection), 'reason': plan['steps'][step_index]['reason'],
+                   'step_id': step_id, 'task_id': self.task_id, 'mode': mode}
+        if key in self._declined or ('model', step_digest) in self._declined:
+            self._pending = None
+            return dict(display, state='pause', reason='model_selection_declined',
+                        choices=['revise_scope_or_model', 'pause'])
+        needs_approval = (mode == 'approve_plan' or
+                          (mode == 'ask_to_escalate' and
+                           (plan['steps'][step_index]['role'] == 'strong'
+                            or model_change_requires_approval(self.baseline, selection, role_policy))))
+        if not needs_approval or key in self._grants:
+            self._pending = None
+            return dict(display, state='allow_model')
+        if self._pending is None:
+            self._pending = {'token': uuid.uuid4().hex, 'key': key}
+        return dict(display, state='ask', scope=scope, token=self._pending['token'],
+                    plan=plan if scope == 'plan' else None)
+
+    def answer(self, token, choice):
+        """Record an explicit UI choice; never accept model output as a choice."""
+        if (self._pending is None or not isinstance(token, str)
+                or token != self._pending['token'] or choice not in ('approve', 'decline', 'pause')):
+            raise ProbeError('Invalid or stale model approval response.')
+        key = self._pending['key']
+        self._pending = None
+        if choice == 'approve':
+            self._grants.add(key)
+        else:
+            self._declined.add(key)
+        return {'state': 'recorded' if choice == 'approve' else 'pause', 'scope': key[0]}
+
+    def manual_select(self, raw, catalog, role_policy=None, *, step_id, step_index=0):
+        """An explicit human selection approves only this step's resolved model."""
+        result = self.decision(raw, catalog, role_policy, step_id=step_id,
+                               step_index=step_index, mode='ask_to_escalate')
+        if result['state'] == 'ask':
+            self.answer(result['token'], 'approve')
+            return self.decision(raw, catalog, role_policy, step_id=step_id,
+                                 step_index=step_index, mode='ask_to_escalate')
+        return result

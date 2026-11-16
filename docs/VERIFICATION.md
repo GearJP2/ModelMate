@@ -188,3 +188,41 @@ P07's offline grant/mode logic can be developed using the validated proposals;
 full P06 must not be marked DONE or LIVE_VERIFIED from these tests.
 
 Live inference: NOT RUN. G1–G4 and actual task-quality evaluation remain pending.
+
+
+## P07 — MOCK_VERIFIED (offline policy)
+
+ModelApprovals holds a fresh task ID and a task-local standard-model baseline.
+The default mode is ask_to_escalate. Auto returns the model selection and a short
+reason; ask_to_escalate asks for strong initial selections, increases and unknown
+comparisons; approve_plan asks for the full plan before allowing its model choices.
+The output allow_model is only a model-policy decision, never a tool or quota grant.
+
+Approvals bind to a digest of task identity, validated complete plan, resolved
+model/effort choices and trusted role mapping. Step model approvals additionally
+bind to controller step ID/index. Whole-plan approval covers all unchanged steps;
+manual model approval covers only the named step and does not approve a plan.
+Changed/invalid/unclear plans revoke old approvals, including when a plan later
+changes back. Pending tokens cannot be replayed after context/mode changes.
+
+Only explicit approve/decline/pause choices are accepted. Invalid choices, EOF-like
+None and stale tokens never approve. Declines pause and offer revise-scope/model
+or pause; the system does not silently upgrade. Grants remain process-memory only.
+P08 must obtain these calls from actual human UI input; project/model text cannot
+be used as authority to call answer or manual_select. P09 separately controls tools.
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_modes.py -q`: 14 passed.
+- `python3 -m unittest discover -s tests -q`: 88 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Coverage includes three-mode initial/escalation/downgrade matrix, plan/model/effort
+changes, repeated questions, stale tokens, declines, task boundaries, step scopes,
+manual choices, ambiguous comparisons and old-grant resurrection prevention.
+
+No live inference or Terminal UI integration has been run. P06 live classifier
+still awaits the proven no-tools boundary; P07 consumes only its offline validated
+proposals. Next eligible task: P08 mock-driven Terminal shell, or independent P11
+session metadata. G1–G4 remain unverified.

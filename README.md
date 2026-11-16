@@ -138,3 +138,9 @@ Model selection policy ตรวจชื่อโมเดลและ effort �
 เกณฑ์สำเร็จ ขั้นงาน และ checks; คำถามเพิ่มเติมจะหยุดการเลือกขั้นลงมือไว้ก่อน
 ผล `ready_for_approval` ยังไม่อนุมัติให้ใช้เครื่องมือ ส่วน classifier preparation
 ยังไม่เริ่ม inference จนกว่าจะพิสูจน์ no-tools boundary ตาม P03
+
+
+เพิ่ม policy สามโหมด Auto / Ask to escalate / Approve plan แล้วใน runtime
+ค่าเริ่มต้นถามก่อนยกระดับ สิทธิ์อนุมัติผูกกับ task/แผน/ขั้นงานและเพิกถอนเมื่อแผนเปลี่ยน
+การอนุมัติโมเดลไม่ใช่การอนุมัติเครื่องมือ ส่วนนี้ผ่าน offline tests
+แต่ยังไม่มี Terminal UI ที่เชื่อมกับนโยบายดังกล่าว

@@ -206,7 +206,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P04 | Quota policy และ pause | P02 | MOCK_VERIFIED | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
 | P06 | Plan schema / classifier / routing | P04, P05 | IN_PROGRESS: validator/preparation MOCK_VERIFIED; live classifier รอ P03 | จำเป็น |
-| P07 | สามโหมดและ grants | P06 | TODO | จำเป็น |
+| P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | TODO | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | TODO | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | TODO | จำเป็น |
