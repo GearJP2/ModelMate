@@ -213,7 +213,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell MOCK_VERIFIED; integration รอ P09/P11/P12 | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | TODO | จำเป็น |
-| P11 | Local session persistence | P02 | TODO | ตรวจ data loss/privacy |
+| P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API; chat integration รอ P12 | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | TODO | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | TODO | ไม่จำเป็นถ้าไม่แตะ policy |

@@ -7,6 +7,7 @@ import selectors
 import subprocess
 import time
 from datetime import datetime, timezone
+from contextlib import contextmanager
 
 
 class ProbeError(Exception):
@@ -1132,6 +1133,220 @@ class LiveChatConnection(Connection):
     def tick(self):
         if any(time.monotonic() >= deadline for _, deadline in self._rpcs.values()):
             raise ProbeError('Live RPC timed out; outcome unknown; do not replay automatically.')
+
+
+
+
+SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'criteria',
+                  'step_id', 'correction_count', 'mode', 'permission_profile', 'state',
+                  'pause_reason', 'summary', 'updated_at'}
+SESSION_STATES = {'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'AWAITING_TOOL_APPROVAL',
+                  'RUNNING', 'CHECKING', 'DONE', 'UNVERIFIED', 'PAUSED', 'FAILED'}
+
+
+class SessionStore:
+    """Local metadata only. Locks are held for the full edit context, not per write."""
+
+    def __init__(self, project, state_home=None):
+        import hashlib
+        import stat
+        from pathlib import Path
+        self._fd = None
+        self._locked_ids = set()
+        self.project = str(Path(project).resolve(strict=True))
+        if not Path(self.project).is_dir():
+            raise ProbeError('Session project must be a directory.')
+        home = Path(state_home if state_home is not None else
+                    os.environ.get('XDG_STATE_HOME') or Path.home() / '.local' / 'state')
+        if not home.is_absolute():
+            raise ProbeError('State home must be an absolute path.')
+        root = home / 'modelmate'
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            if stat.S_IMODE(os.fstat(root_fd).st_mode) & 0o077:
+                raise ProbeError('ModelMate state directory must be private (0700).')
+            key = hashlib.sha256(os.fsencode(self.project)).hexdigest()
+            try:
+                os.mkdir(key, mode=0o700, dir_fd=root_fd)
+            except FileExistsError:
+                pass
+            project_fd = os.open(key, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                 dir_fd=root_fd)
+            if stat.S_IMODE(os.fstat(project_fd).st_mode) & 0o077:
+                os.close(project_fd)
+                raise ProbeError('Project state directory must be private (0700).')
+            self._fd = project_fd
+            self.directory = root / key
+        finally:
+            os.close(root_fd)
+
+    def close(self):
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def _name(self, session_id):
+        import uuid
+        if self._fd is None:
+            raise ProbeError('Session store is closed.')
+        try:
+            valid = isinstance(session_id, str) and uuid.UUID(session_id).hex == session_id
+        except (ValueError, AttributeError):
+            valid = False
+        if not valid:
+            raise ProbeError('Invalid controller-generated session ID.')
+        return session_id + '.json'
+
+    def _validate(self, record, session_id):
+        if not isinstance(record, dict) or set(record) != SESSION_FIELDS:
+            raise ProbeError('Invalid session metadata fields; file not modified.')
+        if type(record['version']) is not int or record['version'] != 1:
+            raise ProbeError('Unsupported session version; file not modified.')
+        if record['id'] != session_id or record['project'] != self.project:
+            raise ProbeError('Session identity or project mismatch; file not modified.')
+        for field in ('title', 'goal', 'summary'):
+            if not isinstance(record[field], str) or len(record[field]) > 4096:
+                raise ProbeError('Invalid session text.')
+        if not record['title'].strip() or not record['goal'].strip():
+            raise ProbeError('Session title and goal are required.')
+        for field in ('thread_id', 'step_id', 'pause_reason'):
+            if record[field] is not None and (not isinstance(record[field], str)
+                                             or not record[field].strip() or len(record[field]) > 256):
+                raise ProbeError('Invalid session identifier or pause reason.')
+        if (not isinstance(record['criteria'], list) or len(record['criteria']) > 32
+                or any(not isinstance(v, str) or not v.strip() or len(v) > 4096 for v in record['criteria'])):
+            raise ProbeError('Invalid session criteria.')
+        if type(record['correction_count']) is not int or not 0 <= record['correction_count'] <= 2:
+            raise ProbeError('Invalid session correction count.')
+        if record['mode'] not in ('manual', 'auto', 'ask_to_escalate', 'approve_plan'):
+            raise ProbeError('Invalid saved mode.')
+        if record['permission_profile'] not in ('read_only', 'workspace'):
+            raise ProbeError('Invalid saved permission profile.')
+        if not isinstance(record['state'], str) or record['state'] not in SESSION_STATES:
+            raise ProbeError('Invalid saved task state.')
+        if record['state'] == 'PAUSED' and record['pause_reason'] is None:
+            raise ProbeError('Paused session requires a reason.')
+        if record['correction_count'] and record['step_id'] is None:
+            raise ProbeError('Correction count requires a step ID.')
+        try:
+            stamp = datetime.fromisoformat(record['updated_at'])
+            if stamp.tzinfo is None or stamp.utcoffset() is None:
+                raise ValueError('timezone required')
+        except (ValueError, TypeError, AttributeError):
+            raise ProbeError('Invalid session timestamp.') from None
+        return record
+
+    def _open_file(self, name, flags):
+        import stat
+        fd = os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                     mode=0o600, dir_fd=self._fd)
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077
+                or info.st_nlink != 1):
+            os.close(fd)
+            raise ProbeError('Session files must be private regular files without extra links.')
+        return fd
+
+    @contextmanager
+    def _lock(self, session_id):
+        import fcntl
+        name = self._name(session_id)
+        fd = self._open_file(name + '.lock', os.O_RDWR | os.O_CREAT)
+        acquired = False
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ProbeError('Session is in use by another writer.') from exc
+            acquired = True
+            self._locked_ids.add(session_id)
+            yield
+        finally:
+            if acquired:
+                self._locked_ids.discard(session_id)
+            os.close(fd)
+        # Keep the lock file: unlinking would allow a second lock inode during a race.
+
+    def read(self, session_id):
+        name = self._name(session_id)
+        fd = self._open_file(name, os.O_RDONLY)
+        with os.fdopen(fd, 'rb') as source:
+            payload = source.read(1024 * 1024 + 1)
+        if len(payload) > 1024 * 1024:
+            raise ProbeError('Session metadata is too large; file not modified.')
+        try:
+            record = json.loads(payload, object_pairs_hook=_unique_json_object,
+                                parse_constant=_invalid_plan_constant)
+        except (ProbeError, ValueError, UnicodeError, RecursionError) as exc:
+            raise ProbeError('Corrupt session metadata; file not modified.') from exc
+        return self._validate(record, session_id)
+
+    def save(self, record):
+        import uuid
+        if not isinstance(record, dict):
+            raise ProbeError('Invalid session metadata.')
+        session_id = record.get('id')
+        self._name(session_id)
+        if session_id not in self._locked_ids:
+            raise ProbeError('Saving requires the session edit lock.')
+        self._validate(record, session_id)
+        record = dict(record, updated_at=datetime.now(timezone.utc).isoformat())
+        payload = json.dumps(record, ensure_ascii=True, allow_nan=False, indent=2).encode() + b'\n'
+        if len(payload) > 1024 * 1024:
+            raise ProbeError('Session metadata is too large.')
+        name = self._name(session_id)
+        temporary = '.' + session_id + '.' + uuid.uuid4().hex + '.tmp'
+        fd = self._open_file(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        try:
+            with os.fdopen(fd, 'wb') as output:
+                output.write(payload)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, name, src_dir_fd=self._fd, dst_dir_fd=self._fd)
+            os.fsync(self._fd)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=self._fd)
+            except FileNotFoundError:
+                pass
+
+    def create(self, goal, title=None, thread_id=None):
+        import uuid
+        session_id = uuid.uuid4().hex
+        record = {'version': 1, 'id': session_id, 'project': self.project, 'thread_id': thread_id,
+                  'title': goal if title is None else title, 'goal': goal, 'criteria': [],
+                  'step_id': None, 'correction_count': 0, 'mode': 'ask_to_escalate',
+                  'permission_profile': 'read_only', 'state': 'READY', 'pause_reason': None,
+                  'summary': '', 'updated_at': datetime.now(timezone.utc).isoformat()}
+        with self._lock(session_id):
+            try:
+                os.stat(self._name(session_id), dir_fd=self._fd, follow_symlinks=False)
+            except FileNotFoundError:
+                self.save(record)
+            else:
+                raise ProbeError('Session ID collision; existing file not modified.')
+        return self.read(session_id)
+
+    @contextmanager
+    def edit(self, session_id):
+        with self._lock(session_id):
+            record = self.read(session_id)
+            yield record
+            self.save(record)
+
+    def list_sessions(self):
+        if self._fd is None:
+            raise ProbeError('Session store is closed.')
+        records = [self.read(name[:-5]) for name in os.listdir(self._fd)
+                   if name.endswith('.json') and not name.startswith('.')]
+        return sorted(records, key=lambda record: record['updated_at'], reverse=True)
 
 
 
