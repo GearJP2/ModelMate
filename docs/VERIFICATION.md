@@ -352,3 +352,39 @@ A pass proves only the tested scenarios, not all tool paths or actual model disp
 if the backend does not report it. An INCONCLUSIVE result is not a pass.
 
 Documentation-only update: checked `git diff --check`; no inference or tests rerun.
+
+
+## P01/P03 — user-supplied live harness evidence received 2026-11-17
+
+Command reported by the user:
+
+```bash
+python3 verify.py --run-live --models gpt-6.1-sol gpt-6-astra
+```
+
+User-supplied result: contextRecall passed, commandDenial passed, patchDenial
+passed. Requested models were gpt-6.1-sol and gpt-6-astra. reportedModels was null
+and modelSwitch was explicitly unverified. No independent rerun was performed
+inside the restricted development sandbox, and no thread/account IDs are stored.
+The harness chooses low effort where catalog supports it, but this report does
+not independently establish backend model or effort dispatch.
+
+This advances the preceding pending evidence: a real turn sequence produced a
+correct synthetic recall answer, and the harness observed matching denial events
+with neither scratch marker present. P01 remains IN_PROGRESS because actual
+model/effort dispatch is not reported. G1 has partial live evidence; it is not
+fully verified. P03 now has two live denial scenarios; G2/G3 remain unproven.
+
+These checks do not prove default ask-before-every-command behavior. The harness
+explicitly requests approval for scratch writes inside a read-only sandbox.
+Unapproved read commands, stdin continuation, MCP/plugins, hooks, subagents,
+symlink/outside-project access and hosted tools still need boundary evidence.
+Do not enable the live no-tools classifier or all-tool execution on this basis.
+
+Next investigation: obtain trustworthy model/effort metadata if supported and
+complete the tool-path enforcement matrix. No need to rerun this same pair solely
+to reproduce an already supplied recall result. Luna/Terra availability from the
+catalog is not a role-quality benchmark; they remain eligible for explicit
+selection/testing without a claimed production role mapping.
+
+Documentation-only checks: `git diff --check` passed. No new inference was run.
