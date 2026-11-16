@@ -19,6 +19,8 @@ class Connection:
     def __init__(self, command, timeout):
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.set_blocking(self.process.stdout.fileno(), False)
+        os.set_blocking(self.process.stderr.fileno(), False)
         self.timeout = timeout
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ, 'stdout')
@@ -66,7 +68,11 @@ class Connection:
         return response
 
     def read_ready(self, stream):
-        chunk = os.read(stream.fileno(), 65536)
+        try:
+            chunk = os.read(stream.fileno(), 65536)
+        except BlockingIOError:
+            # A synchronous RPC may already have consumed a selector's ready bytes.
+            return True
         if not chunk:
             try:
                 self.selector.unregister(stream)
@@ -578,6 +584,14 @@ class ModelApprovals:
         return result
 
 
+def diagnostic_code(error):
+    """Useful error identity without paths, prompts, account data or raw payloads."""
+    name = type(error).__name__
+    if isinstance(error, OSError) and isinstance(error.errno, int):
+        return name + ':errno=' + str(error.errno)
+    return name
+
+
 def terminal_text(value):
     """Render untrusted text without terminal control or Unicode direction controls."""
     import unicodedata
@@ -855,8 +869,9 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
             except KeyboardInterrupt:
                 shell.cancel()
     except (ProbeError, OSError, ValueError, UnicodeError) as exc:
-        reason = str(exc) if isinstance(exc, ProbeError) else 'ข้อมูลหรือการเชื่อมต่อไม่ถูกต้อง'
-        shell.write('Terminal หยุด: ' + reason + '; ผลงานที่กำลังทำยังไม่ทราบ')
+        reason = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+        phase = getattr(backend, 'phase', 'terminal')
+        shell.write('Terminal หยุด [' + phase + ']: ' + reason + '; ผลงานที่กำลังทำยังไม่ทราบ')
         if shell.active and send is not None:
             try:
                 send({'action': 'cancel'})
@@ -881,6 +896,7 @@ class LiveChatConnection(Connection):
         self.thread_id = None
         self.turn_id = None
         self.start_pending = False
+        self.phase = 'idle'
         self.cancel_after_start = False
         self.account_id = None
         self.quota_status = None
@@ -924,14 +940,22 @@ class LiveChatConnection(Connection):
                 self.shell.active = False
                 self.shell.write('ยังรอ RPC เดิม กรุณาส่งงานใหม่อีกครั้งเมื่อคำขอเดิมจบ')
                 return
-            self.catalog = read_models(self)
-            self.shell.catalog = self.catalog
-            selection = action.get('selection') or self.selection
-            selected = select_model(self.catalog, selection['model'], selection['effort'])
+            self.phase = 'catalog_preflight'
+            try:
+                self.catalog = read_models(self)
+                self.shell.catalog = self.catalog
+                selection = action.get('selection') or self.selection
+                selected = select_model(self.catalog, selection['model'], selection['effort'])
+            except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                self.shell.active = False
+                self.shell.write('พักก่อนส่ง prompt [catalog_preflight]: ' + diagnostic_code(exc)
+                                 + '; ยังไม่เริ่ม turn ใหม่ ใช้ /model หรือส่งข้อความอีกครั้งเมื่อพร้อม')
+                return
             if selected['effort'] == 'ultra':
                 self.shell.active = False
                 self.shell.write('ยังไม่เปิด automatic delegation; เลือก effort อื่น')
                 return
+            self.phase = 'quota_preflight'
             self.quota_status = refresh_quota(self, self.account_id)
             self.shell.quota_status = {k: self.quota_status[k] for k in ('state', 'reason', 'checked_at')}
             if self.quota_status['state'] != 'allow':
@@ -943,6 +967,7 @@ class LiveChatConnection(Connection):
             self._streamed.clear()
             self._previews.clear()
             self._finished.clear()
+            self.phase = 'starting_turn'
             self.start_pending = True
             self._async('turn/start', {'threadId': self.thread_id, 'model': selected['model'],
                                       'effort': selected['effort'],
@@ -1023,6 +1048,7 @@ class LiveChatConnection(Connection):
             if not isinstance(tid, str) or not tid or (self.turn_id and self.turn_id != tid):
                 raise ProbeError('Invalid active turn metadata.')
             self.turn_id = tid
+            self.phase = 'running_turn'
             if self.cancel_after_start:
                 self.cancel_after_start = False
                 self._async('turn/interrupt', {'threadId': self.thread_id, 'turnId': tid})
@@ -1070,6 +1096,7 @@ class LiveChatConnection(Connection):
             self.shell.write('')
             if status == 'failed':
                 self.shell.write('Turn ล้มเหลว; ไม่ retry อัตโนมัติ')
+            self.phase = 'idle'
             self.shell.event({'type': 'stopped' if status == 'interrupted' else 'completed'})
 
     def drain(self):

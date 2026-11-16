@@ -497,3 +497,40 @@ P03/P08/P09 remain partial. No autosave/resume, automatic workflow or universal
 support for permission/tool-input request types is claimed. Unsupported server
 requests stop without granting rights. Next validation: a normal-terminal --live
 chat with an explicitly selected available model and a harmless text prompt.
+
+
+## Live second-turn failure — recovery and diagnostic changes
+
+User reports that the first live text turn completed, then the second prompt
+terminated with the generic transport/data error. The original output contains
+no exception class/errno/stage, so the exact real-account root cause is unconfirmed.
+No raw user conversation or account logs are stored.
+
+Confirmed failure paths corrected:
+
+- Catalog refresh/selection failure before inference used to terminate chat.
+  It now pauses without sending that prompt, leaves the session open, and requires
+  explicit user resubmission. It does not retry inference or weaken quota checks.
+- Protocol stdout/stderr reads are nonblocking. A ready descriptor whose bytes
+  were consumed by a synchronous preflight RPC can return EAGAIN without being
+  treated as disconnect/fatal error or blocking the UI on stale readiness.
+- Fatal errors report a local phase and safe exception class/errno, not raw paths,
+  request payloads, credentials or exception messages from external libraries.
+
+Offline validation:
+
+- `python3 -m unittest discover -s tests -p test_live_recovery.py -v`: 3 passed.
+- `python3 -m unittest discover -s tests -q`: 128 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+The regression uses a pseudo-terminal for Thai stdin and a JSONL fake Codex server,
+with late usage notifications after completion and a deliberate second-prompt
+catalog error. Three successful turns stay on one thread; the failed prompt never
+appears in turn/start. Separate tests inject EAGAIN and verify diagnostics redact
+exception payloads. These tests establish the corrected scenarios, not an exact
+reproduction of the user's unknown underlying exception.
+
+Actual-account retest: pending. If it still stops, use the new phase/class/errno
+line to locate the failing operation; do not request raw secrets or full logs.
+Git workflow now requires branch → detailed PR → checks/review → PR merge.

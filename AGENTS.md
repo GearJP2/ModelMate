@@ -52,3 +52,12 @@ require rerunning inference or the entire test suite.
 Update the task status with evidence. End the handoff with: changed files, checks
 run/results, limitations, and the next eligible task. If blocked, give the precise
 missing capability or evidence; do not invent a workaround that relaxes policy.
+
+
+## Git workflow (user requested)
+
+Use a feature/fix branch for new changes. Open a PR describing the concrete problem,
+resulting behavior, checks and limitations. Merge through the PR after checks and
+review, with a descriptive merge/squash message. Do not push changes directly to
+main. If GitHub PR access is unavailable, push the branch and prepare the exact PR
+text; report the missing access instead of merging locally or claiming a PR exists.
