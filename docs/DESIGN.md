@@ -1,4 +1,4 @@
-# แบบระบบ Smart LLM Router
+# แบบระบบ ModelMate
 
 สถานะ: ร่างออกแบบจากข้อกำหนดที่ผู้ใช้ยืนยัน
 
@@ -234,3 +234,11 @@ Ctrl+C ระหว่างทำงานขอหยุด และแสด
 - [Usage และ pricing](https://learn.chatgpt.com/docs/pricing)
 - [App Server tests v0.169.0](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server/tests/suite/v2/turn_start.rs)
 - [Model switching tests v0.169.0](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/core/tests/suite/model_switching.rs)
+
+
+## ความคืบหน้าการพัฒนา
+
+เพิ่ม `doctor.py` สำหรับขั้นที่ 1 พร้อม unit tests แล้ว
+ตรวจ protocol, pagination, ข้อมูลที่ไม่ควรแสดง, การปฏิเสธ API-key auth,
+การหมดเวลาและการปิด subprocess ด้วยข้อมูลจำลอง
+ช่อง live account/quota ด้านบนยังไม่ทำเครื่องหมายผ่านจนกว่าจะตรวจบัญชีจริงสำเร็จ
