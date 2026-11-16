@@ -199,7 +199,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 
 | ID | งาน | Dependencies | สถานะเริ่มต้น | Review โดยตัวใหญ่ |
 | --- | --- | --- | --- | --- |
-| P00 | ทำ diagnostic harness ให้เชื่อถือได้ | — | TODO | ใช่: lifecycle |
+| P00 | ทำ diagnostic harness ให้เชื่อถือได้ | — | IN_PROGRESS | ใช่: lifecycle |
 | P01 | เก็บ live compatibility evidence | P00 | BLOCKED: ต้องรันนอก sandbox ปัจจุบัน | ใช่ |
 | P02 | รวม protocol เป็น runtime ไฟล์เดียว | P00 | TODO | เฉพาะ failure/lifecycle |
 | P03 | พิสูจน์ permission boundary | P01 | TODO | จำเป็น |

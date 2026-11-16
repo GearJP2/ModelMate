@@ -106,3 +106,23 @@ class VerificationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class HarnessRegressions(unittest.TestCase):
+    def test_empty_or_malformed_windows_fail_closed(self):
+        for windows in [{}, {'primary': []}, {'primary': {'usedPercent': True}},
+                        {'primary': {'usedPercent': 5}, 'secondary': []}]:
+            with self.subTest(windows=windows), self.assertRaises(ProbeError):
+                ensure_quota({'ordinaryUsageAllowed': True, 'rateLimits': windows})
+
+    def test_stale_approval_is_never_answered(self):
+        c = VerificationConnection([sys.executable, '-c', 'import time; time.sleep(30)'], 1)
+        try:
+            c.thread_id, c.turn_id = 'thread', 'current'
+            c.send = Mock()
+            for params in [None, {'threadId': 'thread'},
+                           {'threadId': 'thread', 'turnId': 'old'}]:
+                with self.assertRaises(ProbeError):
+                    c.handle_event({'id': 5, 'method': 'item/fileChange/requestApproval', 'params': params})
+            c.send.assert_not_called()
+        finally:
+            c.close()

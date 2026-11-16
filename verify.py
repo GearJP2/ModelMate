@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import secrets
+import shutil
 import sys
 import tempfile
 import time
@@ -34,7 +35,9 @@ class VerificationConnection(Connection):
             if method not in APPROVALS:
                 raise ProbeError('Unexpected permission/tool request; nothing approved.')
             params = message.get('params', {})
-            if params.get('threadId') != self.thread_id:
+            if (not isinstance(params, dict) or params.get('threadId') != self.thread_id
+                    or not isinstance(params.get('turnId'), str)
+                    or (self.turn_id is not None and params['turnId'] != self.turn_id)):
                 raise ProbeError('Approval belongs to a different thread; nothing approved.')
             self.denials.append((APPROVALS[method], params.get('turnId')))
             self.send({'id': message['id'], 'result': {'decision': 'decline'}})
@@ -49,12 +52,12 @@ class VerificationConnection(Connection):
         ensure_quota(self.request('account/rateLimits/read'))
         self.events.clear()
         self.denials.clear()
+        deadline = time.monotonic() + self.timeout
         result = self.request('turn/start', {
             'threadId': self.thread_id, 'model': model, 'effort': effort,
             'input': [{'type': 'text', 'text': prompt}],
         })
         self.turn_id = result['turn']['id']
-        deadline = time.monotonic() + self.timeout
         messages = []
         while True:
             events, self.events = self.events, []
@@ -82,21 +85,27 @@ class VerificationConnection(Connection):
 
 
 def ensure_quota(quota):
-    if quota.get('ordinaryUsageAllowed') is not True:
+    if not isinstance(quota, dict) or quota.get('ordinaryUsageAllowed') is not True:
         raise ProbeError('Included usage is unavailable or unknown; no new turn started.')
     buckets = quota.get('rateLimitsByLimitId')
     if buckets is None:
         buckets = {'default': quota.get('rateLimits')}
     if not isinstance(buckets, dict) or not buckets:
         raise ProbeError('Quota buckets unavailable; no new turn started.')
+    if not isinstance(quota, dict):
+        raise ProbeError('Invalid quota response.')
     for bucket in buckets.values():
         if not isinstance(bucket, dict):
             raise ProbeError('Invalid quota snapshot.')
         if bucket.get('spendControlReached') or bucket.get('rateLimitReachedType'):
             raise ProbeError('A quota limit is reached; no new turn started.')
+        if not any(isinstance(bucket.get(k), dict) for k in ('primary', 'secondary')):
+            raise ProbeError('Quota windows unavailable; no new turn started.')
         for name in ('primary', 'secondary'):
             window = bucket.get(name)
             if window is not None:
+                if not isinstance(window, dict):
+                    raise ProbeError('Invalid quota window.')
                 used = window.get('usedPercent')
                 if type(used) not in (int, float) or not math.isfinite(used) or not 0 <= used < 100:
                     raise ProbeError('Quota window exhausted or invalid; no new turn started.')
@@ -155,7 +164,8 @@ def verify(connection, models, directory):
             raise ProbeError('No matching approval request observed; this check is INCONCLUSIVE, not passed.')
     return {'contextRecall': 'passed', 'commandDenial': 'passed', 'patchDenial': 'passed',
             'scope': 'Only these synthetic actions; not proof that every tool path requires approval.',
-            'models': [m[0] for m in models]}
+            'requestedModels': [m[0] for m in models], 'reportedModels': None,
+            'modelSwitch': 'unverified: context recall alone does not prove actual model dispatch'}
 
 
 def main():
@@ -176,11 +186,20 @@ def main():
         connection = VerificationConnection(['codex', 'app-server', '--stdio'], args.timeout)
         report = inspect(connection)
         models = choose_models(report['models'], args.models)
-        with tempfile.TemporaryDirectory(prefix='modelmate-verify-') as directory:
+        directory = tempfile.mkdtemp(prefix='modelmate-verify-')
+        try:
+            result = verify(connection, models, Path(directory))
+        finally:
             try:
-                result = verify(connection, models, Path(directory))
-            finally:
                 connection.interrupt()
+            except (ProbeError, OSError):
+                print('Interruption unconfirmed; scratch directory retained: ' + directory, file=sys.stderr)
+                # Do not mask the original failure or delete a possibly active workspace.
+                result = None
+            else:
+                shutil.rmtree(directory)
+        if result is None:
+            raise ProbeError('Turn outcome unknown; check Codex before retrying.')
         print(json.dumps(result, indent=2))
         return 0
     except KeyboardInterrupt:
