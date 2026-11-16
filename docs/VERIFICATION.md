@@ -226,3 +226,42 @@ No live inference or Terminal UI integration has been run. P06 live classifier
 still awaits the proven no-tools boundary; P07 consumes only its offline validated
 proposals. Next eligible task: P08 mock-driven Terminal shell, or independent P11
 session metadata. G1–G4 remain unverified.
+
+
+## P08 — IN_PROGRESS (Terminal shell MOCK_VERIFIED)
+
+Added the single-file runtime entry point and a line-oriented Terminal shell.
+The shipped entry point has no live backend: prompts receive an explicit
+unavailable message, never simulated model output presented as actual inference.
+No process/network connection is opened by default or --help.
+
+One selector loop owns stdin, injected controller events, pending UI decisions
+and shutdown state. There is no input worker thread. A trusted controller callback
+is an internal test/integration seam, not an external replay or backend CLI option.
+Model policy uses P07; approvals require the exact displayed token. Text such as
+yes is not approval. Unknown slash commands are never submitted as prompts.
+The UI filters control/direction characters and does not render reasoning events.
+Unknown tool events fail closed. Ctrl+C/EOF clear pending requests and request
+cancellation, waiting for confirmation before reporting stopped. Missing stop
+confirmation expires after five seconds with outcome unknown (exit 130).
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_cli.py -v`: 13 passed.
+- `python3 -m unittest discover -s tests -q`: 101 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+CLI subprocess checks cover --help with no executable Codex on PATH, initial Thai
+prompt, piped blank/command input, concurrent controller text and status input,
+EOF during approval and SIGINT during approval. The fake controller never calls
+Codex. Policy tests cover stale tokens, changed modes, clarification invalidation,
+manual selections, denial, cancellation deadlines and Terminal escape filtering.
+
+Remaining integration: /permissions does not expand rights, /sessions and /delete
+report unavailable, and /exit does not save a session yet. These depend on P03/P09,
+P11/P12. Live classifier, stream turn IDs, real controller dispatch and actual
+cancellation must be wired only after the relevant gates pass. This is not a
+production agent or complete P08 delivery; pending commands are not counted as
+working features. Next independent offline task: P11 local session persistence.
+Live inference: NOT RUN. G1–G4 unchanged.

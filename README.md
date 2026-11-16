@@ -3,7 +3,7 @@
 `sr` เป็น CLI แบบแชตต่อเนื่องที่ช่วยเลือกโมเดล ระดับการคิด และขั้นตอนทำงาน
 สำหรับงานโค้ด วิเคราะห์ วางแผน และเขียนเอกสาร ผ่าน ChatGPT/Codex subscription
 
-**สถานะ: ต้นแบบตรวจการเชื่อมต่อ — ยังไม่มี agent CLI `sr`**
+**สถานะ: Terminal shell ต้นแบบ — ยังไม่เปิด live agent execution**
 
 ## เป้าหมาย
 
@@ -144,3 +144,27 @@ Model selection policy ตรวจชื่อโมเดลและ effort �
 ค่าเริ่มต้นถามก่อนยกระดับ สิทธิ์อนุมัติผูกกับ task/แผน/ขั้นงานและเพิกถอนเมื่อแผนเปลี่ยน
 การอนุมัติโมเดลไม่ใช่การอนุมัติเครื่องมือ ส่วนนี้ผ่าน offline tests
 แต่ยังไม่มี Terminal UI ที่เชื่อมกับนโยบายดังกล่าว
+
+
+## ลอง Terminal shell (P08 prototype)
+
+```bash
+python3 modelmate.py
+python3 modelmate.py "ช่วยวางแผนงาน"
+python3 modelmate.py --help
+```
+
+หน้าจอรองรับภาษาไทย คำสั่ง `/help`, `/status`, `/mode`, `/model`, `/cancel`, `/exit`
+และคำตอบ `/approve TOKEN`, `/decline TOKEN`, `/pause TOKEN` สำหรับคำขอเลือกโมเดล
+การเริ่มโปรแกรมหรือส่งโจทย์ในรุ่นนี้ **ไม่เชื่อมต่อ Codex และไม่เริ่ม inference**
+หน้าจอจะแจ้งว่า live classifier ยังไม่พร้อม ไม่มีคำตอบจากโมเดลจริงหรือการแก้ไฟล์
+Catalog/streaming/approval integration ถูกทดสอบผ่าน injected controller จำลองเท่านั้น
+`/model` ในโปรแกรมปกติยังไม่มี live catalog จึงไม่แสดงว่าโมเดลใช้งานได้โดยเดาเอง
+
+โหมดเริ่มต้นเป็น Ask to escalate และสิทธิ์เป็น ask
+`/permissions` แสดงสิทธิ์ปัจจุบัน แต่ยังไม่ขยายสิทธิ์ก่อน P03/P09 ผ่าน
+`/sessions`, `/delete` แจ้งว่ายังไม่พร้อมจน P11/P12 เสร็จ
+ขณะนี้ออกโปรแกรมแล้วยังไม่มี autosave/resume จึงไม่ควรใช้เก็บงานจริง
+ข้อความจาก controller ถูกกรอง terminal controls และ UI ไม่แสดง private reasoning
+การขอหยุดต้องรอ controller ยืนยัน หากรอเกิน 5 วินาทีจะออกด้วยสถานะ 130
+และแจ้งว่าผลงานยังไม่ทราบ ไม่อ้างว่าหยุดสำเร็จ

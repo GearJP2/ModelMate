@@ -562,3 +562,265 @@ class ModelApprovals:
             return self.decision(raw, catalog, role_policy, step_id=step_id,
                                  step_index=step_index, mode='ask_to_escalate')
         return result
+
+
+def terminal_text(value):
+    """Render untrusted text without terminal control or Unicode direction controls."""
+    import unicodedata
+    return ''.join(c for c in str(value)
+                   if c in '\n\t' or not unicodedata.category(c).startswith('C'))
+
+
+class ChatShell:
+    """Single-owner Terminal state; an optional trusted controller receives actions."""
+
+    def __init__(self, output, send=None, catalog=None, role_policy=None):
+        self.output = output
+        self.send = send
+        self.catalog = [] if catalog is None else catalog
+        self.role_policy = role_policy
+        self.mode = 'ask_to_escalate'
+        self.permissions = 'ask'
+        self.selection = None
+        self.active = False
+        self.stopping = False
+        self.exiting = False
+        self.closed = False
+        self.pending = None
+        self.approvals = None
+        self.route = None
+        self.stop_deadline = None
+        self.exit_code = 0
+
+    def write(self, text):
+        self.output.write(terminal_text(text) + '\n')
+        self.output.flush()
+
+    def start(self, prompt=None):
+        self.write('ModelMate · Terminal shell prototype · live execution unavailable')
+        self.write('/help แสดงคำสั่ง · /exit ออก · ไม่มีการเชื่อมต่อโมเดลในรุ่นนี้')
+        if prompt:
+            self.line(prompt)
+
+    def cancel(self, exit_after=False):
+        self.pending = None
+        self.exiting = self.exiting or exit_after
+        if self.active:
+            if not self.stopping:
+                self.stopping = True
+                self.stop_deadline = time.monotonic() + 5
+                self.write('กำลังขอหยุดงาน — ยังไม่ยืนยันว่าหยุดแล้ว')
+                if self.send is not None:
+                    self.send({'action': 'cancel'})
+        elif self.exiting:
+            self.closed = True
+        else:
+            self.write('ยกเลิกคำขอที่รออยู่แล้ว')
+
+    def tick(self):
+        if self.stopping and time.monotonic() >= self.stop_deadline:
+            self.write('ยืนยันการหยุดไม่ได้ ผลงานยังไม่ทราบ — ตรวจ backend ก่อนเริ่มใหม่')
+            self.exit_code = 130
+            self.closed = True
+
+    def line(self, text):
+        import shlex
+        text = text.strip()
+        if not text or self.closed:
+            return
+        if len(text.encode('utf-8')) > 65536:
+            self.write('ข้อความยาวเกิน 64 KiB')
+            return
+        if text.startswith('/'):
+            try:
+                args = shlex.split(text)
+            except ValueError:
+                self.write('รูปแบบคำสั่งไม่ถูกต้อง')
+                return
+            cmd, *values = args
+            if cmd == '/help':
+                self.write('/status /mode [auto|ask_to_escalate|approve_plan] /model [ID EFFORT]\n'
+                           '/permissions [ask|read_only|workspace] /sessions /delete /cancel /exit\n'
+                           '/approve TOKEN /decline TOKEN /pause TOKEN')
+            elif cmd == '/status':
+                self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
+                                       'selection': self.selection, 'active': self.active,
+                                       'stopping': self.stopping, 'quota': 'unknown',
+                                       'backend': 'injected test controller' if self.send else 'unavailable'},
+                                      ensure_ascii=False))
+            elif cmd == '/mode':
+                if not values:
+                    self.write(self.mode)
+                elif len(values) != 1 or values[0] not in ('auto', 'ask_to_escalate', 'approve_plan'):
+                    self.write('โหมดไม่ถูกต้อง')
+                else:
+                    self.mode = values[0]
+                    self.pending = None
+                    if self.route is not None:
+                        self.present_route()
+                    self.write('โหมด: ' + self.mode)
+            elif cmd == '/permissions':
+                if not values:
+                    self.write(self.permissions)
+                elif len(values) != 1 or values[0] not in ('ask', 'read_only', 'workspace'):
+                    self.write('สิทธิ์ไม่ถูกต้อง')
+                else:
+                    self.write('ยังเปลี่ยนสิทธิ์ไม่ได้: รอพิสูจน์ enforcement ใน P03/P09')
+            elif cmd == '/model':
+                if not values:
+                    self.write(json.dumps({'selected': self.selection, 'catalog': self.catalog}, ensure_ascii=False))
+                elif self.active or self.route is not None:
+                    self.write('พักการเปลี่ยนโมเดลระหว่างงาน — ต้องเสนอแผนและขออนุมัติใหม่')
+                elif len(values) not in (1, 2):
+                    self.write('ใช้ /model ID [EFFORT]')
+                else:
+                    try:
+                        self.selection = select_model(self.catalog, values[0], values[1] if len(values) == 2 else None)
+                        self.write('เลือกโมเดลสำหรับงานถัดไป: ' + json.dumps(self.selection))
+                    except ProbeError as exc:
+                        self.write(str(exc))
+            elif cmd in ('/sessions', '/delete'):
+                self.write('ยังไม่พร้อม: รอ session persistence และ lifecycle ใน P11/P12')
+            elif cmd in ('/approve', '/decline', '/pause'):
+                if len(values) != 1 or self.pending is None or values[0] != self.pending.get('token'):
+                    self.write('คำขออนุมัติไม่ถูกต้องหรือหมดอายุ')
+                else:
+                    try:
+                        self.approvals.answer(values[0], cmd[1:])
+                        self.pending = None
+                        self.present_route()
+                    except ProbeError as exc:
+                        self.write(str(exc))
+            elif cmd in ('/cancel', '/exit'):
+                self.cancel(exit_after=cmd == '/exit')
+            else:
+                self.write('ไม่รู้จักคำสั่ง ใช้ /help')
+            return
+        if self.pending is not None:
+            self.write('ยังรอการอนุมัติ ใช้ /approve, /decline หรือ /pause พร้อม TOKEN')
+            return
+        if self.stopping:
+            self.write('ยังรอยืนยันการหยุด จะไม่ส่งงานใหม่')
+            return
+        if self.send is None:
+            self.write('รับโจทย์แล้ว แต่ live classifier ยังไม่พร้อมตาม P03/P06; ไม่เริ่ม inference')
+            return
+        action = 'steer' if self.active else 'submit'
+        self.active = True
+        self.send({'action': action, 'text': text, 'mode': self.mode, 'selection': self.selection})
+
+    def present_route(self):
+        route = self.route
+        decision = self.approvals.decision(route['raw'], self.catalog, self.role_policy,
+                                           step_id=route['step_id'], step_index=route['step_index'], mode=self.mode)
+        self.pending = decision if decision['state'] == 'ask' else None
+        self.write(json.dumps(decision, ensure_ascii=False))
+        # Model choice only; no tool or inference dispatch occurs here.
+
+    def event(self, message):
+        if not isinstance(message, dict) or not isinstance(message.get('type'), str):
+            raise ProbeError('Invalid chat controller event.')
+        kind = message['type']
+        if kind in ('text', 'progress'):
+            text = message.get('text')
+            if not isinstance(text, str):
+                raise ProbeError('Invalid text event.')
+            self.write(text)
+        elif kind == 'plan':
+            if self.stopping:
+                return
+            raw, step_id, index = message.get('raw'), message.get('step_id'), message.get('step_index', 0)
+            result = routing_decision(raw, self.catalog, self.role_policy)
+            if result['state'] != 'ready_for_approval':
+                self.pending = None
+                self.approvals = None
+                self.route = None
+                self.write(json.dumps(result, ensure_ascii=False))
+                return
+            if self.approvals is None:
+                self.approvals = ModelApprovals(self.catalog, self.role_policy)
+            self.route = {'raw': raw, 'step_id': step_id, 'step_index': index}
+            self.present_route()
+        elif kind in ('completed', 'stopped'):
+            self.active = False
+            self.stopping = False
+            self.stop_deadline = None
+            self.pending = None
+            self.approvals = None
+            self.route = None
+            self.write('หยุดงานแล้ว' if kind == 'stopped' else 'จบ turn ของ backend; ผลตรวจงานต้องดูแยกต่างหาก')
+            if self.exiting:
+                self.closed = True
+        else:
+            # Tool approval/execution events are not supported by this shell stage.
+            raise ProbeError('Unsupported controller event; no action approved.')
+
+
+def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
+             role_policy=None, prompt=None):
+    """Multiplex Linux input/events in one thread. No live backend is installed."""
+    shell = ChatShell(output, send, catalog, role_policy)
+    selector = selectors.SelectSelector()
+    buffers = {}
+    try:
+        for stream, kind in ((input_stream, 'input'), (event_stream, 'events')):
+            if stream is not None:
+                selector.register(stream, selectors.EVENT_READ, kind)
+                buffers[kind] = b''
+        shell.start(prompt)
+        while not shell.closed:
+            try:
+                ready = selector.select(.1)
+                for key, _ in ready:
+                    kind = key.data
+                    data = os.read(key.fd, 4096)
+                    if not data:
+                        selector.unregister(key.fileobj)
+                        if buffers[kind]:
+                            if kind == 'input':
+                                shell.line(buffers[kind].decode('utf-8'))
+                            else:
+                                raise ProbeError('Truncated controller event.')
+                            buffers[kind] = b''
+                        if kind == 'input':
+                            shell.cancel(exit_after=True)
+                        else:
+                            raise ProbeError('Controller disconnected; no more work can be submitted.')
+                        continue
+                    buffers[kind] += data
+                    if len(buffers[kind]) > 1024 * 1024:
+                        raise ProbeError('Terminal input/event buffer exceeded limit.')
+                    while b'\n' in buffers[kind] and not shell.closed:
+                        line, buffers[kind] = buffers[kind].split(b'\n', 1)
+                        if kind == 'input':
+                            shell.line(line.decode('utf-8'))
+                        else:
+                            shell.event(json.loads(line))
+                shell.tick()
+            except KeyboardInterrupt:
+                shell.cancel()
+    except (ProbeError, OSError, ValueError, UnicodeError):
+        shell.write('Terminal หยุด: ข้อมูลหรือการเชื่อมต่อไม่ถูกต้อง; ผลงานที่กำลังทำยังไม่ทราบ')
+        if shell.active and send is not None:
+            try:
+                send({'action': 'cancel'})
+            except (ProbeError, OSError):
+                pass
+        return 1
+    finally:
+        selector.close()
+    return shell.exit_code
+
+
+def main():
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(description='ModelMate Terminal shell prototype; live execution is unavailable.')
+    parser.add_argument('prompt', nargs='?', help='initial task text')
+    args = parser.parse_args()
+    return run_chat(sys.stdin, sys.stdout, prompt=args.prompt)
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main())
