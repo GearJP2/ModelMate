@@ -683,5 +683,37 @@ without the marker, recall/turn failures, descendants, failed deletion retaining
 its checkpoint, non-appServer history listings, sentinel changes, unexpected tool
 denial/interruption, timeout without replay, and opt-in/exclusive-mode validation.
 The source-kind list is shared with the runtime's deletion scope enumeration.
-No real inference was run. P12/live compatibility gates remain pending; the next
-step is an explicit user-run session probe from their normal Terminal.
+No real inference was run during harness development. Subsequent user-run evidence
+is recorded below; wider lifecycle/permission gates remain separate.
+
+### P12 manual reconnect/recall/delete — scoped LIVE_VERIFIED
+
+On 2026-11-17 the user ran, from their normal Terminal:
+
+```bash
+python3 verify.py --run-live --probe-sessions gpt-6.1-sol
+```
+
+Reported results: sessionResume, contextRecallAfterReconnect, confirmedDeletion,
+localMetadataDeleted, threadAbsentFromListings and sentinelUnchanged all `passed`.
+Requested model/effort: `gpt-6.1-sol` / `low`. Reported backend model remains null;
+no actual-dispatch claim is made.
+
+The supplied file hashes match the local files and PR #3 head `5647656` exactly:
+
+- Runtime SHA-256: `b113e5be95fa51b5a27dc8404cbe50f0f056b09f9c110f28e64571d96334c80c`
+- Verifier SHA-256: `6d90d9781067a994875351624580c656ca138de3bac8eb3bc86806f4cf707242`
+
+Evidence source: the user's supplied sanitized JSON report; no additional inference
+was run to record it. Account identity, thread/session IDs, prompts, paths and raw
+traces are not stored here. This verifies two synthetic turns across separate
+connections and one scratch-thread deletion with unchanged sentinel. It does not
+verify crash recovery, all tool paths, automated workflow, actual backend dispatch
+or complete service-side data erasure. P12 remains IN_PROGRESS for P10 integration
+and remaining lifecycle evidence. The scoped manual-chat PR can now be assessed
+for merge with its existing offline checks and these live results.
+
+Documentation-only follow-up: file hashes matched; `git diff --check` passed.
+No repeated inference or full test rerun was needed. Next work: workflow/controller
+development under P10's permission gates, with live crash/tool-path checks tracked
+separately rather than inferred from this happy-path result.

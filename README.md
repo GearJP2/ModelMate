@@ -77,8 +77,9 @@ project/user Codex configuration และ managed policy ยังมีผล
 | `/delete [ID]`, `/confirm-delete TOKEN` | แสดงขอบเขตแล้วลบ Codex thread/subtree และ metadata หลังยืนยัน |
 | `/acknowledge TOKEN` | ยอมรับว่า outcome เดิมยังไม่ทราบ หลังตรวจไฟล์/process แล้ว; อนุญาตเฉพาะข้อความใหม่ |
 
-**มี autosave/resume สำหรับ manual live chat แล้ว แต่ยังรอทดสอบสด**
+**มี autosave/resume สำหรับ manual live chat และผ่านการทดสอบสดเส้นทางปกติแล้ว**
 ใช้ thread แบบบันทึกลง Codex และเก็บ metadata ในเครื่องอัตโนมัติ
+ผลสดครอบคลุม reconnect/recall/delete ในโปรเจกต์สังเคราะห์; ยังไม่ครอบคลุม crash recovery
 หากขาดการเชื่อมต่อหรือหยุดไม่ได้ ผลของคำสั่งอาจไม่ทราบ
 ไม่ retry หรือ replay คำสั่งให้อัตโนมัติ การอนุมัติให้เขียนอาจเปลี่ยนไฟล์จริง
 

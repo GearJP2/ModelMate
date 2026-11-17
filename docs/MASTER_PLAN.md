@@ -214,7 +214,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | TODO | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual chat lifecycle MOCK_VERIFIED; workflow integration รอ P10 และ live evidence | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual reconnect/recall/delete happy path LIVE_VERIFIED; workflow รอ P10 และ crash recovery ยังไม่ตรวจสด | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | TODO | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | TODO | ตรวจคำกล่าวอ้าง |
@@ -398,7 +398,8 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 เพิ่ม schema v2 ผูก account fingerprint/turn/deletion receipt; v1 ไม่เดาบัญชีเพื่อ resume
 หลักฐาน offline อยู่ใน VERIFICATION.md; ยังไม่อ้าง workflow lifecycle หรือ live gate ผ่าน
 มี `verify.py --run-live --probe-sessions MODEL` สำหรับเก็บหลักฐานสอง turn ข้าม reconnect
-พร้อมตรวจ deletion เฉพาะ scratch thread; harness ผ่าน offline tests แต่ยังไม่รันบัญชีจริง
+พร้อมตรวจ deletion เฉพาะ scratch thread; ผู้ใช้รันสดผ่านบน 5647656 และ hashes ตรงกัน
+ผลสดเฉพาะ happy path ไม่แทน live crash recovery, tool paths หรือ workflow integration
 Resume ตรวจบัญชี/โปรเจกต์/catalog/quota ใหม่ก่อน turn
 RUNNING ที่หลงเหลือหลัง crash → outcome unknown จน reconcile กับ Codex
 ห้าม replay side effects; ถ้าไม่ทราบให้ผู้ใช้ตัดสินหลังแสดงหลักฐาน
