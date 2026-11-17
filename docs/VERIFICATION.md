@@ -786,3 +786,250 @@ workflow/ledger restore and live crash recovery are not implemented here. Do not
 reset a task/controller on model request to evade its budget. No live inference
 was run. Next work is the gated host adapter/CLI and persistence integration;
 P10 and workflow-specific P12 remain IN_PROGRESS.
+
+## P10/P12 durable workflow checkpoints — MOCK_VERIFIED
+
+WorkflowController now has explicit checkpoint export/restore and optional trusted
+persistence binding through `SessionStore.workflow`. Unattached controllers remain
+in-memory and perform no I/O. The context holds the existing Linux session writer
+lock for its entire lifetime and persists each transition before returning it to
+the host. In particular, the reserved attempt is durable before the inert dispatch
+descriptor is returned. Storage errors propagate; a host must stop instead of
+dispatching after a failed write. Exiting the context closes that controller's
+attachment; use a newly restored controller rather than continuing a stale object.
+
+Session schema v3 extends v2 with a nested schema-v1 workflow checkpoint. It stores
+the validated plan, original task/step IDs, attempts/cycles, active attempt, accepted
+evidence, criterion coverage, user choices and budget-extension ledger. Original
+model baseline and account fingerprint are retained. Approval grants, pending model
+requests, approval/pause tokens, raw account ID and tool permissions are excluded.
+Evidence result derivation is shared between newly observed and persisted checks.
+
+Checkpoint validation replays ledger ordering, cycle extensions and attempt counters,
+checks unique identities and exact field sets, matches evidence to the correct
+attempt/check and rejects inconsistent result/exit-code pairs. A budget extension
+requires its preceding explicit continue choice. Session summary fields must match
+the workflow; deletion receipts may override the top-level deletion/pause state.
+Save rejects task/step/baseline replacement, criterion/structure changes, ledger
+truncation, active-attempt loss, status rollback and removal of existing evidence.
+This detects corrupt/inconsistent state; it is not cryptographic protection from
+the same local user deliberately rewriting an entire state file.
+
+Restore requires a fresh allowed quota snapshot, matching account and a still
+supported original baseline. Current catalog/role policy is supplied by the host.
+Temporary model grants are rebuilt empty. Nonterminal workflows restore paused
+with fresh tokens, not dispatches. Running attempts retain their IDs and consumed
+slots and require a native terminal event before continuing. Completed attempts
+can continue CHECKING after an explicit choice, without another model turn.
+Exhausted budgets remain exhausted until an explicit new-cycle choice. Cached
+DONE restores UNVERIFIED and preserves its historical evidence/coverage; the host
+must inspect current files/processes and reassess evidence before asserting DONE.
+FAILED/CLARIFYING retain their phase. No pending model/tool action is replayed.
+
+V1/v2 records remain readable and unchanged by read/list operations. Only explicit
+workflow attachment upgrades a bound v2 record to v3. Unbound/deleting sessions,
+wrong accounts, unsafe quota and unknown existing manual outcomes cannot attach.
+Manual LiveChatConnection resume rejects workflow records before any thread RPC,
+so it cannot discard counters by treating them as ordinary chat. Confirmed deletion
+of workflow metadata still follows the existing preview/token/remote-receipt flow.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_workflow_persistence.py -v`: 25 passed.
+- `python3 -m unittest discover -s tests -q`: 224 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Tests include actual subprocess death both after reserving an attempt and after
+recording an observed synthetic check result; both restore the original counters.
+Other checks cover exhausted/extended cycles, user choices, pending approval/token
+expiry, partial/out-of-order checks, multi-step/source evidence, terminal phases,
+no raw account storage, unknown quota/account/catalog, corrupt/unsupported schema,
+metadata/counter/evidence tampering, task/ledger/status rollback, disk failure before
+dispatch, failed extension save, lock ownership, closed attachments, legacy reads,
+manual-resume refusal and confirmed deletion. All fixtures/account IDs are synthetic.
+
+Limits: this is the persistence/host API milestone, not a user-facing workflow CLI
+or live executor. The existing trusted-callback contract still applies: metadata
+cannot establish whether a host's manual/source finding or exit code is truthful,
+or whether files have changed since evidence was collected. Native thread/turn
+reconciliation must be wired by the future host adapter. These process-death tests
+do not verify native Codex crash recovery or hardware power loss. Existing atomic
+replace/fsync limits remain. Full checkpoints share the session's 1 MiB cap and
+allow at most 4,096 ledger events; oversize fails without dropping history. No
+credentials, transcript, network call or live inference was added. P10/P12 remain
+IN_PROGRESS; next work is the explicit workflow UI/controller host integration,
+with execution/check adapters and their permission gates still separate.
+
+## P08/P10 workflow host UI — MOCK_VERIFIED
+
+ChatShell and run_chat now accept an explicit WorkflowController and optional
+trusted workflow_action callback. This is a host API milestone: the ordinary CLI
+and `--live` paths remain manual, and no workflow loading flag is introduced.
+Passing a native backend or legacy manual send callback alongside a workflow is
+rejected, so existing native execution is not implicitly enabled for workflows.
+
+The UI renders the plan, current step, cycle/attempt budget, planned model/effort,
+active requested selection, per-check results and recorded criterion coverage.
+Requested/planned models are not described as backend dispatch telemetry. All
+display text uses the existing terminal-control filter. Ordinary text is not
+forwarded into a classifier or executor while this prototype workflow UI is bound.
+
+Host/UI contract:
+
+- `/workflow` and `/status` read the bound controller without starting work.
+- `/next` is allowed only in READY and sends `{action: next, task_id}` to the
+  trusted callback. Without a host, no attempt is reserved. The host must obtain
+  current quota/catalog/bindings and use the controller's request_attempt before
+  any future dispatch. The UI ignores callback return values as completion claims.
+- `/approve`, `/decline` and `/pause` route exact tokens to the current model gate;
+  `/continue`, `/revise` and `/pause` route only matching workflow pause tokens.
+  Approval and continuation never invoke next automatically. No tool grant is
+  created. Revision requests pause for the host; they do not rewrite the plan.
+- `/mode` uses a controller method that invalidates old grants/tokens, preserves
+  budgets and persists the change when the controller is durably attached.
+  Active/finished attempts cannot change mode. Unsupported manual session/model
+  commands do not fall through to an unrelated backend.
+- `/cancel`, Ctrl+C, `/exit` and EOF pause pending choices or request host cancellation
+  for a running attempt. Host cancellation is attempted before persisting a running
+  pause, so a storage failure cannot prevent the interrupt request. An acknowledgement
+  alone never clears active state. A five-second unconfirmed-stop deadline exits
+  with unknown outcome; the controller retains its active attempt/budget.
+- A trusted host may signal `{type: workflow_changed, task_id}` after mutating its
+  controller from a real terminal/check event. The signal carries no state or evidence
+  fields. Foreign IDs, extra fields, replacement plans, legacy completed/stopped and
+  tool approval events are rejected in workflow UI mode. Model text is display data.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_workflow_ui.py -v`: 17 passed.
+- `python3 -m unittest discover -s tests -q`: 241 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Checks cover plan/status without execution, missing-host refusal, explicit model
+approval, stale tokens on mode change, correction-limit choices and retained cycles,
+no auto-next after approval, revision/pause, EOF during a synthetic running attempt,
+terminal confirmation versus acknowledgement, unconfirmed timeout, cancellation on
+storage failure, spoofed completion/foreign events, inert callback return values,
+read-only permissions, refused native/manual mixing, terminal text filtering and
+persisted UI choices. An actual synthetic subprocess runs the selector/EOF/event
+path; no real Codex or inference is used.
+
+Limits: callbacks and controller mutation remain trusted in-process APIs. This is
+not a sandbox for arbitrary Python callbacks. Hosts must correctly report native
+events, perform fresh preflight checks, bind actual check evidence and handle
+disconnect/interrupt outcomes. No native workflow executor, check adapter, classifier,
+clarification input, broad replan editor, workflow CLI loading/resume entry point or
+automatic multi-step loop is added. P08/P10/P12 remain IN_PROGRESS. Next work is
+the gated host/execution and explicit entry-point integration; source/mock evidence
+must not be presented as live workflow verification.
+
+## P10 workflow host and executor observations — MOCK_VERIFIED
+
+Added WorkflowHost as the trusted adapter between WorkflowController, the injected
+UI and transport callbacks. It has no built-in native transport, subprocess runner,
+tool approval handler or CLI entry point. Existing native/manual mixing guards
+remain in place. All checks below used synthetic callbacks/protocols, not Codex.
+
+Dispatch contract:
+
+- A host preflight callback returns the current quota snapshot/timestamp, catalog
+  and reviewed role bindings. The controller's quota/account/model gates still run
+  before a slot is consumed. Preflight failure pauses without dispatch. Ultra
+  delegation remains unsupported and consumes no slot.
+- The dispatch callback receives a defensive copy of the inert descriptor only
+  after the controller's durable attempt checkpoint succeeds. It returns exactly
+  a thread/turn identity before delivering events. Reentrant events must be queued
+  by the transport; reused/invalid bindings and unknown start outcomes fail closed.
+- Cancel invokes the trusted interrupt callback at most once for the known binding.
+  An acknowledgement does not finish the attempt. Bound-turn timeout, disconnect
+  or malformed protocol pauses with unknown outcome and never replays dispatch.
+- A trusted recovery adapter can reconcile inspected identity/terminal status with
+  the original active attempt, retaining its consumed slot. A completed cached
+  attempt can continue checks without another model turn. Native inspection,
+  current-file reassessment and account/source authenticity are host obligations;
+  the adapter does not infer identity from model text or automatically reconnect.
+
+Evidence contract:
+
+- `configure_check` registers an exact host-reviewed command and absolute cwd for
+  an existing test/lint criterion before the attempt. It grants no tool permission
+  and does not run a command. The producer must enforce native sandbox/approval
+  policy independently; current workflow approval requests interrupt/refuse rather
+  than receiving accept.
+- `observe_native` accepts only observations from the trusted executor channel.
+  Matching thread/turn, command item identity, observed start, command and cwd are
+  required. Unrelated successful commands and assistant text fill no checks.
+- Identical duplicate completions are idempotent. Changed command/cwd/type, missing
+  starts, conflicting results, repeated check invocations within one attempt and
+  contradictory terminal events pause rather than silently accepting a later pass.
+  Native tools may already have started before observation; this is not a no-tools
+  sandbox or proof that all internal tool loops are bounded.
+- `/check` records matched observations only after a confirmed completed turn, then
+  evaluates that attempt. Declined/missing exit codes remain unknown; nonzero
+  observed exits fail. Raw stdout/stderr, commands and cwd are not copied into
+  evidence. Missing manual/source adapters leave UNVERIFIED rather than inventing
+  findings. Task DONE still requires an explicit trusted criterion-coverage check.
+- Transport bindings, approved check specifications and unrecorded observations
+  are process-local. Recovery does not reuse another attempt's cached observations.
+  Durable native thread/turn binding integration remains future work.
+
+`run_chat(..., executor_stream=...)` multiplexes this channel only for an explicitly
+bound WorkflowHost; it is separate from display-only model text and UI change
+signals. The host drives same-task UI updates on the owning loop and has a bounded
+turn deadline. Parse/EOF failures invalidate the host and request interruption.
+No backend/model event can directly declare workflow DONE or grant tool access.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_workflow_host.py -v`: 25 passed.
+- `python3 -m unittest discover -s tests -q`: 266 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Checks cover exact observations versus unrelated commands, foreign thread/turn IDs,
+missing starts, changed metadata/types, duplicate/conflicting results, declined
+checks, correction limits, explicit model approval/next, unknown start recovery,
+cancel acknowledgement, timeout/disconnect without replay, unsupported tool approval,
+stale binding/check-cache isolation, reentrant events, ultra refusal, fresh preflight,
+and a durable checkpoint before the dispatch callback. Real synthetic subprocesses
+exercise separate executor-pipe events, UI `/check`, EOF and invalid JSON. Raw
+private-output markers never become evidence or Terminal output.
+
+Limits: this is still a trusted in-process API and observation checker, not a
+security boundary against arbitrary Python callbacks or dishonest producers.
+Exact command matching does not prove the chosen command meaningfully tests a
+criterion; the host must review specifications and source observations. Transport
+callbacks must bound their own start RPC timeouts, enforce permissions and queue
+events until binding. No model inference, live workflow or private-web gate was
+run or marked passed. Native transport, durable native bindings, workflow loading
+entry point, full tool approval/check adapters and classifier remain pending.
+P08/P09/P10/P12 remain IN_PROGRESS.
+
+### Local session/workflow inspection (2026-11-17, uncommitted working tree)
+
+- `python3 -m unittest discover -s tests -p test_local_inspection.py -v`: 7 offline tests.
+- ตรวจ missing store ไม่สร้าง directory; read-only mutations ไม่สร้าง lock;
+  checkpoint bytes/mtime ไม่เปลี่ยน; project isolation, symlink/corrupt metadata
+  ปฏิเสธโดยไม่แก้ไฟล์; CLI ใช้ได้เมื่อ PATH ไม่มี Codex และปฏิเสธ option ที่ชนกัน
+- RUNNING แสดงผลปัจจุบัน unknown; DONE แสดงว่าเป็นผลเก่า ไม่คืน grants/token
+  ไม่ restore controller ไม่ทดสอบ live inference หรือ native workflow execution
+
+Publication preflight (2026-11-18): full offline suite 273/273 passed;
+`python3 -m py_compile modelmate.py doctor.py verify.py` and
+`git diff --check` passed. No live inference was run.
+
+### PR #5 recovery evidence fix (2026-11-18)
+
+Restored active and accepted step evidence is now stale in memory. The controller
+blocks attempt evaluation and task completion until the trusted host explicitly
+revalidates each saved check against a known matching current result. Terminal
+reconciliation alone does not clear this requirement. Confirmations do not survive
+another restore; persisted evidence/ledger are retained unchanged. Mismatched or
+unknown results remain blocked; no implicit tool execution or model retry occurs.
+Regression coverage checks partial-check recovery, terminal-only reconciliation,
+restored DONE, rejected mismatches, and revalidation expiry after another restore.
+
+Validation: 91 targeted workflow tests and 274/274 full offline tests passed.
+Runtime/doctor/verifier compilation and `git diff --check` passed. No live inference.

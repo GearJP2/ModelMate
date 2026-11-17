@@ -210,11 +210,11 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
 | P06 | Plan schema / classifier / routing | P04, P05 | IN_PROGRESS: validator/preparation MOCK_VERIFIED; live classifier รอ P03 | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
-| P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell MOCK_VERIFIED; integration รอ P09/P11/P12 | ไม่จำเป็นถ้าไม่แตะ policy |
+| P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell/workflow host UI MOCK_VERIFIED; native workflow entry point ยังไม่เปิด | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
-| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: offline controller MOCK_VERIFIED; execution/CLI/persistence integration pending permission gates | จำเป็น |
+| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller/checkpoints/UI/transport-observation host MOCK_VERIFIED; native transport/entry point pending permission gates | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual reconnect/recall/delete happy path LIVE_VERIFIED; workflow รอ P10 และ crash recovery ยังไม่ตรวจสด | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | TODO | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | TODO | ตรวจคำกล่าวอ้าง |
@@ -350,6 +350,12 @@ UI ต้องรับ approval/cancel ขณะมี events โดยไม�
 Ctrl+C/EOF ระหว่างรอ approval, invalid slash command ไม่ส่งเป็นงานโดยไม่ตั้งใจ
 ไม่รวม: full-screen TUI, syntax highlighter หรือ UI framework
 
+Workflow UI milestone: ChatShell/run_chat รับ controller และ trusted workflow_action callback
+แสดงแผน/status/check results และรับ /next, model approval, pause/continue/revise ตาม exact token
+ไม่เชื่อ event ที่อ้าง state/DONE จากภายนอก; workflow_changed เป็นสัญญาณให้ UI อ่าน controller เอง
+ยังไม่มี native workflow CLI entry point; ห้ามผูก workflow กับ manual send/backend โดยข้าม integration gates
+WorkflowHost รับ executor_stream ผ่าน selector แยกจาก model text/UI events; /check ประเมินเฉพาะหลักฐาน host-bound
+
 ### P09 — Tool approvals
 
 ไฟล์: modelmate.py, tests/test_permissions.py และ integration fixtures
@@ -366,9 +372,11 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 ### P10 — Workflow และ correction budget
 
 ไฟล์: modelmate.py, tests/test_workflow.py
-มี WorkflowController แบบ in-memory/offline แล้ว: ไม่มี network/process/tool execution
+มี WorkflowController แบบ offline แล้ว: ไม่มี network/process/tool execution
 เชื่อม ModelApprovals และ quota_decision; dispatch descriptor ยังไม่ถูกส่งไป backend
-เก็บ controller IDs, attempts/cycles/evidence และ user-choice ledger; ยังไม่ restore จาก session
+เก็บ controller IDs, attempts/cycles/evidence และ user-choice ledger
+ใช้ SessionStore.workflow เพื่อ autosave ทุก transition ภายใต้ writer lock และ restore จาก session schema v3
+restore ไม่คืน approval/token/grant; active turn ที่ยังไม่ทราบผลต้อง reconcile ก่อน ไม่ replay
 controller methods รับเฉพาะ trusted host/UI events ไม่ใช่ API ที่เปิดให้โมเดลเรียกโดยตรง
 Controller ถือ state/step IDs/counters; classifier แค่เสนอ
 initial attempt + correction 1 + correction 2 จากนั้นหยุดถาม
@@ -378,6 +386,9 @@ checks ใช้ผลเครื่องมือจริง; model review �
 ขั้น risky work ต้องมี strong review ตามหลัง ไม่ใช่แค่มี review อยู่ก่อนหน้า
 จบทุกขั้นแล้วยังต้องมี trusted checker จับคู่เกณฑ์สำเร็จกับ accepted evidence IDs จึงเป็น DONE
 การ revise ขั้นเดิมจำกัด objective/role/effort/reason และไม่ล้าง ID/budget/criteria
+WorkflowHost ผูก attempt กับ thread/turn/item และ approved command/cwd; ไม่ใช้ exit code จากคำสั่งอื่นแทน test
+preflight/dispatch/interrupt ยังเป็น trusted callbacks ไม่มี native transport/command runner ในตัว
+request approval ของ workflow ยังไม่รองรับ: ขอหยุดและไม่ตอบ accept; ultra delegation ยังถูกปิด
 
 ผ่านเมื่อ: simple code, plan-heavy code, document task เดินครบ;
 fail 3 attempts แล้วหยุด, model เปลี่ยนชื่อ step ไม่ reset,
@@ -403,6 +414,8 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion
 เพิ่ม schema v2 ผูก account fingerprint/turn/deletion receipt; v1 ไม่เดาบัญชีเพื่อ resume
+เพิ่ม schema v3 เฉพาะเมื่อผูก workflow: checkpoint schema v1 พร้อม validated ledger/counters/evidence
+v1/v2 ไม่ถูกอัปเกรดจากการอ่าน; manual chat ปฏิเสธการ resume workflow เพื่อไม่ทิ้ง controller state
 หลักฐาน offline อยู่ใน VERIFICATION.md; ยังไม่อ้าง workflow lifecycle หรือ live gate ผ่าน
 มี `verify.py --run-live --probe-sessions MODEL` สำหรับเก็บหลักฐานสอง turn ข้าม reconnect
 พร้อมตรวจ deletion เฉพาะ scratch thread; ผู้ใช้รันสดผ่านบน 5647656 และ hashes ตรงกัน
@@ -542,3 +555,17 @@ Commit:
 - ติดตั้งไฟล์ runtime เดียวบน Linux/WSL2 ได้พร้อมคู่มือ
 - มีผล evaluation และระบุข้อจำกัดที่ยังมีอย่างตรงไปตรงมา
 - สถานะ release แยกจาก development checklist และผู้ใช้รับรู้ข้อจำกัดบริการ
+
+### Local inspection increment — P08/P12/P15 (2026-11-17)
+
+MOCK_VERIFIED: CLI `--sessions` และ `--show-workflow SESSION_ID` อ่าน metadata
+ของโปรเจกต์ปัจจุบันแบบ read-only โดยไม่เปิด backend ไม่สร้าง directory/lock
+ไม่คืน approval หรือ resume controller แสดงผลตรวจและสถานะเป็น historical data
+เท่านั้น Native workflow entry point และ auto routing ยังไม่เปิด; P03/P09 gates
+ยังต้องมีหลักฐานเพิ่ม ไม่มีการเปลี่ยนสถานะ live gate จากงานนี้
+ตรวจด้วย `tests/test_local_inspection.py` (7 offline tests) และ full offline suite
+
+P10/P12 recovery fix (2026-11-18): restored checks are stale until explicit trusted
+host revalidation. Attempt evaluation and task completion enforce this in the
+shared controller, including restored DONE and partially checked attempts.
+No native transport or live gate is enabled by this change.

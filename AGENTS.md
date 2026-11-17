@@ -61,3 +61,7 @@ resulting behavior, checks and limitations. Merge through the PR after checks an
 review, with a descriptive merge/squash message. Do not push changes directly to
 main. If GitHub PR access is unavailable, push the branch and prepare the exact PR
 text; report the missing access instead of merging locally or claiming a PR exists.
+
+Publication authorized by the user on 2026-11-18: commit the accumulated local
+work, push the feature branch and open a PR with validation and limitations.
+Do not merge this PR until the user requests it.
