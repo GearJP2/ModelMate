@@ -56,12 +56,9 @@ missing capability or evidence; do not invent a workaround that relaxes policy.
 
 ## Git workflow (user requested)
 
-Use a feature/fix branch for new changes. Open a PR describing the concrete problem,
-resulting behavior, checks and limitations. Merge through the PR after checks and
-review, with a descriptive merge/squash message. Do not push changes directly to
-main. If GitHub PR access is unavailable, push the branch and prepare the exact PR
-text; report the missing access instead of merging locally or claiming a PR exists.
-
-Publication authorized by the user on 2026-11-18: commit the accumulated local
-work, push the feature branch and open a PR with validation and limitations.
-Do not merge this PR until the user requests it.
+Current user workflow (2026-11-18): continue implementation autonomously and commit
+reviewable milestones on feature branches. The user no longer wants to open a PR
+for each increment. Run offline checks, keep meaningful commit messages and report
+progress. Ask for user-run live tests only when required; do not spend quota to
+make tests pass. Attempt pushes when useful, but report network limitations.
+Do not merge branches or change main without an explicit user instruction.

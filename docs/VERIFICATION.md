@@ -1160,3 +1160,16 @@ recovery, all tool paths, backend dispatch telemetry or service-side erasure.
 No public native workflow CLI, auto routing, native recovery or private-web gate
 is enabled by this result. This evidence update changes documentation only;
 `git diff --check` passed; no additional inference was run by the agent.
+
+### Explicit-plan CLI — offline increment (2026-11-18)
+
+Seven new tests cover offline preview/cancel without backend startup, invalid or
+oversized plans/bindings, unsupported checks/clarifications, CLI option conflicts,
+manual evidence/criterion mapping, rejection of manual test/lint results, and a
+real subprocess CLI loop with a fake native App Server. The loop confirms START
+and subsequent /next input are both preserved, answer checks reach DONE only with
+explicit accepted coverage, and the on-disk checkpoint validates as DONE.
+No live inference run. Native workflow recovery and automatic routing remain gated.
+
+Validation: seven targeted entry tests and 305/305 full offline tests passed;
+runtime/doctor/verifier compilation and `git diff --check` passed.

@@ -616,3 +616,16 @@ reports all six checks passed, including actual rendered answers and the correct
 READY-state local disconnect probe. Runtime/verifier hashes match local files;
 see VERIFICATION.md. Scoped LIVE_VERIFIED for this probe only. Full permission/web
 and native recovery gates remain open; this does not enable auto routing or CLI.
+
+### P08/P10/P12 explicit-plan CLI increment (2026-11-18)
+
+MOCK_VERIFIED: --workflow previews bounded validated JSON offline with explicit
+role bindings, requested efforts, risk, reason and criteria. --execute-workflow
+requires START before opening Codex, then manual /next dispatch under model gates.
+Only no-clarification/manual-rubric plans execute. /verify records explicit user
+observations; /check evaluates; /finish maps each criterion to accepted evidence.
+SessionStore.workflow checkpoints precede dispatch; native sessions remain
+inspection-only/ephemeral with no resume support. No automatic classifier or tool
+approval acceptance was added. The new CLI needs user-run live verification before
+claiming its happy path is live-verified. Commit milestones now follow the user's
+latest autonomous-work instructions; no per-increment PR or merge is required.

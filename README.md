@@ -141,7 +141,7 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 มี `WorkflowController` สำหรับทดสอบลำดับขั้น/ผลตรวจ/งบแก้ไขแบบออฟไลน์แล้ว
 ผูกกับ `SessionStore.workflow(...)` เพื่อบันทึกแต่ละ transition และคืนสถานะข้าม process ได้
 มี Workflow UI แบบ host-injected ผ่าน `run_chat(..., workflow=controller, workflow_action=host)` แล้ว
-ยังไม่มี CLI entry point สำหรับโหลด workflow; native transport เป็น experimental host API ที่ยังไม่ผ่าน live gate จึงไม่มี auto execution ในรุ่นนี้
+มี experimental explicit-plan CLI ตามหัวข้อด้านล่าง; ยังไม่มี auto execution และ CLI build นี้ยังรอ user-run live verification
 รายละเอียดสัญญา trusted host callbacks และข้อจำกัดอยู่ใน [ผลตรวจ P10](docs/VERIFICATION.md)
 
 เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/check`, `/mode`
@@ -260,7 +260,7 @@ state directory หรือ lock เพิ่ม สถานะ `DONE` เป�
 ตัว transport ตรวจ subscription/catalog/quota ก่อนส่งงาน และยืนยัน sandbox จาก thread/start
 คำขอ tool approval จะถูก decline และพัก; ไม่ยกระดับสิทธิ์ ไม่เปิด classifier/auto routing
 
-ในรุ่นนี้ยังไม่เปิด native workflow ผ่าน CLI และไม่รองรับ native workflow resume
+มี explicit-plan CLI แบบ opt-in ตามหัวข้อด้านล่าง แต่ไม่รองรับ native workflow resume
 caller ต้องปิด connection ใน `finally` และถือ timeout/start failure ว่า outcome unknown
 ไม่เรียก dispatch ซ้ำเอง การเรียก native host API จริงใช้โควตา; tests ใช้ fake server เท่านั้น
 การตั้ง model/effort เป็นเพียงค่าที่ร้องขอ ไม่ใช่หลักฐาน backend dispatch
@@ -296,3 +296,51 @@ Verifier ตรวจคำตอบจากข้อความที่ UI �
 จากสถานะ READY พร้อม tripwire ป้องกันการเรียกโมเดลเพิ่มแม้ guard เสีย
 ผล `answerDisplay`/`disconnectGuard` จาก verifier ก่อนแก้ PR #7 ยังไม่ถือเป็น
 หลักฐาน live สำหรับสองหัวข้อนี้ ต้องใช้ผลจาก verifier ที่แก้แล้วพร้อม hash ใหม่
+
+### Explicit-plan CLI (experimental, manual steps)
+
+Preview แผนและ model bindings แบบ offline ไม่เปิด backend หรือสร้าง session:
+
+```bash
+python3 modelmate.py --workflow examples/explain-lists.json --role-model standard=gpt-6.1-sol
+```
+
+เริ่มแบบ opt-in โดยใช้โควตาเมื่อสั่ง `/next`:
+
+```bash
+python3 modelmate.py --workflow examples/explain-lists.json --role-model standard=gpt-6.1-sol --execute-workflow
+```
+
+อ่านแผนแล้วพิมพ์ `START` เพื่อยืนยัน จากนั้นใช้คำสั่งตามลำดับ:
+
+```text
+/next
+/verify 1 pass
+/check
+/finish 1=EVIDENCE_ID
+/exit
+```
+
+รอคำตอบและ terminal event ก่อน `/verify` ตรวจคำตอบเองก่อนระบุ `pass`
+`/verify` รับเฉพาะ manual/rubric checks; ค่าที่รับคือ pass/fail/unknown
+หมายเลข check เริ่มที่ 1 ในขั้นปัจจุบัน ใช้ `/check` เพื่อประเมินและไปขั้นถัดไป
+หาก fail จะใช้ correction budget เดิม; unknown/missing ไม่ถือว่าผ่าน
+`EVIDENCE_ID` คือ ID ที่แสดงหลังบันทึกผลตรวจ; `/finish` ต้องระบุหลักฐานสำหรับ
+ทุกเกณฑ์สำเร็จ เช่น `/finish 1=ID_A 2=ID_B,ID_C` ไม่อนุญาตให้โมเดลจบงานเอง
+การออกจาก CLI สำเร็จไม่ได้แปลว่างานผ่านเกณฑ์ ต้องดูสถานะ DONE แยกต่างหาก
+
+ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
+ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
+นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
+เพิ่มสิทธิ์จะถูก decline/pause ตาม native transport รุ่นนี้; read-only/on-request
+ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
+
+รุ่นนี้รับแผนที่ไม่มี clarifications และใช้ manual/rubric checks เท่านั้นในการ
+execute; test/lint/source ต้องมี trusted checker เพิ่มก่อนจึงจะเปิดได้
+checkpoint บันทึกอัตโนมัติแยกโปรเจกต์ ดูด้วย `--sessions`/`--show-workflow ID`
+แต่ native workflow ยังเป็น ephemeral thread และยัง resume ไม่ได้ ห้ามใช้
+manual chat เพื่อข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
+
+This increment is offline-tested only. Earlier live probe evidence applies to its
+recorded hashes, not this CLI build. Classifier/auto routing, stronger permission
+paths, private-web isolation and native recovery remain gated.

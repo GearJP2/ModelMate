@@ -1425,7 +1425,7 @@ class ChatShell:
     def start(self, prompt=None):
         if self.workflow is not None:
             self.write('ModelMate · Workflow UI prototype · execution ต้องผ่าน host ที่รองรับ')
-            self.write('/workflow /next /check /status /mode · /cancel /exit')
+            self.write('/workflow /next /verify /check /finish /status /mode · /cancel /exit')
             self.show_workflow()
         elif getattr(self, 'live', False):
             self.write('ModelMate · live ChatGPT/Codex · read-only + on-request')
@@ -1517,15 +1517,17 @@ class ChatShell:
                        + ' · ' + step['state'] + ' · รอบ ' + str(step['cycle'] + 1)
                        + ' · attempt ' + str(step['attempts']) + '/3'
                        + ' · โมเดลตามแผน: ' + model + '/' + proposal['effort'])
+            self.write('  ความเสี่ยง: ' + proposal['risk'] + ' · เหตุผล: ' + proposal['reason'])
             latest = active if active is not None and active['step_id'] == step['id'] else next(
                 (item for item in reversed(state['history']) if 'checks' in item and item['step_id'] == step['id']), None)
             checked = {} if latest is None else latest['checks']
             for index, check in enumerate(proposal['checks']):
                 evidence = checked.get(index, {})
                 result = 'stale' if evidence.get('id') in state['stale_evidence'] else evidence.get('result', 'pending')
-                self.write('  [' + result + '] ' + check['kind'] + ': ' + check['criterion'])
+                self.write('  [' + result + '] ' + check['kind'] + ': ' + check['criterion'] + ' · check ' + str(index + 1)
+                           + (' · evidence ' + evidence['id'] if evidence.get('id') else ''))
         for i, criterion in enumerate(state['success_criteria']):
-            self.write('เกณฑ์: ' + criterion + ' · หลักฐานที่บันทึก ' + str(len(state['criterion_evidence'].get(i, []))))
+            self.write('เกณฑ์ ' + str(i + 1) + ': ' + criterion + ' · หลักฐานที่บันทึก ' + str(len(state['criterion_evidence'].get(i, []))))
         if active is not None:
             self.write('โมเดลที่ร้องขอใน attempt นี้: ' + json.dumps(active['selection']))
         if request is not None and self.pending is not None:
@@ -1556,6 +1558,29 @@ class ChatShell:
                 if self.workflow_action is None:
                     raise ProbeError('Workflow executor is unavailable; no attempt consumed or dispatched.')
                 self.workflow_action({'action': cmd[1:], 'task_id': self.workflow.task_id})
+            elif cmd == '/verify':
+                if len(values) != 2 or values[1] not in ('pass', 'fail', 'unknown'):
+                    raise ProbeError('Use /verify CHECK_NUMBER pass|fail|unknown (numbers start at 1).')
+                active = state['active_attempt']
+                if state['state'] != 'CHECKING' or active is None or active['status'] != 'completed':
+                    raise ProbeError('Verification requires a confirmed completed attempt.')
+                index = int(values[0]) - 1
+                checks = state['plan']['steps'][state['step_index']]['checks']
+                if not 0 <= index < len(checks) or checks[index]['kind'] not in ('manual', 'rubric'):
+                    raise ProbeError('Only manual/rubric checks accept user verification.')
+                self.workflow.record_check(active['id'], index, origin='manual', result=values[1],
+                    reference='Explicit user verification in Terminal', finding='User recorded ' + values[1])
+            elif cmd == '/finish':
+                if not values:
+                    raise ProbeError('Use /finish CRITERION_NUMBER=EVIDENCE_ID[,EVIDENCE_ID] ...')
+                coverage = {}
+                for value in values:
+                    number, evidence = value.split('=', 1)
+                    index = int(number) - 1
+                    if index in coverage:
+                        raise ProbeError('Duplicate criterion number.')
+                    coverage[index] = evidence.split(',')
+                self.workflow.finish_task(coverage)
             elif cmd == '/mode':
                 if len(values) > 1:
                     raise ProbeError('Use /mode [auto|ask_to_escalate|approve_plan].')
@@ -1570,8 +1595,8 @@ class ChatShell:
                     self.workflow.answer_pause(values[0], {'/continue': 'continue', '/revise': 'revise_scope', '/pause': 'pause'}[cmd])
                 else:
                     raise ProbeError('Choice does not match the current workflow request.')
-        except ProbeError as exc:
-            self.write(str(exc))
+        except (ProbeError, ValueError) as exc:
+            self.write(str(exc) if isinstance(exc, ProbeError) else 'รูปแบบหมายเลขหรือหลักฐานไม่ถูกต้อง')
         self.show_workflow()
 
     def line(self, text):
@@ -1589,7 +1614,7 @@ class ChatShell:
                 self.write('รูปแบบคำสั่งไม่ถูกต้อง')
                 return
             cmd, *values = args
-            if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/status', '/mode',
+            if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/finish', '/status', '/mode',
                                                       '/approve', '/decline', '/pause', '/continue', '/revise'):
                 self.workflow_command(cmd, values)
             elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
@@ -1600,7 +1625,7 @@ class ChatShell:
                            '/confirm-delete TOKEN /acknowledge TOKEN /cancel /exit\n'
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
                 if self.workflow is not None:
-                    self.write('/workflow /next /check /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
+                    self.write('/workflow /next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=EVIDENCE_ID /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
@@ -2912,12 +2937,83 @@ def inspect_local_sessions(project, output, session_id=None):
                   + str(len(checkpoint['criterion_evidence'].get(str(index), []))))
 
 
+def run_workflow_file(path, bindings, mode, execute, input_stream, output):
+    """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
+    with open(path, 'rb') as source:
+        raw = source.read(65537).decode('utf-8')
+    plan = validate_plan(raw)
+    policy = {}
+    for binding in bindings:
+        if '=' not in binding:
+            raise ProbeError('Use --role-model ROLE=MODEL.')
+        role, model = binding.split('=', 1)
+        if role not in ROLE_ORDER or role in policy or not model.strip():
+            raise ProbeError('Use unique --role-model economy|standard|strong=MODEL bindings.')
+        policy[role] = model
+    needed = {'standard'} | {step['role'] for step in plan['steps']}
+    if not needed <= set(policy):
+        raise ProbeError('Explicit role bindings required: ' + ', '.join(sorted(needed)))
+    # Requested efforts are placeholders for preview; native preflight validates actual availability.
+    catalog = [{'model': model, 'defaultReasoningEffort': 'low',
+                'supportedReasoningEfforts': [{'reasoningEffort': effort} for effort in sorted(
+                    {'low'} | {step['effort'] for step in plan['steps'] if policy[step['role']] == model})]}
+               for model in sorted(set(policy.values()))]
+    controller = WorkflowController(raw, catalog, policy, mode)
+    preview = ChatShell(output, catalog=catalog, role_policy=policy, workflow=controller)
+    preview.show_workflow()
+    preview.write('โมเดลข้างต้นเป็นค่าที่ร้องขอ; ยังไม่ได้ตรวจ catalog/quota จริง')
+    if not execute:
+        preview.write('Preview เท่านั้น ไม่เปิด Codex ไม่ใช้โควตา; --execute-workflow เพื่อเริ่มแบบ opt-in')
+        return 0
+    if controller.state != 'READY' or any(check['kind'] not in ('manual', 'rubric')
+            for step in plan['steps'] for check in step['checks']):
+        raise ProbeError('Live explicit plans require no clarifications and manual/rubric checks only.')
+    if any(step['effort'] == 'ultra' for step in plan['steps']):
+        raise ProbeError('Automatic delegation effort is not enabled.')
+    preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · ยัง resume native ไม่ได้')
+    preview.write('ใช้โควตา subscription เมื่อกด /next; พิมพ์ START เพื่อยืนยันแผน หรือข้อความอื่นเพื่อยกเลิก:')
+    output.flush()
+    # Avoid TextIO read-ahead: later input is consumed by run_chat using os.read.
+    confirmation = b''
+    while len(confirmation) <= 256:
+        chunk = os.read(input_stream.fileno(), 1)
+        if not chunk or chunk == b'\n':
+            break
+        confirmation += chunk
+    if confirmation.strip() != b'START':
+        preview.write('ยกเลิกแล้ว ยังไม่เปิด backend')
+        return 0
+    backend = None
+    try:
+        backend = NativeWorkflowConnection(['codex', 'app-server', '--stdio',
+            '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
+            '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
+        host = backend.connect(controller, os.getcwd(), policy)
+        snapshot = backend.preflight()
+        import hashlib
+        with SessionStore(os.getcwd()) as store:
+            record = store.create(plan['goal'], thread_id=backend.thread_id,
+                account_hash=hashlib.sha256(backend.account_id.encode()).hexdigest())
+            preview.write('Session: ' + record['id'] + ' · checkpoint ใช้ตรวจย้อนหลัง; native resume ยังไม่เปิด')
+            with store.workflow(record['id'], snapshot['quota'], snapshot['checked_at'],
+                                snapshot['catalog'], policy, controller=controller):
+                return run_chat(input_stream, output, backend=backend, workflow=controller,
+                                workflow_action=host, catalog=snapshot['catalog'], role_policy=policy)
+    finally:
+        if backend is not None:
+            backend.close()
+
+
 def main():
     import argparse
     import sys
     parser = argparse.ArgumentParser(description='ModelMate Terminal chat: offline by default; --live uses ChatGPT subscription quota.')
     parser.add_argument('prompt', nargs='?', help='initial task text')
     modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
+    parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
+    parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
+    parser.add_argument('--execute-workflow', action='store_true', help='opt-in native workflow; requires START confirmation')
     modes.add_argument('--sessions', action='store_true', help='list local sessions without connecting to Codex')
     modes.add_argument('--show-workflow', metavar='SESSION_ID', help='inspect a cached workflow without resuming it')
     modes.add_argument('--live', action='store_true', help='manual-model live chat using ChatGPT subscription quota')
@@ -2926,6 +3022,20 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if not args.workflow and (args.role_model or args.workflow_mode or args.execute_workflow):
+        parser.error('Workflow options require --workflow PLAN_JSON')
+    if args.workflow:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Workflow uses plan efforts and explicit role bindings; no prompt/model/resume overrides')
+        try:
+            return run_workflow_file(args.workflow, args.role_model, args.workflow_mode or 'ask_to_escalate',
+                                     args.execute_workflow, sys.stdin, sys.stdout)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else 'Cannot load/start explicit workflow.'
+            print('ModelMate workflow: ' + terminal_text(message), file=sys.stderr)
+            return 1
     if args.sessions or args.show_workflow is not None:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Local inspection does not accept prompt, model, resume or effort overrides')
