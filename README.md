@@ -144,7 +144,7 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 ยังไม่มี CLI entry point สำหรับโหลด workflow และยังไม่ต่อกับ native backend จึงไม่มี auto execution ในรุ่นนี้
 รายละเอียดสัญญา trusted host callbacks และข้อจำกัดอยู่ใน [ผลตรวจ P10](docs/VERIFICATION.md)
 
-เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/mode`
+เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/check`, `/mode`
 และคำตอบตาม token เช่น `/approve`, `/decline`, `/continue`, `/revise`, `/pause`
 แสดงแผน โมเดลที่เสนอ ขั้นปัจจุบัน จำนวนรอบ ผลตรวจ และจำนวนหลักฐานของแต่ละเกณฑ์
 การอนุมัติไม่เริ่มงานเอง; `/next` ส่งคำขอไปยัง trusted host ซึ่งต้องตรวจ quota/catalog/model gates
@@ -152,6 +152,16 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 จะขอหยุดและรอ controller terminal event; ยืนยันไม่ได้ภายใน deadline จะออกโดยระบุ outcome unknown
 UI ไม่รับคำยืนยันผลตรวจจากข้อความโมเดล และไม่ให้ model approval แทน tool approval
 คำสั่งเหล่านี้ยังไม่เปิดในแชตปกติหรือ `--live`; host integration ปัจจุบันทดสอบด้วยข้อมูลจำลอง
+
+มี `WorkflowHost` สำหรับเชื่อม controller กับ transport callbacks ที่เชื่อถือได้แล้ว
+host ต้องส่ง preflight ใหม่ และคืน thread/turn binding ก่อนส่ง protocol events เข้ามา
+ลงทะเบียน check ด้วย command/cwd ที่ host ตรวจไว้ก่อน attempt; adapter จะรับผลเฉพาะ
+item ที่มี start/completion ตรงกัน ผลจากคำสั่งอื่นหรือข้อความว่า “tests passed” ไม่ผ่านเป็นหลักฐาน
+ใช้ `/check` ประเมินผลหลัง terminal event; ยังต้องมี host ยืนยัน coverage ของเกณฑ์ก่อน DONE
+`executor_stream` ของ `run_chat` แยกจากข้อความโมเดลและ UI events และรับได้เฉพาะเมื่อผูก WorkflowHost
+ไม่มี built-in native transport หรือ command runner เพิ่ม และยังไม่รับ tool approval ใน workflow
+producer ที่เชื่อถือได้ต้องบังคับ sandbox/approval policy แยกต่างหาก; การลงทะเบียน check ไม่อนุมัติคำสั่ง
+timeout/disconnect ไม่ retry; binding/check registrations ไม่ถูก restore โดยเดา ต้องตรวจ native state ใหม่
 
 
 ## Session และการกลับมาทำต่อ (P11/P12)
@@ -222,3 +232,15 @@ dispatch descriptor/ผล transition หากเขียนดิสก์ไ
 งานที่กำลังรันจะพักเป็น outcome_unknown; งาน DONE เดิมคืนเป็น UNVERIFIED
 host ต้องตรวจ native thread/process/files และหลักฐานปัจจุบันก่อนยืนยันผลหรือทำต่อ
 checkpoint เต็มไฟล์จำกัด 1 MiB และ ledger 4,096 events; เกินเพดานจะไม่บันทึกทับหรือตัดประวัติทิ้ง
+
+ดูข้อมูลที่บันทึกไว้ของโปรเจกต์ปัจจุบันโดยไม่เปิด Codex หรือล็อกอิน:
+
+```bash
+python3 modelmate.py --sessions
+python3 modelmate.py --show-workflow SESSION_ID
+```
+
+`--show-workflow` ใช้กับ session ที่มี workflow checkpoint เท่านั้น แสดงขั้นงาน
+จำนวน attempt และผลตรวจที่บันทึกไว้ ไม่ resume ไม่คืน approval และไม่สร้าง
+state directory หรือ lock เพิ่ม สถานะ `DONE` เป็นผลเก่าใน checkpoint ไม่ใช่
+การตรวจไฟล์หรือ backend ปัจจุบัน คำสั่งอ่านข้อมูลไม่ใช้โควตาโมเดล

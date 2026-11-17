@@ -212,7 +212,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell/workflow host UI MOCK_VERIFIED; native workflow entry point ยังไม่เปิด | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
-| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller/checkpoints/host-injected UI MOCK_VERIFIED; native execution/entry point pending permission gates | จำเป็น |
+| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller/checkpoints/UI/transport-observation host MOCK_VERIFIED; native transport/entry point pending permission gates | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
@@ -354,6 +354,7 @@ Workflow UI milestone: ChatShell/run_chat รับ controller และ trusted
 แสดงแผน/status/check results และรับ /next, model approval, pause/continue/revise ตาม exact token
 ไม่เชื่อ event ที่อ้าง state/DONE จากภายนอก; workflow_changed เป็นสัญญาณให้ UI อ่าน controller เอง
 ยังไม่มี native workflow CLI entry point; ห้ามผูก workflow กับ manual send/backend โดยข้าม integration gates
+WorkflowHost รับ executor_stream ผ่าน selector แยกจาก model text/UI events; /check ประเมินเฉพาะหลักฐาน host-bound
 
 ### P09 — Tool approvals
 
@@ -385,6 +386,9 @@ checks ใช้ผลเครื่องมือจริง; model review �
 ขั้น risky work ต้องมี strong review ตามหลัง ไม่ใช่แค่มี review อยู่ก่อนหน้า
 จบทุกขั้นแล้วยังต้องมี trusted checker จับคู่เกณฑ์สำเร็จกับ accepted evidence IDs จึงเป็น DONE
 การ revise ขั้นเดิมจำกัด objective/role/effort/reason และไม่ล้าง ID/budget/criteria
+WorkflowHost ผูก attempt กับ thread/turn/item และ approved command/cwd; ไม่ใช้ exit code จากคำสั่งอื่นแทน test
+preflight/dispatch/interrupt ยังเป็น trusted callbacks ไม่มี native transport/command runner ในตัว
+request approval ของ workflow ยังไม่รองรับ: ขอหยุดและไม่ตอบ accept; ultra delegation ยังถูกปิด
 
 ผ่านเมื่อ: simple code, plan-heavy code, document task เดินครบ;
 fail 3 attempts แล้วหยุด, model เปลี่ยนชื่อ step ไม่ reset,
@@ -551,3 +555,12 @@ Commit:
 - ติดตั้งไฟล์ runtime เดียวบน Linux/WSL2 ได้พร้อมคู่มือ
 - มีผล evaluation และระบุข้อจำกัดที่ยังมีอย่างตรงไปตรงมา
 - สถานะ release แยกจาก development checklist และผู้ใช้รับรู้ข้อจำกัดบริการ
+
+### Local inspection increment — P08/P12/P15 (2026-11-17)
+
+MOCK_VERIFIED: CLI `--sessions` และ `--show-workflow SESSION_ID` อ่าน metadata
+ของโปรเจกต์ปัจจุบันแบบ read-only โดยไม่เปิด backend ไม่สร้าง directory/lock
+ไม่คืน approval หรือ resume controller แสดงผลตรวจและสถานะเป็น historical data
+เท่านั้น Native workflow entry point และ auto routing ยังไม่เปิด; P03/P09 gates
+ยังต้องมีหลักฐานเพิ่ม ไม่มีการเปลี่ยนสถานะ live gate จากงานนี้
+ตรวจด้วย `tests/test_local_inspection.py` (7 offline tests) และ full offline suite

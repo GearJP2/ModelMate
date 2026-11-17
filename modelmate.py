@@ -898,7 +898,7 @@ class WorkflowController:
         return self._updated()
 
     def pause(self, reason='user_pause'):
-        if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'connection_lost'):
+        if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'connection_lost', 'unsupported_capability'):
             raise ProbeError('Invalid pause reason.')
         if self.state in ('DONE', 'FAILED', 'CLARIFYING'):
             raise ProbeError('Cannot pause a terminal or unclarified task.')
@@ -931,6 +931,262 @@ class WorkflowController:
         self.state = 'CHECKING' if self._active is not None or step is None else 'READY'
         self.reason = None
         return self._updated()
+
+
+class WorkflowHost:
+    """Trusted executor adapter. No built-in native transport, tool approval or process runner."""
+
+    def __init__(self, controller, preflight, dispatch, interrupt, timeout=120):
+        if not isinstance(controller, WorkflowController) or not all(callable(fn) for fn in (preflight, dispatch, interrupt)):
+            raise ProbeError('Workflow host requires a controller and trusted transport callbacks.')
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+            raise ProbeError('Workflow host timeout must be finite and positive.')
+        self.controller = controller
+        self.preflight, self.dispatch, self.interrupt = preflight, dispatch, interrupt
+        self.timeout = timeout
+        self.on_change = None
+        self.catalog, self.role_policy = [], None
+        self._binding = None
+        self._seen = set()
+        self._specs, self._items, self._observations = {}, {}, {}
+        self._terminal = None
+        self._deadline = None
+        self._starting = self._interrupted = False
+        self._connected = True
+
+    def _signal(self):
+        if self.on_change is not None:
+            self.on_change({'type': 'workflow_changed', 'task_id': self.controller.task_id})
+
+    def _fresh(self):
+        data = self.preflight()
+        if not isinstance(data, dict) or set(data) != {'quota', 'checked_at', 'catalog', 'role_policy'}:
+            raise ProbeError('Invalid workflow preflight snapshot.')
+        self.catalog, self.role_policy = copy.deepcopy(data['catalog']), copy.deepcopy(data['role_policy'])
+        return data
+
+    @staticmethod
+    def _checked_binding(binding):
+        if not isinstance(binding, dict) or set(binding) != {'thread_id', 'turn_id'}:
+            raise ProbeError('Missing executor thread/turn binding; outcome unknown.')
+        for value in binding.values():
+            if not isinstance(value, str) or not value.strip() or len(value) > 256:
+                raise ProbeError('Invalid executor identity; outcome unknown.')
+        return copy.deepcopy(binding)
+
+    def configure_check(self, check_index, *, command, cwd):
+        """Register a host-approved check specification; this never authorizes or executes it."""
+        state = self.controller.snapshot()
+        if state['active_attempt'] is not None or state['step_index'] >= len(state['steps']):
+            raise ProbeError('Configure checks before an attempt.')
+        checks = state['plan']['steps'][state['step_index']]['checks']
+        if (type(check_index) is not int or not 0 <= check_index < len(checks)
+                or checks[check_index]['kind'] not in ('test', 'lint')):
+            raise ProbeError('Only declared test/lint checks can bind command observations.')
+        _plan_text(command)
+        _plan_text(cwd)
+        if not os.path.isabs(cwd):
+            raise ProbeError('Check working directory must be absolute.')
+        key = (state['steps'][state['step_index']]['id'], check_index)
+        self._specs[key] = {'command': command, 'cwd': cwd}
+
+    def _request_interrupt(self):
+        if self._binding is not None and self._terminal is None and not self._interrupted:
+            self._interrupted = True
+            self.interrupt(copy.deepcopy(self._binding))
+
+    def _halt(self, reason):
+        if reason != 'user_pause':
+            self._observations = {}
+        try:
+            self._request_interrupt()
+        finally:
+            if self.controller.state not in ('DONE', 'FAILED', 'CLARIFYING'):
+                self.controller.pause(reason)
+            self._signal()
+
+    def __call__(self, action):
+        if (not isinstance(action, dict) or set(action) != {'action', 'task_id'}
+                or action['task_id'] != self.controller.task_id):
+            raise ProbeError('Invalid or foreign workflow host action.')
+        if action['action'] == 'cancel':
+            self._halt('user_pause')
+            return
+        if action['action'] == 'check':
+            self.finish_checks()
+            return
+        if action['action'] != 'next':
+            raise ProbeError('Unsupported workflow host action.')
+        if not self._connected or self._binding is not None or self._starting:
+            raise ProbeError('Executor is disconnected or previous attempt is not reconciled.')
+        if self.controller.state != 'READY':
+            raise ProbeError('Workflow is not READY; no dispatch attempted.')
+        try:
+            data = self._fresh()
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            self.controller.pause('quota_unknown')
+            self._signal()
+            raise
+        state = self.controller.snapshot()
+        if state['plan']['steps'][state['step_index']]['effort'] == 'ultra':
+            self.controller.pause('unsupported_capability')
+            self._signal()
+            return
+        result = self.controller.request_attempt(data['quota'], data['checked_at'], data['catalog'], data['role_policy'])
+        descriptor = result.get('dispatch')
+        if descriptor is None:
+            self._signal()
+            return
+        self._items, self._observations = {}, {}
+        self._terminal, self._deadline = None, None
+        self._interrupted = False
+        self._starting = True
+        try:
+            binding = self._checked_binding(self.dispatch(copy.deepcopy(descriptor)))
+            identity = (binding['thread_id'], binding['turn_id'])
+            if identity in self._seen:
+                raise ProbeError('Executor reused an old turn identity; outcome unknown.')
+            self._binding = dict(binding, attempt_id=descriptor['attempt_id'])
+            self._seen.add(identity)
+            self._items, self._observations = {}, {}
+            self._terminal = None
+            self._interrupted = False
+            self._deadline = time.monotonic() + self.timeout
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            self.controller.pause('connection_lost')
+            self._signal()
+            raise
+        finally:
+            self._starting = False
+        self._signal()
+
+    def reconcile(self, binding, status):
+        """Trusted recovery adapter supplies inspected native identity and terminal status; never model text."""
+        if self._binding is not None or self._starting:
+            raise ProbeError('Cannot replace an already bound executor turn.')
+        active = self.controller.snapshot()['active_attempt']
+        if (active is None or active['status'] not in ('running', 'completed')
+                or status not in ('completed', 'failed', 'interrupted')):
+            raise ProbeError('No active attempt to reconcile.')
+        if active['status'] == 'completed' and status != 'completed':
+            raise ProbeError('Inspected terminal status conflicts with the cached completed attempt.')
+        data = self._fresh()
+        decision = quota_decision(data['quota'], data['checked_at'], expected_account=self.controller._account_id)
+        if decision['state'] != 'allow':
+            raise ProbeError('Recovery preflight paused: ' + decision['reason'])
+        binding = self._checked_binding(binding)
+        self._binding = dict(binding, attempt_id=active['id'])
+        self._seen.add((binding['thread_id'], binding['turn_id']))
+        self._items, self._observations = {}, {}
+        self._terminal = status
+        if active['status'] == 'running':
+            self.controller.finish_attempt(active['id'], status)
+        if status != 'completed':
+            self._binding = None
+        self._signal()
+
+    def observe_native(self, message):
+        """Consume protocol observations from the trusted executor channel, not assistant JSON."""
+        if self._starting:
+            raise ProbeError('Queue executor events until dispatch returns its binding.')
+        if (not isinstance(message, dict) or not isinstance(message.get('params'), dict)
+                or not isinstance(message.get('method'), str) or not message['method']):
+            raise ProbeError('Invalid executor observation.')
+        if 'id' in message:
+            self._halt('unsupported_capability')
+            raise ProbeError('Workflow tool approvals are not enabled; nothing approved.')
+        if self._binding is None:
+            return False
+        params = message['params']
+        method = message.get('method')
+        turn = params.get('turn', {})
+        turn_id = turn.get('id') if method == 'turn/completed' and isinstance(turn, dict) else params.get('turnId')
+        if params.get('threadId') != self._binding['thread_id'] or turn_id != self._binding['turn_id']:
+            return False
+        try:
+            if method == 'turn/completed':
+                status = turn.get('status')
+                if status not in ('completed', 'failed', 'interrupted'):
+                    raise ProbeError('Invalid executor terminal status.')
+                if self._terminal is not None:
+                    if self._terminal != status:
+                        raise ProbeError('Conflicting executor terminal events.')
+                    return False
+                self._terminal = status
+                self.controller.finish_attempt(self._binding['attempt_id'], status)
+                self._deadline = None
+                if status != 'completed':
+                    self._binding = None
+                self._signal()
+                return True
+            if method not in ('item/started', 'item/completed'):
+                return False
+            item = params.get('item')
+            if not isinstance(item, dict):
+                return False
+            if item.get('type') != 'commandExecution':
+                if item.get('id') in self._items.values():
+                    raise ProbeError('Bound command item changed type.')
+                return False
+            if self._terminal is not None:
+                raise ProbeError('Tool observation arrived after its terminal event.')
+            state = self.controller.snapshot()
+            active = state['active_attempt']
+            if active is None or active['id'] != self._binding['attempt_id']:
+                raise ProbeError('Executor/controller attempt identity mismatch.')
+            matching = [index for (sid, index), spec in self._specs.items()
+                        if sid == active['step_id'] and spec == {'command': item.get('command'), 'cwd': item.get('cwd')}]
+            known = {index for index, identity in self._items.items() if identity == item.get('id')}
+            if known and known != set(matching):
+                raise ProbeError('Observed command/cwd changed for a bound check item.')
+            if not matching:
+                return False
+            item_id = item.get('id')
+            if not isinstance(item_id, str) or not item_id or len(item_id) > 256:
+                raise ProbeError('Invalid command item identity.')
+            for index in matching:
+                if method == 'item/started':
+                    if index in self._items and self._items[index] != item_id:
+                        raise ProbeError('Check was repeated within one attempt; use the correction controller.')
+                    self._items[index] = item_id
+                else:
+                    if self._items.get(index) != item_id:
+                        raise ProbeError('Check completion has no matching observed start.')
+                    status, code = item.get('status'), item.get('exitCode')
+                    if status not in ('completed', 'failed', 'declined') or (code is not None and type(code) is not int):
+                        raise ProbeError('Invalid command completion evidence.')
+                    observed = {'item_id': item_id, 'exit_code': code if status == 'completed' or (status == 'failed' and code != 0) else None}
+                    if index in self._observations and self._observations[index] != observed:
+                        raise ProbeError('Conflicting check completion observations.')
+                    self._observations[index] = observed
+            return True
+        except (ProbeError, ValueError, TypeError, KeyError, AttributeError):
+            self._halt('connection_lost')
+            raise
+
+    def finish_checks(self):
+        state = self.controller.snapshot()
+        active = state['active_attempt']
+        if (self._binding is None or self._terminal != 'completed' or state['state'] != 'CHECKING'
+                or active is None or active['id'] != self._binding['attempt_id']):
+            raise ProbeError('No confirmed completed attempt ready for checks.')
+        for index, observed in sorted(self._observations.items()):
+            if index not in active['checks']:
+                self.controller.record_check(active['id'], index, origin='tool', exit_code=observed['exit_code'],
+                    reference='executor command item ' + observed['item_id'],
+                    finding='Observed exact host-bound command completion; no stdout/stderr retained.')
+        self.controller.evaluate_attempt(active['id'])
+        self._binding, self._deadline = None, None
+        self._signal()
+
+    def disconnect(self):
+        self._connected = False
+        self._halt('connection_lost')
+
+    def tick(self):
+        if self._deadline is not None and self._terminal is None and time.monotonic() >= self._deadline:
+            self._halt('connection_lost')
+            raise ProbeError('Workflow executor timed out; outcome unknown; no automatic replay.')
 
 
 def validate_workflow_checkpoint(data):
@@ -1134,6 +1390,10 @@ class ChatShell:
         self.exit_code = 0
         self.workflow = workflow
         self.workflow_action = workflow_action
+        if isinstance(workflow_action, WorkflowHost):
+            if workflow_action.controller is not workflow or workflow_action.on_change is not None:
+                raise ProbeError('Workflow host is already bound or belongs to another controller.')
+            workflow_action.on_change = self.event
 
     def write(self, text):
         self.output.write(terminal_text(text) + '\n')
@@ -1142,7 +1402,7 @@ class ChatShell:
     def start(self, prompt=None):
         if self.workflow is not None:
             self.write('ModelMate · Workflow UI prototype · execution ต้องผ่าน host ที่รองรับ')
-            self.write('/workflow /next /status /mode · /cancel /exit')
+            self.write('/workflow /next /check /status /mode · /cancel /exit')
             self.show_workflow()
         elif getattr(self, 'live', False):
             self.write('ModelMate · live ChatGPT/Codex · read-only + on-request')
@@ -1263,14 +1523,15 @@ class ChatShell:
             if cmd in ('/workflow', '/status'):
                 if values:
                     raise ProbeError('Use /workflow or /status without arguments.')
-            elif cmd == '/next':
+            elif cmd in ('/next', '/check'):
                 if values:
-                    raise ProbeError('Use /next without arguments.')
-                if state['state'] != 'READY':
-                    raise ProbeError('Workflow is not READY; answer its pending choice or wait for the host.')
+                    raise ProbeError('Use ' + cmd + ' without arguments.')
+                expected = 'READY' if cmd == '/next' else 'CHECKING'
+                if state['state'] != expected:
+                    raise ProbeError('Workflow is not ' + expected + '; answer its pending choice or wait for the host.')
                 if self.workflow_action is None:
                     raise ProbeError('Workflow executor is unavailable; no attempt consumed or dispatched.')
-                self.workflow_action({'action': 'next', 'task_id': self.workflow.task_id})
+                self.workflow_action({'action': cmd[1:], 'task_id': self.workflow.task_id})
             elif cmd == '/mode':
                 if len(values) > 1:
                     raise ProbeError('Use /mode [auto|ask_to_escalate|approve_plan].')
@@ -1304,7 +1565,7 @@ class ChatShell:
                 self.write('รูปแบบคำสั่งไม่ถูกต้อง')
                 return
             cmd, *values = args
-            if self.workflow is not None and cmd in ('/workflow', '/next', '/status', '/mode',
+            if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/status', '/mode',
                                                       '/approve', '/decline', '/pause', '/continue', '/revise'):
                 self.workflow_command(cmd, values)
             elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
@@ -1315,7 +1576,7 @@ class ChatShell:
                            '/confirm-delete TOKEN /acknowledge TOKEN /cancel /exit\n'
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
                 if self.workflow is not None:
-                    self.write('/workflow /next /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
+                    self.write('/workflow /next /check /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
@@ -1416,6 +1677,9 @@ class ChatShell:
         if self.workflow is not None and kind not in ('text', 'progress'):
             if kind != 'workflow_changed' or set(message) != {'type', 'task_id'} or message['task_id'] != self.workflow.task_id:
                 raise ProbeError('Workflow event is stale/unsupported; no action approved.')
+            if isinstance(self.workflow_action, WorkflowHost):
+                self.catalog = self.workflow_action.catalog
+                self.role_policy = self.workflow_action.role_policy
             self.show_workflow()
             return
         if kind in ('text', 'progress'):
@@ -1462,10 +1726,12 @@ class ChatShell:
 
 
 def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
-             role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None):
+             role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None, executor_stream=None):
     """Multiplex Linux input and controller events in one owning thread."""
     if workflow is not None and backend is not None:
         raise ProbeError('Native live workflow integration is not enabled.')
+    if executor_stream is not None and (workflow is None or not isinstance(workflow_action, WorkflowHost)):
+        raise ProbeError('Executor observations require an explicitly bound workflow host.')
     if backend is not None:
         send, catalog = backend.action, backend.catalog
     shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action)
@@ -1484,7 +1750,7 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
     selector = selectors.SelectSelector()
     buffers = {}
     try:
-        for stream, kind in ((input_stream, 'input'), (event_stream, 'events')):
+        for stream, kind in ((input_stream, 'input'), (event_stream, 'events'), (executor_stream, 'executor')):
             if stream is not None:
                 selector.register(stream, selectors.EVENT_READ, kind)
                 buffers[kind] = b''
@@ -1513,6 +1779,9 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                             buffers[kind] = b''
                         if kind == 'input':
                             shell.cancel(exit_after=True)
+                        elif kind == 'executor':
+                            workflow_action.disconnect()
+                            raise ProbeError('Workflow executor disconnected; no automatic replay.')
                         else:
                             raise ProbeError('Controller disconnected; no more work can be submitted.')
                         continue
@@ -1523,11 +1792,15 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                         line, buffers[kind] = buffers[kind].split(b'\n', 1)
                         if kind == 'input':
                             shell.line(line.decode('utf-8'))
+                        elif kind == 'executor':
+                            workflow_action.observe_native(json.loads(line))
                         else:
                             shell.event(json.loads(line))
                 if backend is not None:
                     backend.drain()
                     backend.tick()
+                if isinstance(workflow_action, WorkflowHost):
+                    workflow_action.tick()
                 shell.tick()
             except KeyboardInterrupt:
                 shell.cancel()
@@ -1536,6 +1809,11 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
         phase = getattr(backend, 'phase', 'terminal')
         shell.write('Terminal หยุด [' + phase + ']: ' + reason + '; ผลงานที่กำลังทำยังไม่ทราบ')
         if shell.workflow is not None:
+            if isinstance(workflow_action, WorkflowHost):
+                try:
+                    workflow_action.disconnect()
+                except (ProbeError, OSError):
+                    pass
             try:
                 shell.cancel(exit_after=True)
             except (ProbeError, OSError):
@@ -1548,6 +1826,8 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
         return 1
     finally:
         selector.close()
+        if isinstance(workflow_action, WorkflowHost):
+            workflow_action.on_change = None
     return shell.exit_code
 
 
@@ -2089,12 +2369,13 @@ SESSION_STATES = {'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'AWAITING_TO
 class SessionStore:
     """Local metadata only. Locks are held for the full edit context, not per write."""
 
-    def __init__(self, project, state_home=None):
+    def __init__(self, project, state_home=None, *, read_only=False):
         import hashlib
         import stat
         from pathlib import Path
         self._fd = None
         self._locked_ids = set()
+        self.read_only = read_only
         self.project = str(Path(project).resolve(strict=True))
         if not Path(self.project).is_dir():
             raise ProbeError('Session project must be a directory.')
@@ -2103,16 +2384,18 @@ class SessionStore:
         if not home.is_absolute():
             raise ProbeError('State home must be an absolute path.')
         root = home / 'modelmate'
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not read_only:
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
         root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
             if stat.S_IMODE(os.fstat(root_fd).st_mode) & 0o077:
                 raise ProbeError('ModelMate state directory must be private (0700).')
             key = hashlib.sha256(os.fsencode(self.project)).hexdigest()
-            try:
-                os.mkdir(key, mode=0o700, dir_fd=root_fd)
-            except FileExistsError:
-                pass
+            if not read_only:
+                try:
+                    os.mkdir(key, mode=0o700, dir_fd=root_fd)
+                except FileExistsError:
+                    pass
             project_fd = os.open(key, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                                  dir_fd=root_fd)
             if stat.S_IMODE(os.fstat(project_fd).st_mode) & 0o077:
@@ -2122,6 +2405,10 @@ class SessionStore:
             self.directory = root / key
         finally:
             os.close(root_fd)
+
+    def _require_writable(self):
+        if self.read_only:
+            raise ProbeError('Session store is read-only.')
 
     def close(self):
         if self._fd is not None:
@@ -2221,6 +2508,7 @@ class SessionStore:
 
     @contextmanager
     def _lock(self, session_id):
+        self._require_writable()
         import fcntl
         name = self._name(session_id)
         fd = self._open_file(name + '.lock', os.O_RDWR | os.O_CREAT)
@@ -2254,6 +2542,7 @@ class SessionStore:
         return self._validate(record, session_id)
 
     def save(self, record):
+        self._require_writable()
         import uuid
         if not isinstance(record, dict):
             raise ProbeError('Invalid session metadata.')
@@ -2380,6 +2669,7 @@ class SessionStore:
                 controller._persist = closed
 
     def remove(self, session_id):
+        self._require_writable()
         name = self._name(session_id)
         if session_id not in self._locked_ids:
             raise ProbeError('Deleting metadata requires the session lock.')
@@ -2403,17 +2693,82 @@ class SessionStore:
 
 
 
+def inspect_local_sessions(project, output, session_id=None):
+    """Read cached metadata without opening a backend or restoring approval state."""
+    def write(text):
+        output.write(terminal_text(text) + '\n')
+
+    try:
+        store = SessionStore(project, read_only=True)
+    except FileNotFoundError:
+        if session_id is not None:
+            raise ProbeError('No local session store for this project.')
+        write('ไม่มี session ที่บันทึกไว้ในโปรเจกต์นี้')
+        return
+    with store:
+        if session_id is None:
+            records = store.list_sessions()
+            write('Local sessions · สถานะที่บันทึกไว้ ไม่ใช่สถานะ backend ปัจจุบัน')
+            for record in records:
+                write(record['id'] + ' · ' + record['title'] + ' · ' + record['state']
+                      + ' · ' + record['updated_at'])
+            if not records:
+                write('ไม่มี session ที่บันทึกไว้ในโปรเจกต์นี้')
+            return
+        record = store.read(session_id)
+        checkpoint = record.get('workflow')
+        if checkpoint is None:
+            raise ProbeError('This session has no workflow checkpoint.')
+        # Reading validates the full checkpoint; display only task data, never account/approval fields.
+        plan = validate_plan(checkpoint['plan'])
+        write('Workflow checkpoint · ข้อมูลเก่าในเครื่อง ยังไม่ได้ตรวจ backend หรือไฟล์งานใหม่')
+        write('งาน: ' + plan['goal'])
+        write('สถานะที่บันทึก: ' + checkpoint['state'] + ' · โหมด: ' + checkpoint['mode'])
+        write('บันทึกเมื่อ: ' + record['updated_at'])
+        if checkpoint['reason']:
+            write('เหตุผล: ' + checkpoint['reason'])
+        if checkpoint['active_attempt'] is not None:
+            write('มี attempt ค้างใน checkpoint; ผลปัจจุบันยังไม่ทราบ ห้าม replay อัตโนมัติ')
+        for index, (step, proposal) in enumerate(zip(checkpoint['steps'], plan['steps'])):
+            write(str(index + 1) + '. ' + proposal['objective'] + ' · ' + step['state']
+                  + ' · รอบ ' + str(step['cycle'] + 1) + ' · attempt ' + str(step['attempts']) + '/3')
+            latest = checkpoint['active_attempt']
+            if latest is None or latest['step_id'] != step['id']:
+                latest = next((item for item in reversed(checkpoint['history'])
+                               if 'checks' in item and item['step_id'] == step['id']), None)
+            checked = {} if latest is None else {e['check_index']: e for e in latest['checks']}
+            for number, check in enumerate(proposal['checks']):
+                write('  [' + checked.get(number, {}).get('result', 'pending') + '] '
+                      + check['kind'] + ': ' + check['criterion'])
+        for index, criterion in enumerate(plan['success_criteria']):
+            write('เกณฑ์: ' + criterion + ' · หลักฐานที่บันทึก '
+                  + str(len(checkpoint['criterion_evidence'].get(str(index), []))))
+
+
 def main():
     import argparse
     import sys
     parser = argparse.ArgumentParser(description='ModelMate Terminal chat: offline by default; --live uses ChatGPT subscription quota.')
     parser.add_argument('prompt', nargs='?', help='initial task text')
-    parser.add_argument('--live', action='store_true', help='manual-model live chat using ChatGPT subscription quota')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--sessions', action='store_true', help='list local sessions without connecting to Codex')
+    modes.add_argument('--show-workflow', metavar='SESSION_ID', help='inspect a cached workflow without resuming it')
+    modes.add_argument('--live', action='store_true', help='manual-model live chat using ChatGPT subscription quota')
     parser.add_argument('--model', help='explicit model ID for --live')
     parser.add_argument('--effort', default='low', help='explicit effort for --live (default: low)')
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
-    parser.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
+    modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.sessions or args.show_workflow is not None:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Local inspection does not accept prompt, model, resume or effort overrides')
+        try:
+            inspect_local_sessions(os.getcwd(), sys.stdout, args.show_workflow)
+            return 0
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else 'Cannot read local session metadata.'
+            print('ModelMate local: ' + terminal_text(message), file=sys.stderr)
+            return 1
     if args.live and (args.doctor or not args.model):
         parser.error('--live requires --model and cannot be combined with --doctor')
     if args.model and not args.live:

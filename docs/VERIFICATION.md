@@ -924,3 +924,98 @@ clarification input, broad replan editor, workflow CLI loading/resume entry poin
 automatic multi-step loop is added. P08/P10/P12 remain IN_PROGRESS. Next work is
 the gated host/execution and explicit entry-point integration; source/mock evidence
 must not be presented as live workflow verification.
+
+## P10 workflow host and executor observations — MOCK_VERIFIED
+
+Added WorkflowHost as the trusted adapter between WorkflowController, the injected
+UI and transport callbacks. It has no built-in native transport, subprocess runner,
+tool approval handler or CLI entry point. Existing native/manual mixing guards
+remain in place. All checks below used synthetic callbacks/protocols, not Codex.
+
+Dispatch contract:
+
+- A host preflight callback returns the current quota snapshot/timestamp, catalog
+  and reviewed role bindings. The controller's quota/account/model gates still run
+  before a slot is consumed. Preflight failure pauses without dispatch. Ultra
+  delegation remains unsupported and consumes no slot.
+- The dispatch callback receives a defensive copy of the inert descriptor only
+  after the controller's durable attempt checkpoint succeeds. It returns exactly
+  a thread/turn identity before delivering events. Reentrant events must be queued
+  by the transport; reused/invalid bindings and unknown start outcomes fail closed.
+- Cancel invokes the trusted interrupt callback at most once for the known binding.
+  An acknowledgement does not finish the attempt. Bound-turn timeout, disconnect
+  or malformed protocol pauses with unknown outcome and never replays dispatch.
+- A trusted recovery adapter can reconcile inspected identity/terminal status with
+  the original active attempt, retaining its consumed slot. A completed cached
+  attempt can continue checks without another model turn. Native inspection,
+  current-file reassessment and account/source authenticity are host obligations;
+  the adapter does not infer identity from model text or automatically reconnect.
+
+Evidence contract:
+
+- `configure_check` registers an exact host-reviewed command and absolute cwd for
+  an existing test/lint criterion before the attempt. It grants no tool permission
+  and does not run a command. The producer must enforce native sandbox/approval
+  policy independently; current workflow approval requests interrupt/refuse rather
+  than receiving accept.
+- `observe_native` accepts only observations from the trusted executor channel.
+  Matching thread/turn, command item identity, observed start, command and cwd are
+  required. Unrelated successful commands and assistant text fill no checks.
+- Identical duplicate completions are idempotent. Changed command/cwd/type, missing
+  starts, conflicting results, repeated check invocations within one attempt and
+  contradictory terminal events pause rather than silently accepting a later pass.
+  Native tools may already have started before observation; this is not a no-tools
+  sandbox or proof that all internal tool loops are bounded.
+- `/check` records matched observations only after a confirmed completed turn, then
+  evaluates that attempt. Declined/missing exit codes remain unknown; nonzero
+  observed exits fail. Raw stdout/stderr, commands and cwd are not copied into
+  evidence. Missing manual/source adapters leave UNVERIFIED rather than inventing
+  findings. Task DONE still requires an explicit trusted criterion-coverage check.
+- Transport bindings, approved check specifications and unrecorded observations
+  are process-local. Recovery does not reuse another attempt's cached observations.
+  Durable native thread/turn binding integration remains future work.
+
+`run_chat(..., executor_stream=...)` multiplexes this channel only for an explicitly
+bound WorkflowHost; it is separate from display-only model text and UI change
+signals. The host drives same-task UI updates on the owning loop and has a bounded
+turn deadline. Parse/EOF failures invalidate the host and request interruption.
+No backend/model event can directly declare workflow DONE or grant tool access.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_workflow_host.py -v`: 25 passed.
+- `python3 -m unittest discover -s tests -q`: 266 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Checks cover exact observations versus unrelated commands, foreign thread/turn IDs,
+missing starts, changed metadata/types, duplicate/conflicting results, declined
+checks, correction limits, explicit model approval/next, unknown start recovery,
+cancel acknowledgement, timeout/disconnect without replay, unsupported tool approval,
+stale binding/check-cache isolation, reentrant events, ultra refusal, fresh preflight,
+and a durable checkpoint before the dispatch callback. Real synthetic subprocesses
+exercise separate executor-pipe events, UI `/check`, EOF and invalid JSON. Raw
+private-output markers never become evidence or Terminal output.
+
+Limits: this is still a trusted in-process API and observation checker, not a
+security boundary against arbitrary Python callbacks or dishonest producers.
+Exact command matching does not prove the chosen command meaningfully tests a
+criterion; the host must review specifications and source observations. Transport
+callbacks must bound their own start RPC timeouts, enforce permissions and queue
+events until binding. No model inference, live workflow or private-web gate was
+run or marked passed. Native transport, durable native bindings, workflow loading
+entry point, full tool approval/check adapters and classifier remain pending.
+P08/P09/P10/P12 remain IN_PROGRESS.
+
+### Local session/workflow inspection (2026-11-17, uncommitted working tree)
+
+- `python3 -m unittest discover -s tests -p test_local_inspection.py -v`: 7 offline tests.
+- ตรวจ missing store ไม่สร้าง directory; read-only mutations ไม่สร้าง lock;
+  checkpoint bytes/mtime ไม่เปลี่ยน; project isolation, symlink/corrupt metadata
+  ปฏิเสธโดยไม่แก้ไฟล์; CLI ใช้ได้เมื่อ PATH ไม่มี Codex และปฏิเสธ option ที่ชนกัน
+- RUNNING แสดงผลปัจจุบัน unknown; DONE แสดงว่าเป็นผลเก่า ไม่คืน grants/token
+  ไม่ restore controller ไม่ทดสอบ live inference หรือ native workflow execution
+
+Publication preflight (2026-11-18): full offline suite 273/273 passed;
+`python3 -m py_compile modelmate.py doctor.py verify.py` and
+`git diff --check` passed. No live inference was run.
