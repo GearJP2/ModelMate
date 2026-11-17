@@ -212,7 +212,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell/workflow host UI MOCK_VERIFIED; native workflow entry point ยังไม่เปิด | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
-| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller/checkpoints/UI/transport-observation host MOCK_VERIFIED; native transport/entry point pending permission gates | จำเป็น |
+| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller/checkpoints/UI/native transport MOCK_VERIFIED; public entry point pending live permission gates | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
@@ -569,3 +569,19 @@ P10/P12 recovery fix (2026-11-18): restored checks are stale until explicit trus
 host revalidation. Attempt evaluation and task completion enforce this in the
 shared controller, including restored DONE and partially checked attempts.
 No native transport or live gate is enabled by this change.
+
+### P10 native transport increment (2026-11-18)
+
+MOCK_VERIFIED: NativeWorkflowConnection เชื่อม explicit plan/controller กับ native
+protocol และ Terminal selector; queue events ระหว่าง synchronous turn/start จนผูก
+thread/turn ได้ ตรวจ subscription/catalog/quota และ effective thread permissions
+reuse thread ใน correction; decline tool approvals แล้วพัก; ไม่ replay unknown start
+เฉพาะ new READY workflow และ ephemeral thread; native resume/classifier/auto routing
+และ public CLI entry point ยังไม่เปิด ไม่มี live gate ผ่านจากข้อมูลจำลอง
+Next: opt-in synthetic live verifier สำหรับ transport/deny/interrupt/context recall
+ก่อนพิจารณาเปิด CLI โดยต้องตรวจ stronger managed policy และ private-web gates แยก
+
+PR #6 display fix (2026-11-18): native transport forwards completed assistant
+messages to UI as text only, scoped to current binding and deduplicated per turn.
+Foreign/late messages and text claims cannot advance workflow or supply evidence.
+No native permission or live gate status changes.

@@ -1752,14 +1752,19 @@ class ChatShell:
 def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
              role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None, executor_stream=None):
     """Multiplex Linux input and controller events in one owning thread."""
+    native_workflow = isinstance(backend, NativeWorkflowConnection)
     if workflow is not None and backend is not None:
-        raise ProbeError('Native live workflow integration is not enabled.')
+        if (not native_workflow or backend.host is None or backend.host is not workflow_action
+                or backend.host.controller is not workflow):
+            raise ProbeError('Native live workflow integration requires its bound transport host.')
+    elif native_workflow:
+        raise ProbeError('Native workflow transport requires its controller and host.')
     if executor_stream is not None and (workflow is None or not isinstance(workflow_action, WorkflowHost)):
         raise ProbeError('Executor observations require an explicitly bound workflow host.')
-    if backend is not None:
+    if backend is not None and not native_workflow:
         send, catalog = backend.action, backend.catalog
     shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action)
-    if backend is not None:
+    if backend is not None and not native_workflow:
         backend.shell = shell
         shell.live = True
         shell.mode = 'manual'
@@ -1860,6 +1865,16 @@ THREAD_SOURCE_KINDS = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAge
                        'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown']
 
 
+def native_thread_options(selection, cwd):
+    return {
+        'model': selection['model'], 'modelProvider': 'openai', 'cwd': cwd,
+        'sandbox': 'read-only', 'approvalPolicy': 'on-request', 'approvalsReviewer': 'user',
+        'serviceTier': 'default',
+        'config': {'web_search': 'disabled', 'agents.enabled': False,
+                   'features.apps': False, 'features.plugins': False,
+                   'features.multi_agent_v2': False},
+    }
+
 class LiveChatConnection(Connection):
     """Manual-model chat using native Codex read-only/on-request permissions."""
     allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume',
@@ -1915,14 +1930,7 @@ class LiveChatConnection(Connection):
         self.checkpoint(thread_id=self.thread_id, mode='manual', state='READY', pause_reason=None)
 
     def _thread_options(self):
-        return {
-            'model': self.selection['model'], 'modelProvider': 'openai', 'cwd': self.cwd,
-            'sandbox': 'read-only', 'approvalPolicy': 'on-request', 'approvalsReviewer': 'user',
-            'serviceTier': 'default',
-            'config': {'web_search': 'disabled', 'agents.enabled': False,
-                       'features.apps': False, 'features.plugins': False,
-                       'features.multi_agent_v2': False},
-        }
+        return native_thread_options(self.selection, self.cwd)
 
     def _account_hash(self):
         import hashlib
@@ -2379,6 +2387,141 @@ class LiveChatConnection(Connection):
             raise ProbeError('Live RPC timed out; outcome unknown; do not replay automatically.')
 
 
+
+
+class NativeWorkflowConnection(Connection):
+    """Opt-in transport for an explicit host plan; no classifier or native approval acceptance."""
+    allowed_methods = Connection.allowed_methods | {'thread/start', 'turn/start', 'turn/interrupt'}
+
+    def __init__(self, command, timeout=15):
+        super().__init__(command, timeout)
+        self.host = None
+        self.thread_id = None
+        self.account_id = None
+        self._events = []
+        self._event_bytes = 0
+        self._sent_attempts = set()
+        self._displayed = set()
+
+    def connect(self, controller, cwd, role_policy=None):
+        if self.host is not None or self.thread_id is not None:
+            raise ProbeError('Workflow transport is already connected.')
+        if not isinstance(controller, WorkflowController):
+            raise ProbeError('Workflow transport requires an explicit validated controller.')
+        state = controller.snapshot()
+        if state['active_attempt'] is not None or state['state'] != 'READY':
+            raise ProbeError('Native transport supports a new READY workflow only; recovery is not enabled.')
+        catalog = inspect(self)['models']
+        baseline = controller._approvals.baseline
+        select_model(catalog, baseline['model'], baseline['effort'])
+        self.cwd = os.path.realpath(cwd)
+        self.role_policy = copy.deepcopy(role_policy)
+        self.account_id = controller._account_id
+        self.preflight()
+        result = self.request('thread/start', dict(native_thread_options(baseline, self.cwd), ephemeral=True))
+        thread = result.get('thread')
+        if (not isinstance(thread, dict) or not isinstance(thread.get('id'), str) or not thread['id']
+                or thread.get('cwd') != self.cwd or thread.get('modelProvider') != 'openai'
+                or thread.get('ephemeral') is not True
+                or result.get('approvalPolicy') != 'on-request' or result.get('approvalsReviewer') != 'user'
+                or result.get('sandbox', {}).get('type') != 'readOnly'):
+            raise ProbeError('Workflow thread permissions/identity were not confirmed; no turn started.')
+        self.thread_id = thread['id']
+        self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
+        return self.host
+
+    def preflight(self):
+        checked_at = time.monotonic()
+        account = self.request('account/read', {'refreshToken': False}).get('account')
+        if not isinstance(account, dict) or account.get('type') != 'chatgpt':
+            raise ProbeError('Workflow requires ChatGPT subscription login.')
+        quota = self.request('account/rateLimits/read')
+        catalog = read_models(self)
+        decision = quota_decision(quota, checked_at, expected_account=self.account_id)
+        if decision['state'] != 'allow':
+            raise ProbeError('Workflow preflight paused: ' + decision['reason'])
+        self.account_id = decision['account_id']
+        return dict(quota=quota, checked_at=checked_at, catalog=catalog, role_policy=self.role_policy)
+
+    def dispatch(self, descriptor):
+        active = self.host.controller.snapshot()['active_attempt'] if self.host is not None else None
+        if (active is None or active['id'] != descriptor.get('attempt_id') or active['status'] != 'running'
+                or descriptor.get('selection') != active['selection']):
+            raise ProbeError('No controller-reserved workflow attempt; nothing dispatched.')
+        if active['id'] in self._sent_attempts or any('id' in message for message in self._events):
+            raise ProbeError('Attempt already sent or unresolved server request; no replay permitted.')
+        selection = descriptor['selection']
+        if selection['effort'] == 'ultra':
+            raise ProbeError('Workflow delegation is disabled.')
+        self._sent_attempts.add(active['id'])
+        self._displayed.clear()
+        result = self.request('turn/start', {'threadId': self.thread_id, 'model': selection['model'],
+            'effort': selection['effort'], 'input': [{'type': 'text', 'text': json.dumps({
+                'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step']}, ensure_ascii=False)}]})
+        turn = result.get('turn')
+        if not isinstance(turn, dict) or not isinstance(turn.get('id'), str) or not turn['id']:
+            raise ProbeError('Missing workflow turn identity; outcome unknown.')
+        return {'thread_id': self.thread_id, 'turn_id': turn['id']}
+
+    def interrupt(self, binding):
+        if binding['thread_id'] != self.thread_id:
+            raise ProbeError('Cannot interrupt a foreign workflow thread.')
+        self.request('turn/interrupt', {'threadId': self.thread_id, 'turnId': binding['turn_id']})
+
+    def handle_event(self, message):
+        # RPCs can receive events before turn/start returns; bind first, then drain.
+        size = len(json.dumps(message).encode())
+        if len(self._events) >= 4096 or self._event_bytes + size > 4 * 1024 * 1024:
+            raise ProbeError('Workflow event queue exceeded limit; outcome unknown.')
+        self._events.append(message)
+        self._event_bytes += size
+
+    def _display_answer(self, message):
+        binding = self.host._binding
+        params = message.get('params', {})
+        if (binding is None or self.host._terminal is not None
+                or message.get('method') != 'item/completed'
+                or params.get('threadId') != binding['thread_id']
+                or params.get('turnId') != binding['turn_id']):
+            return
+        item = params.get('item')
+        if not isinstance(item, dict) or item.get('type') != 'agentMessage':
+            return
+        item_id, text = item.get('id'), item.get('text')
+        if (not isinstance(item_id, str) or not item_id or len(item_id) > 256
+                or not isinstance(text, str) or len(text.encode()) > 4 * 1024 * 1024):
+            raise ProbeError('Invalid workflow assistant text.')
+        if item_id in self._displayed or self.host.on_change is None:
+            return
+        if len(self._displayed) >= 10000:
+            raise ProbeError('Too many workflow assistant messages.')
+        self._displayed.add(item_id)
+        # Display completed text only: deltas never become evidence or duplicate the final answer.
+        self.host.on_change({'type': 'text', 'text': text})
+
+    def drain(self):
+        while True:
+            message = self.pop_message()
+            if message is None:
+                break
+            if 'method' not in message:
+                raise ProbeError('Unexpected workflow RPC response.')
+            self.handle_event(message)
+        while self._events:
+            message = self._events.pop(0)
+            self._event_bytes -= len(json.dumps(message).encode())
+            if 'id' in message:
+                if message['method'] in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval'):
+                    self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                self.host.observe_native(message)
+            else:
+                self.host.observe_native(message)
+                self._display_answer(message)
+        if self.stdout_closed:
+            raise ProbeError('Workflow backend disconnected; no automatic replay.')
+
+    def tick(self):
+        self.host.tick()
 
 
 SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'criteria',
