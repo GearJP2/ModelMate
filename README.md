@@ -244,3 +244,9 @@ python3 modelmate.py --show-workflow SESSION_ID
 จำนวน attempt และผลตรวจที่บันทึกไว้ ไม่ resume ไม่คืน approval และไม่สร้าง
 state directory หรือ lock เพิ่ม สถานะ `DONE` เป็นผลเก่าใน checkpoint ไม่ใช่
 การตรวจไฟล์หรือ backend ปัจจุบัน คำสั่งอ่านข้อมูลไม่ใช้โควตาโมเดล
+
+เมื่อ restore workflow ผลตรวจเดิมเป็น `stale` จน trusted host ตรวจหลักฐานปัจจุบัน
+แล้วเรียก `revalidate_check(evidence_id, origin=..., exit_code=..., reference=..., finding=...)`
+ให้ครบก่อนประเมิน attempt หรือจบงาน การยืนยัน terminal status อย่างเดียวไม่ยืนยันผลตรวจ
+ผลใหม่ต้องทราบและตรงกับผลเดิม มิฉะนั้นคง unverified เพื่อให้ host จัดการต่ออย่างชัดเจน
+การยืนยันนี้ไม่ถูกเก็บข้าม restore และไม่สั่งรันคำสั่งหรือโมเดลซ้ำเอง

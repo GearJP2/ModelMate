@@ -252,6 +252,11 @@ class WorkflowHostTests(unittest.TestCase):
         host.reconcile(dict(self.binding), 'completed')
         self.assertEqual(restored.state, 'PAUSED')
         restored.answer_pause(restored.snapshot()['pause_token'], 'continue')
+        with self.assertRaisesRegex(ProbeError, 'revalidation'):
+            host({'action': 'check', 'task_id': restored.task_id})
+        evidence = restored.snapshot()['active_attempt']['checks'][0]
+        restored.revalidate_check(evidence['id'], origin='tool', exit_code=0,
+                                  reference='fresh host observation', finding='rechecked current result')
         host({'action': 'check', 'task_id': restored.task_id})
         self.assertEqual(restored.snapshot()['steps'][0]['state'], 'DONE')
         self.assertEqual(restored.snapshot()['steps'][0]['attempts'], 1)

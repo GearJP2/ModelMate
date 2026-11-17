@@ -564,3 +564,8 @@ MOCK_VERIFIED: CLI `--sessions` และ `--show-workflow SESSION_ID` อ่า
 เท่านั้น Native workflow entry point และ auto routing ยังไม่เปิด; P03/P09 gates
 ยังต้องมีหลักฐานเพิ่ม ไม่มีการเปลี่ยนสถานะ live gate จากงานนี้
 ตรวจด้วย `tests/test_local_inspection.py` (7 offline tests) และ full offline suite
+
+P10/P12 recovery fix (2026-11-18): restored checks are stale until explicit trusted
+host revalidation. Attempt evaluation and task completion enforce this in the
+shared controller, including restored DONE and partially checked attempts.
+No native transport or live gate is enabled by this change.

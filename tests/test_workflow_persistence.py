@@ -110,6 +110,10 @@ class WorkflowPersistenceTests(unittest.TestCase):
             self.assertEqual(restored.snapshot()['active_attempt']['checks'][1]['id'], original['id'])
             self.assertNotIn('dispatch', self.begin(restored))
             restored.record_check(aid, 0, origin='tool', exit_code=0, reference='check', finding='passed')
+            with self.assertRaisesRegex(ProbeError, 'revalidation'):
+                restored.evaluate_attempt(aid)
+            restored.revalidate_check(original['id'], origin='tool', exit_code=0,
+                                      reference='fresh check', finding='observed current pass')
             restored.evaluate_attempt(aid)
         with self.attached() as last:
             self.assertEqual(last.snapshot()['step_index'], 1)
@@ -125,6 +129,27 @@ class WorkflowPersistenceTests(unittest.TestCase):
             self.assertEqual(state['reason'], 'restored_result_unverified')
             self.assertEqual(state['criterion_evidence'], {0: [evidence['id']]})
             self.assertEqual(state['history'][0]['checks'][0]['id'], evidence['id'])
+
+    def test_restored_done_requires_each_check_revalidated_and_confirmation_is_not_saved(self):
+        with self.attached(self.new()) as c:
+            _, evidence = self.check(c)
+            c.finish_task({0: [evidence['id']]})
+        with self.attached() as restored:
+            with self.assertRaisesRegex(ProbeError, 'revalidation'):
+                restored.finish_task({0: [evidence['id']]})
+            for origin, code in [('tool', 1), ('tool', None), ('model_review', 0)]:
+                with self.assertRaises(ProbeError):
+                    restored.revalidate_check(evidence['id'], origin=origin, exit_code=code,
+                                              reference='fresh check', finding='observed result')
+            self.assertIn(evidence['id'], restored.snapshot()['stale_evidence'])
+            restored.revalidate_check(evidence['id'], origin='tool', exit_code=0,
+                                      reference='fresh check', finding='observed current pass')
+            restored.finish_task({0: [evidence['id']]})
+            self.assertEqual(restored.state, 'DONE')
+        with self.attached() as again:
+            self.assertIn(evidence['id'], again.snapshot()['stale_evidence'])
+            with self.assertRaisesRegex(ProbeError, 'revalidation'):
+                again.finish_task({0: [evidence['id']]})
 
     def test_model_grants_tokens_and_raw_account_id_never_persist(self):
         plan = copy.deepcopy(PLAN);plan['steps'][0]['role'] = 'strong'

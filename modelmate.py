@@ -661,6 +661,7 @@ class WorkflowController:
         self._model_request = None
         self._account_id = None
         self._coverage = {}
+        self._stale_evidence = set()
         self._persist = None
 
     def _updated(self):
@@ -706,6 +707,9 @@ class WorkflowController:
             if 'checks' in attempt:
                 attempt['checks'] = {e['check_index']: e for e in attempt['checks']}
         restored._coverage = {int(i): ids for i, ids in data['criterion_evidence'].items()}
+        restored._stale_evidence = {e['id'] for step in restored._steps for e in step['evidence']}
+        if restored._active is not None:
+            restored._stale_evidence.update(e['id'] for e in restored._active['checks'].values())
         if data['state'] == 'CLARIFYING':
             restored.state = 'CLARIFYING'
         elif data['state'] in ('DONE', 'FAILED'):
@@ -726,7 +730,8 @@ class WorkflowController:
             'choices': ['continue', 'revise_scope', 'pause'] if self.state == 'PAUSED' else [],
             'plan': self._plan,
             'clarifications': self._plan['clarifications'],
-            'success_criteria': self._plan['success_criteria'], 'criterion_evidence': self._coverage})
+            'success_criteria': self._plan['success_criteria'], 'criterion_evidence': self._coverage,
+            'stale_evidence': sorted(self._stale_evidence)})
 
     def _pause(self, reason):
         import uuid
@@ -853,10 +858,26 @@ class WorkflowController:
         self._updated()
         return copy.deepcopy(evidence)
 
+    def revalidate_check(self, evidence_id, *, origin, result='unknown', exit_code=None, reference, finding):
+        """Trusted host explicitly rechecks saved evidence; confirmation never survives another restore."""
+        evidence = [e for step in self._steps for e in step['evidence']]
+        if self._active is not None:
+            evidence.extend(self._active['checks'].values())
+        saved = next((e for e in evidence if e['id'] == evidence_id), None)
+        if saved is None or evidence_id not in self._stale_evidence:
+            raise ProbeError('No stale workflow evidence with this identity.')
+        observed = workflow_check_result(saved['kind'], origin, result, exit_code, reference, finding)
+        if origin != saved['origin'] or observed == 'unknown' or observed != saved['result']:
+            raise ProbeError('Revalidation disagrees with saved evidence; keep outcome unverified.')
+        self._stale_evidence.remove(evidence_id)
+        return self.snapshot()
+
     def evaluate_attempt(self, attempt_id):
         attempt = self._attempt(attempt_id)
         if self.state != 'CHECKING' or attempt['status'] != 'completed':
             raise ProbeError('Attempt is not ready for evaluation.')
+        if any(e['id'] in self._stale_evidence for e in attempt['checks'].values()):
+            raise ProbeError('Saved checks require explicit host revalidation before evaluation.')
         step = self._steps[self._index]
         expected = len(self._plan['steps'][self._index]['checks'])
         results = [e['result'] for e in attempt['checks'].values()]
@@ -885,6 +906,8 @@ class WorkflowController:
         if not isinstance(coverage, dict) or any(type(i) is not int or not 0 <= i < len(
                 self._plan['success_criteria']) for i in coverage):
             raise ProbeError('Invalid success-criterion coverage.')
+        if any(e['id'] in self._stale_evidence for step in self._steps for e in step['evidence']):
+            raise ProbeError('Saved checks require explicit host revalidation before task completion.')
         accepted = {e['id'] for step in self._steps for e in step['evidence'] if e['result'] == 'pass'}
         for ids in coverage.values():
             if (not isinstance(ids, list) or not ids or len(ids) > 384
@@ -1498,7 +1521,8 @@ class ChatShell:
                 (item for item in reversed(state['history']) if 'checks' in item and item['step_id'] == step['id']), None)
             checked = {} if latest is None else latest['checks']
             for index, check in enumerate(proposal['checks']):
-                result = checked.get(index, {}).get('result', 'pending')
+                evidence = checked.get(index, {})
+                result = 'stale' if evidence.get('id') in state['stale_evidence'] else evidence.get('result', 'pending')
                 self.write('  [' + result + '] ' + check['kind'] + ': ' + check['criterion'])
         for i, criterion in enumerate(state['success_criteria']):
             self.write('เกณฑ์: ' + criterion + ' · หลักฐานที่บันทึก ' + str(len(state['criterion_evidence'].get(i, []))))

@@ -1019,3 +1019,17 @@ P08/P09/P10/P12 remain IN_PROGRESS.
 Publication preflight (2026-11-18): full offline suite 273/273 passed;
 `python3 -m py_compile modelmate.py doctor.py verify.py` and
 `git diff --check` passed. No live inference was run.
+
+### PR #5 recovery evidence fix (2026-11-18)
+
+Restored active and accepted step evidence is now stale in memory. The controller
+blocks attempt evaluation and task completion until the trusted host explicitly
+revalidates each saved check against a known matching current result. Terminal
+reconciliation alone does not clear this requirement. Confirmations do not survive
+another restore; persisted evidence/ledger are retained unchanged. Mismatched or
+unknown results remain blocked; no implicit tool execution or model retry occurs.
+Regression coverage checks partial-check recovery, terminal-only reconciliation,
+restored DONE, rejected mismatches, and revalidation expiry after another restore.
+
+Validation: 91 targeted workflow tests and 274/274 full offline tests passed.
+Runtime/doctor/verifier compilation and `git diff --check` passed. No live inference.
