@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from modelmate import (Connection, ProbeError, inspect, ensure_quota, refresh_quota,
-                       select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS)
+                       select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS, NativeWorkflowConnection, WorkflowController, diagnostic_code)
 
 
 APPROVALS = {
@@ -413,6 +413,199 @@ def probe_sessions(model, timeout):
             print('Session probe stopped at ' + phase + '; scratch retained: ' + str(directory), file=sys.stderr)
 
 
+class WorkflowVerificationConnection(NativeWorkflowConnection):
+    """Observe only bound denial replies; never retain native traces or assistant text in reports."""
+    def __init__(self, command, timeout):
+        super().__init__(command, timeout)
+        self._requests = {}
+        self.declined = 0
+
+    def handle_event(self, message):
+        super().handle_event(message)
+        if 'id' in message and message.get('method') in APPROVALS:
+            if len(self._requests) >= 100:
+                raise ProbeError('Too many workflow approval requests.')
+            self._requests[message['id']] = message['params']
+
+    def send(self, message):
+        super().send(message)
+        if message.get('result') == {'decision': 'decline'}:
+            params = self._requests.pop(message.get('id'), {})
+            binding = self.host._binding if self.host is not None else None
+            if (binding is not None and params.get('threadId') == binding['thread_id']
+                    and params.get('turnId') == binding['turn_id']):
+                self.declined += 1
+
+
+def wait_workflow(connection, seconds, *, allow_denial=False):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            connection.drain()
+        except ProbeError as exc:
+            if not (allow_denial and connection.declined
+                    and str(exc) == 'Workflow tool approvals are not enabled; nothing approved.'
+                    and connection.host.controller.reason == 'unsupported_capability'):
+                raise
+        if connection.host._terminal is not None:
+            return connection.host._terminal
+        for key, _ in connection.selector.select(min(.1, max(0, deadline - time.monotonic()))):
+            connection.read_ready(key.fileobj)
+    raise ProbeError('Workflow probe timed out; outcome unknown; no replay.')
+
+
+def probe_workflow(model, timeout):
+    """Up to four synthetic turns; no retries, durable sessions or user-project changes."""
+    directory = Path(tempfile.mkdtemp(prefix='modelmate-workflow-verify-'))
+    sentinel = directory / 'sentinel.txt'
+    sentinel.write_text('synthetic sentinel\n')
+    connection = None
+    safe_cleanup = True
+    result = {key: 'unverified' for key in ('answerDisplay', 'contextRecall', 'approvalDenial',
+              'sentinelUnchanged', 'cancel', 'disconnectGuard')}
+    result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None,
+        runtimeSha256=hashlib.sha256(Path(sys.modules[NativeWorkflowConnection.__module__].__file__).read_bytes()).hexdigest(),
+        verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        scope='At most four synthetic turns in ephemeral threads. Disconnect guard is local only; '
+              'not network-drop recovery, all tool paths, backend dispatch telemetry or service-side erasure.')
+    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"',
+               '-c', 'approvals_reviewer="user"']
+    # This is an explicit requested selection; connect/preflight validates the real catalog before inference.
+    catalog = [{'model': model, 'defaultReasoningEffort': 'low',
+                'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}]
+    policy = {role: model for role in ('economy', 'standard', 'strong')}
+
+    def make_controller(prompts):
+        return WorkflowController(json.dumps({'version': 1, 'goal': 'Synthetic workflow verification',
+            'clarifications': [], 'success_criteria': ['Harness observed synthetic outcomes'],
+            'steps': [{'kind': 'implement', 'objective': prompt, 'role': 'standard', 'effort': 'low',
+                       'risk': 'normal', 'reason': 'Explicit opt-in synthetic probe',
+                       'checks': [{'kind': 'manual', 'criterion': 'Harness verifies the synthetic answer'}]}
+                      for prompt in prompts]}), catalog, policy)
+
+    def close_connection():
+        nonlocal connection, safe_cleanup
+        if connection is None:
+            return
+        try:
+            host = connection.host
+            if host is not None and host.controller.snapshot()['active_attempt'] is not None and host._terminal is None:
+                previously_safe = safe_cleanup
+                safe_cleanup = False
+                host({'action': 'cancel', 'task_id': host.controller.task_id})
+                wait_workflow(connection, 5, allow_denial=True)
+                safe_cleanup = previously_safe
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            safe_cleanup = False
+        finally:
+            connection.close()
+            connection = None
+
+    try:
+        nonce = secrets.token_hex(16)
+        prompts = ['Remember this synthetic code: ' + nonce + '. Reply only ACK. Do not use tools or network.',
+                   'Reply only with the synthetic code from the preceding step. Do not use tools or network.',
+                   'Use a command tool to replace sentinel.txt in the current working directory with PROBE_CHANGED. '
+                   'Request permission if the sandbox requires it. Do not touch any other file or use network.']
+        result['phase'] = 'context_connect'
+        controller = make_controller(prompts)
+        connection = WorkflowVerificationConnection(command, timeout)
+        host = connection.connect(controller, directory, policy)
+        host.timeout = timeout
+        output = io.StringIO()
+        shell = ChatShell(output, workflow=controller, workflow_action=host)
+        answers = []
+        def observe(message):
+            before = output.tell()
+            shell.event(message)
+            if message.get('type') == 'text':
+                answers.append(output.getvalue()[before:].strip())
+        host.on_change = observe
+        for index in (0, 1):
+            result['phase'] = 'answer_display' if index == 0 else 'context_recall'
+            output.seek(0); output.truncate()
+            host({'action': 'next', 'task_id': controller.task_id})
+            status = wait_workflow(connection, timeout)
+            expected = 'ACK' if index == 0 else nonce
+            # Compare text written by the UI for text events, excluding plan/status output.
+            if status != 'completed' or answers != [expected]:
+                result['answerDisplay' if index == 0 else 'contextRecall'] = 'failed'
+                return result
+            result['answerDisplay' if index == 0 else 'contextRecall'] = 'passed'
+            active = controller.snapshot()['active_attempt']
+            controller.record_check(active['id'], 0, origin='manual', result='pass',
+                                    reference='synthetic harness comparison', finding='Exact expected answer observed')
+            host({'action': 'check', 'task_id': controller.task_id})
+            answers.clear()
+        result['phase'] = 'approval_denial'
+        host({'action': 'next', 'task_id': controller.task_id})
+        wait_workflow(connection, timeout, allow_denial=True)
+        if connection.declined:
+            result['approvalDenial'] = 'passed'
+        try:
+            check_session_sentinel(directory, sentinel)
+        except (ProbeError, OSError, UnicodeError):
+            result['approvalDenial'] = result['sentinelUnchanged'] = 'failed'
+            return result
+        result['sentinelUnchanged'] = 'passed'
+        close_connection()
+        if not safe_cleanup:
+            return result
+        result['phase'] = 'cancel_connect'
+        controller = make_controller(['Do not use tools or network. Write the integers 1 through 10000, one per line.'])
+        connection = WorkflowVerificationConnection(command, timeout)
+        host = connection.connect(controller, directory, policy)
+        host.timeout = timeout
+        result['phase'] = 'cancel'
+        host({'action': 'next', 'task_id': controller.task_id})
+        host({'action': 'cancel', 'task_id': controller.task_id})
+        status = wait_workflow(connection, timeout)
+        result['cancel'] = 'passed' if status == 'interrupted' else 'unverified'
+        if status != 'interrupted':
+            return result
+        result['phase'] = 'disconnect_guard'
+        sent = len(connection._sent_attempts)
+        reached = {'preflight': False, 'dispatch': False}
+        def blocked_preflight():
+            reached['preflight'] = True
+            raise ProbeError('Disconnect probe reached preflight; no inference permitted.')
+        def blocked_dispatch(_):
+            reached['dispatch'] = True
+            raise ProbeError('Disconnect probe reached dispatch; no inference permitted.')
+        # Tripwires prevent extra inference even when the disconnect guard is broken.
+        host.preflight, host.dispatch = blocked_preflight, blocked_dispatch
+        host.disconnect()
+        controller.answer_pause(controller.snapshot()['pause_token'], 'continue')
+        if controller.state != 'READY':
+            return result
+        try:
+            host({'action': 'next', 'task_id': controller.task_id})
+        except ProbeError:
+            result['disconnectGuard'] = 'passed' if (not any(reached.values())
+                and len(connection._sent_attempts) == sent and controller.state == 'READY'
+                and host._connected is False and host._binding is None) else 'failed'
+        else:
+            result['disconnectGuard'] = 'failed'
+        result['phase'] = 'finished'
+        return result
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result['diagnostic'] = diagnostic_code(exc)
+        return result
+    finally:
+        close_connection()
+        try:
+            check_session_sentinel(directory, sentinel)
+            result['sentinelUnchanged'] = 'passed'
+        except (ProbeError, OSError, UnicodeError):
+            result['sentinelUnchanged'] = 'failed'
+        if safe_cleanup and all(result.get(key) == 'passed' for key in (
+                'answerDisplay', 'contextRecall', 'approvalDenial', 'sentinelUnchanged', 'cancel', 'disconnectGuard')):
+            shutil.rmtree(directory)
+        else:
+            print('Workflow probe incomplete; inspect Codex before retrying. Scratch retained: ' + str(directory), file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
@@ -421,17 +614,24 @@ def main():
                         help='one live turn testing whether harmless printf runs without approval; no handoff rerun')
     parser.add_argument('--probe-sessions', metavar='MODEL',
                         help='two live turns across reconnect; delete only the harness-created scratch thread')
+    parser.add_argument('--probe-workflow', metavar='MODEL',
+                        help='up to four synthetic native workflow turns: answers, denial and cancel; local disconnect guard')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if not args.run_live:
         parser.print_help()
         return 0
-    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions)) != 1:
-        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL')
+    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow)) != 1:
+        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_workflow:
+            result = probe_workflow(args.probe_workflow, args.timeout)
+            print(json.dumps(result, indent=2))
+            return 0 if all(result.get(key) == 'passed' for key in (
+                'answerDisplay', 'contextRecall', 'approvalDenial', 'sentinelUnchanged', 'cancel', 'disconnectGuard')) else 1
         if args.probe_sessions:
             result = probe_sessions(args.probe_sessions, args.timeout)
             print(json.dumps(result, indent=2))

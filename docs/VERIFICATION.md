@@ -1068,3 +1068,95 @@ The subprocess Terminal-loop test now asserts that an answer is visible once.
 Validation: 14 native workflow tests and 288/288 full offline tests passed;
 `python3 -m py_compile modelmate.py doctor.py verify.py` and `git diff --check`
 passed. No live inference was run.
+
+### Native workflow opt-in verifier (2026-11-18)
+
+Command: `python3 verify.py --run-live --probe-workflow MODEL` (requested effort low).
+At most four synthetic turns; no inference without --run-live, no hidden retry.
+Uses the real NativeWorkflowConnection/WorkflowHost/ChatShell path against Codex
+only when explicitly opted in. It does not read the user's project for prompts.
+Only the harness-created scratch sentinel is targeted by a write-denial test.
+No tool approval acceptance or sandbox expansion is implemented.
+
+Eight offline test methods use synthetic subprocess App Servers: four-turn happy
+path, no approval (unverified), changed sentinel (failed), recall mismatch, cancel
+race (unverified), timeout/failed turn without replay, auth rejection, and CLI
+opt-in/exit behavior. Reports omit raw answers, nonce, account/thread IDs and paths;
+include runtime/verifier hashes and requested selection with reportedModels null.
+Scratch path appears only on stderr when inspection is required. Cleanup waits for
+terminal confirmation where possible; uncertainty retains scratch and never retries.
+
+The disconnect result covers a local host guard only. It does not verify dropped
+network recovery, all command/patch/tool paths, backend dispatch or remote erasure.
+Live results are recorded below. Auto routing and public native workflow CLI
+remain gated; this narrow probe does not pass every native permission gate.
+
+Validation: eight targeted workflow-probe tests and 296/296 full offline tests
+passed; `python3 -m py_compile modelmate.py doctor.py verify.py` and
+`git diff --check` passed. Help-only invocation without --run-live was checked.
+No live inference was run.
+
+### User-supplied native workflow live result (2026-11-18)
+
+Historical pre-review report (partially superseded below). The user ran:
+`python3 verify.py --run-live --probe-workflow gpt-6.1-sol`
+and supplied the JSON report. All six checks reported passed: answerDisplay,
+contextRecall, approvalDenial, sentinelUnchanged, cancel, disconnectGuard; phase
+finished. Requested gpt-6.1-sol/low; reportedModels null. Process exit code was not
+provided. This is user-supplied evidence, not an independent agent-run live test.
+
+Runtime SHA-256: `d820c340a7d8cb2e7b1b431c7d41ed2aead539a8aebfb9d9f8fee31b3c36a914`
+Verifier SHA-256: `e00dadc70142de5807488f0df43719aab44c563281f25ebdcb39a852b906c91f`
+Both hashes match the local files at commit `326a819`.
+
+Scope remains at most four synthetic turns in ephemeral threads. Disconnect guard
+is local only; not network-drop recovery, all tool paths, backend dispatch telemetry
+or service-side erasure. Public workflow CLI/auto routing and other permission/web
+gates are not enabled by this result. The pasted Terminal output had an extra
+`hello` before the JSON. No literal hello or matching print path was found in the
+verifier; its origin and whether it was stdout, stderr or Terminal echo are unknown.
+
+### PR #7 — verifier false-positive fixes (2026-11-18)
+
+Review demonstrated two false positives: the old probe still passed when disconnect
+was replaced with a no-op, and when ChatShell dropped text events. Both new
+regression tests failed against the old verifier and passed after the fix.
+
+Answer comparison now reads the text written by ChatShell during each text event,
+not the event payload. Plan/status output is excluded. The disconnect probe resumes
+the synthetic controller to READY after confirmed interruption, then checks that
+submission is refused before preflight/dispatch. Both callbacks are replaced with
+tripwires, so a broken guard cannot start a fifth live turn. A cancellation race
+leaves disconnect unverified instead of testing from an unsuitable state.
+
+The earlier user-supplied six-pass JSON remains recorded as historical output at
+its exact hashes. Its answerDisplay and disconnectGuard claims are not accepted as
+live verification of those capabilities. The fixed verifier requires new opt-in
+live evidence; no new inference was run as part of this fix. Other earlier results
+remain scoped to their original tested version and synthetic actions.
+
+Validation: 10 targeted probe tests and 298/298 full offline tests passed;
+runtime/doctor/verifier compilation and `git diff --check` passed.
+
+
+### Fixed verifier — user-supplied live rerun (2026-11-18)
+
+Scoped LIVE_VERIFIED: after the PR #7 fixes, the user ran
+`python3 verify.py --run-live --probe-workflow gpt-6.1-sol` again and supplied
+JSON with answerDisplay, contextRecall, approvalDenial, sentinelUnchanged, cancel
+and disconnectGuard all passed; phase finished. Requested gpt-6.1-sol/low;
+reportedModels null. Process exit code was not provided. Evidence was supplied by
+the user, not independently rerun by the agent.
+
+Runtime SHA-256: `d820c340a7d8cb2e7b1b431c7d41ed2aead539a8aebfb9d9f8fee31b3c36a914`
+Verifier SHA-256: `acd3db1d9fe448165e90556fbe68d2c1626a418561dfa16ec3e76d58698a21cd`
+Both match local files at commit `2679ca7`. This rerun supplies scoped evidence
+for the corrected rendered-answer and READY-state disconnect tests; the earlier
+verifier's false-positive claims remain superseded.
+
+Scope: at most four synthetic turns in ephemeral threads. Disconnect guard is
+local only, with preflight/dispatch tripwires. It does not verify network-drop
+recovery, all tool paths, backend dispatch telemetry or service-side erasure.
+No public native workflow CLI, auto routing, native recovery or private-web gate
+is enabled by this result. This evidence update changes documentation only;
+`git diff --check` passed; no additional inference was run by the agent.

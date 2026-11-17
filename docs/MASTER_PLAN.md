@@ -585,3 +585,34 @@ PR #6 display fix (2026-11-18): native transport forwards completed assistant
 messages to UI as text only, scoped to current binding and deduplicated per turn.
 Foreign/late messages and text claims cannot advance workflow or supply evidence.
 No native permission or live gate status changes.
+
+### P10 native workflow verification harness (2026-11-18)
+
+MOCK_VERIFIED: `verify.py --run-live --probe-workflow MODEL` ใช้ native transport
+จริงในเส้นทาง opt-in; offline tests ใช้ fake App Server เท่านั้น สูงสุด 4 turns
+ใน ephemeral threads: exact displayed ACK/recall, approval denial + sentinel,
+confirmed interruption และ local disconnect/no-new-dispatch guard ไม่มี retry
+ไม่เกิด approval/cancel race เป็น UNVERIFIED; unknown outcome เก็บ scratch
+No live gate passed: ผู้ใช้ต้องรันคำสั่ง live และตรวจหลักฐาน version/hash ก่อน
+เปิด native workflow CLI; network-drop recovery และ tool paths อื่นยังไม่พิสูจน์
+
+P10 scoped LIVE_VERIFIED update (2026-11-18): user-supplied workflow probe reports
+all six checks passed at commit 326a819; runtime/verifier hashes match local files.
+See VERIFICATION.md for hashes, provenance and scope. This verifies the synthetic
+happy path and local disconnect guard only; full G2/G3, network recovery, native
+workflow resume, classifier and public CLI remain gated. Next eligible work is a
+review of the verifier/evidence and an explicit-plan CLI design constrained to
+verified capabilities, without claiming full auto routing readiness.
+
+PR #7 review correction (2026-11-18): answerDisplay/disconnectGuard in the original
+live report could be false positives. Those two live claims are UNVERIFIED pending
+a run with the fixed verifier. Offline regression tests now reject missing UI output
+and a no-op disconnect; the latter uses READY state and preflight/dispatch tripwires
+without additional inference. This supersedes the earlier blanket six-check claim.
+
+
+P10 fixed-probe evidence update (2026-11-18): user-supplied rerun at commit 2679ca7
+reports all six checks passed, including actual rendered answers and the corrected
+READY-state local disconnect probe. Runtime/verifier hashes match local files;
+see VERIFICATION.md. Scoped LIVE_VERIFIED for this probe only. Full permission/web
+and native recovery gates remain open; this does not enable auto routing or CLI.

@@ -269,3 +269,30 @@ Native workflow แสดงข้อความจาก `agentMessage` ที
 ปัจจุบันเพียงครั้งเดียวต่อ item ผ่าน UI ที่กรอง terminal controls ไม่พิมพ์ delta ซ้ำ
 ข้อความเป็นข้อมูลแสดงผลเท่านั้น ไม่ยืนยัน checks หรือเปลี่ยนสถานะงาน และไม่ถูก
 คัดลอกลง checkpoint; ข้อความจาก thread/turn อื่นหรือหลัง terminal event ถูกละทิ้ง
+
+### ทดสอบ native workflow จริงแบบ opt-in
+
+```bash
+python3 verify.py --run-live --probe-workflow gpt-6.1-sol
+```
+
+ใช้ได้หลังติดตั้ง Codex และล็อกอิน ChatGPT; ใช้โควตา subscription สูงสุด 4 turns
+ที่ effort low ไม่มี retry: จำรหัส/ถามกลับ 2 turns, ทดลองปฏิเสธการเขียน
+`sentinel.txt` ในโฟลเดอร์ scratch ที่ verifier สร้าง 1 turn และ cancel 1 turn
+ไม่ใช้โปรเจกต์ปัจจุบันเป็นพื้นที่ทดสอบ ไม่อนุมัติคำขอเครื่องมือหรือขยาย sandbox
+
+ผล JSON แยก `passed`, `failed`, `unverified` พร้อม hashes ของ runtime/verifier
+หากไม่เกิด approval หรือ turn จบก่อน cancel จะเป็น unverified ไม่ใช่ผ่าน
+exit 0 เฉพาะทุกการตรวจผ่าน; exit 1 เมื่อมี failed/unverified อย่ารันซ้ำอัตโนมัติ
+กรณีไม่ครบจะเก็บ scratch พร้อมพิมพ์ตำแหน่งทาง stderr เพื่อตรวจ ก่อนลองใหม่ให้
+ตรวจสถานะ Codex เดิมด้วย เพราะ timeout ไม่ได้ยืนยันว่าหยุดแล้ว
+
+`disconnectGuard` ทดสอบเฉพาะ local host ปฏิเสธ dispatch หลัง disconnect
+ไม่ใช่หลักฐาน network-drop recovery ผลนี้ไม่พิสูจน์ทุก tool path, actual model
+backend dispatch หรือการลบข้อมูลทั้งหมดฝั่งบริการ; ephemeral ไม่ใช่ delete guarantee
+การผ่าน verifier ยังไม่เปิด auto routing/native workflow CLI โดยอัตโนมัติ
+
+Verifier ตรวจคำตอบจากข้อความที่ UI เขียนจริง แยกจากแผน/status และตรวจ disconnect
+จากสถานะ READY พร้อม tripwire ป้องกันการเรียกโมเดลเพิ่มแม้ guard เสีย
+ผล `answerDisplay`/`disconnectGuard` จาก verifier ก่อนแก้ PR #7 ยังไม่ถือเป็น
+หลักฐาน live สำหรับสองหัวข้อนี้ ต้องใช้ผลจาก verifier ที่แก้แล้วพร้อม hash ใหม่
