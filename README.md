@@ -140,8 +140,18 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 
 มี `WorkflowController` สำหรับทดสอบลำดับขั้น/ผลตรวจ/งบแก้ไขแบบออฟไลน์แล้ว
 ผูกกับ `SessionStore.workflow(...)` เพื่อบันทึกแต่ละ transition และคืนสถานะข้าม process ได้
-ยังไม่ต่อเข้าคำสั่งแชตหรือ backend จึงยังไม่มี auto execution ในรุ่นนี้
+มี Workflow UI แบบ host-injected ผ่าน `run_chat(..., workflow=controller, workflow_action=host)` แล้ว
+ยังไม่มี CLI entry point สำหรับโหลด workflow และยังไม่ต่อกับ native backend จึงไม่มี auto execution ในรุ่นนี้
 รายละเอียดสัญญา trusted host callbacks และข้อจำกัดอยู่ใน [ผลตรวจ P10](docs/VERIFICATION.md)
+
+เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/mode`
+และคำตอบตาม token เช่น `/approve`, `/decline`, `/continue`, `/revise`, `/pause`
+แสดงแผน โมเดลที่เสนอ ขั้นปัจจุบัน จำนวนรอบ ผลตรวจ และจำนวนหลักฐานของแต่ละเกณฑ์
+การอนุมัติไม่เริ่มงานเอง; `/next` ส่งคำขอไปยัง trusted host ซึ่งต้องตรวจ quota/catalog/model gates
+ถ้าไม่มี host จะไม่ใช้ attempt slot หรือส่งงานใด ๆ `/cancel` และ `/exit` ขณะ active
+จะขอหยุดและรอ controller terminal event; ยืนยันไม่ได้ภายใน deadline จะออกโดยระบุ outcome unknown
+UI ไม่รับคำยืนยันผลตรวจจากข้อความโมเดล และไม่ให้ model approval แทน tool approval
+คำสั่งเหล่านี้ยังไม่เปิดในแชตปกติหรือ `--live`; host integration ปัจจุบันทดสอบด้วยข้อมูลจำลอง
 
 
 ## Session และการกลับมาทำต่อ (P11/P12)

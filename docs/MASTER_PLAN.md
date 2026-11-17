@@ -210,9 +210,9 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
 | P06 | Plan schema / classifier / routing | P04, P05 | IN_PROGRESS: validator/preparation MOCK_VERIFIED; live classifier รอ P03 | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
-| P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell MOCK_VERIFIED; integration รอ P09/P11/P12 | ไม่จำเป็นถ้าไม่แตะ policy |
+| P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell/workflow host UI MOCK_VERIFIED; native workflow entry point ยังไม่เปิด | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
-| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller + workflow checkpoints MOCK_VERIFIED; execution/CLI integration pending permission gates | จำเป็น |
+| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller/checkpoints/host-injected UI MOCK_VERIFIED; native execution/entry point pending permission gates | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
@@ -349,6 +349,11 @@ UI ต้องรับ approval/cancel ขณะมี events โดยไม�
 ผ่านเมื่อ: fake conversation หลาย turn, input ระหว่าง streaming,
 Ctrl+C/EOF ระหว่างรอ approval, invalid slash command ไม่ส่งเป็นงานโดยไม่ตั้งใจ
 ไม่รวม: full-screen TUI, syntax highlighter หรือ UI framework
+
+Workflow UI milestone: ChatShell/run_chat รับ controller และ trusted workflow_action callback
+แสดงแผน/status/check results และรับ /next, model approval, pause/continue/revise ตาม exact token
+ไม่เชื่อ event ที่อ้าง state/DONE จากภายนอก; workflow_changed เป็นสัญญาณให้ UI อ่าน controller เอง
+ยังไม่มี native workflow CLI entry point; ห้ามผูก workflow กับ manual send/backend โดยข้าม integration gates
 
 ### P09 — Tool approvals
 

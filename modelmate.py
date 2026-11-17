@@ -724,6 +724,7 @@ class WorkflowController:
             'active_attempt': self._active, 'history': self._history,
             'model_request': self._model_request, 'pause_token': self._pause_token,
             'choices': ['continue', 'revise_scope', 'pause'] if self.state == 'PAUSED' else [],
+            'plan': self._plan,
             'clarifications': self._plan['clarifications'],
             'success_criteria': self._plan['success_criteria'], 'criterion_evidence': self._coverage})
 
@@ -774,6 +775,20 @@ class WorkflowController:
             self.state = 'READY'
             return self._updated()
         return self._pause('model_selection_declined')
+
+    def change_mode(self, mode):
+        if mode not in ('auto', 'ask_to_escalate', 'approve_plan'):
+            raise ProbeError('Invalid workflow mode.')
+        if self._active is not None or self.state in ('DONE', 'FAILED'):
+            raise ProbeError('Cannot change mode during an active or finished attempt.')
+        self.mode = mode
+        self._approvals._invalidate()
+        self._model_request = None
+        if self.state == 'AWAITING_MODEL_APPROVAL':
+            self.state = 'READY'
+        if self.state == 'PAUSED':
+            return self._pause(self.reason)
+        return self._updated()
 
     def revise_step(self, raw):
         """Rename or change selection without replacing identity, criteria or budget."""
@@ -1096,7 +1111,11 @@ def terminal_text(value):
 class ChatShell:
     """Single-owner Terminal state; an optional trusted controller receives actions."""
 
-    def __init__(self, output, send=None, catalog=None, role_policy=None):
+    def __init__(self, output, send=None, catalog=None, role_policy=None, *, workflow=None, workflow_action=None):
+        if workflow is not None and (not isinstance(workflow, WorkflowController) or send is not None):
+            raise ProbeError('Workflow UI requires a controller and cannot share a manual executor.')
+        if workflow_action is not None and (workflow is None or not callable(workflow_action)):
+            raise ProbeError('Invalid workflow host callback.')
         self.output = output
         self.send = send
         self.catalog = [] if catalog is None else catalog
@@ -1113,13 +1132,19 @@ class ChatShell:
         self.route = None
         self.stop_deadline = None
         self.exit_code = 0
+        self.workflow = workflow
+        self.workflow_action = workflow_action
 
     def write(self, text):
         self.output.write(terminal_text(text) + '\n')
         self.output.flush()
 
     def start(self, prompt=None):
-        if getattr(self, 'live', False):
+        if self.workflow is not None:
+            self.write('ModelMate · Workflow UI prototype · execution ต้องผ่าน host ที่รองรับ')
+            self.write('/workflow /next /status /mode · /cancel /exit')
+            self.show_workflow()
+        elif getattr(self, 'live', False):
             self.write('ModelMate · live ChatGPT/Codex · read-only + on-request')
             self.write('คำสั่งที่ sandbox อนุญาตทำงานได้เอง; การขยายสิทธิ์จะถามก่อน')
             self.write('เลือกโมเดลเองในรุ่นนี้; ยังไม่มี auto routing · /help /exit')
@@ -1134,6 +1159,29 @@ class ChatShell:
             self.line(prompt)
 
     def cancel(self, exit_after=False):
+        if self.workflow is not None:
+            self.exiting = self.exiting or exit_after
+            self.show_workflow(render=False)
+            if self.active:
+                if not self.stopping:
+                    self.stopping = True
+                    self.stop_deadline = time.monotonic() + 5
+                    self.write('กำลังขอหยุด workflow — ยังไม่ยืนยันว่าหยุดแล้ว')
+                    try:
+                        if self.workflow_action is not None:
+                            self.workflow_action({'action': 'cancel', 'task_id': self.workflow.task_id})
+                    finally:
+                        current = self.workflow.snapshot()['active_attempt']
+                        if current is not None and current['status'] == 'running':
+                            self.workflow.pause()
+            elif self.pending is not None and self.pending['kind'] == 'workflow_pause':
+                self.workflow.answer_pause(self.pending['token'], 'pause')
+            elif self.pending is not None and self.pending['kind'] == 'workflow_model':
+                self.workflow.answer_model(self.pending['token'], 'pause')
+            elif self.workflow.state not in ('DONE', 'FAILED', 'CLARIFYING'):
+                self.workflow.pause()
+            self.show_workflow()
+            return
         self.pending = None
         if getattr(self, 'sessions', None):
             self.sessions('/cancel', [])
@@ -1156,6 +1204,91 @@ class ChatShell:
             self.exit_code = 130
             self.closed = True
 
+    def show_workflow(self, render=True):
+        state = self.workflow.snapshot()
+        active, request = state['active_attempt'], state['model_request']
+        self.active = active is not None and active['status'] == 'running'
+        self.mode = state['mode']
+        self.pending = None
+        if state['state'] == 'AWAITING_MODEL_APPROVAL' and request is not None:
+            self.pending = {'kind': 'workflow_model', 'token': request['token']}
+        elif state['state'] == 'PAUSED' and not self.active and state['pause_token'] is not None:
+            self.pending = {'kind': 'workflow_pause', 'token': state['pause_token']}
+        if not self.active:
+            self.stopping = False
+            self.stop_deadline = None
+            if self.exiting:
+                self.closed = True
+        if not render:
+            return state
+        self.write('งาน: ' + state['plan']['goal'])
+        self.write('สถานะ: ' + state['state'] + ' · โหมด: ' + state['mode']
+                   + (' · เหตุผล: ' + state['reason'] if state['reason'] else ''))
+        for i, (step, proposal) in enumerate(zip(state['steps'], state['plan']['steps'])):
+            marker = '→' if i == state['step_index'] else ' '
+            try:
+                model = select_role(self.catalog, proposal['role'], self.role_policy, proposal['effort'])['model']
+            except ProbeError:
+                model = 'ยัง resolve โมเดลไม่ได้'
+            self.write(marker + ' ' + str(i + 1) + '. ' + proposal['kind'] + ': ' + proposal['objective']
+                       + ' · ' + step['state'] + ' · รอบ ' + str(step['cycle'] + 1)
+                       + ' · attempt ' + str(step['attempts']) + '/3'
+                       + ' · โมเดลตามแผน: ' + model + '/' + proposal['effort'])
+            latest = active if active is not None and active['step_id'] == step['id'] else next(
+                (item for item in reversed(state['history']) if 'checks' in item and item['step_id'] == step['id']), None)
+            checked = {} if latest is None else latest['checks']
+            for index, check in enumerate(proposal['checks']):
+                result = checked.get(index, {}).get('result', 'pending')
+                self.write('  [' + result + '] ' + check['kind'] + ': ' + check['criterion'])
+        for i, criterion in enumerate(state['success_criteria']):
+            self.write('เกณฑ์: ' + criterion + ' · หลักฐานที่บันทึก ' + str(len(state['criterion_evidence'].get(i, []))))
+        if active is not None:
+            self.write('โมเดลที่ร้องขอใน attempt นี้: ' + json.dumps(active['selection']))
+        if request is not None and self.pending is not None:
+            self.write('โมเดลที่เสนอ: ' + json.dumps(request['selection']) + ' · ' + request['reason'])
+            self.write('/approve ' + request['token'] + ' · /decline ' + request['token'] + ' · /pause ' + request['token'])
+        elif self.pending is not None:
+            token = self.pending['token']
+            self.write('/continue ' + token + ' · /revise ' + token + ' · /pause ' + token)
+        if state['state'] == 'CLARIFYING':
+            for question in state['clarifications']:
+                self.write('ต้องชี้แจง: ' + question)
+        if self.active and state['state'] == 'PAUSED':
+            self.write('ผลขั้นงานยังไม่ทราบ ต้องรอ host ยืนยัน terminal event ก่อนทำต่อ')
+        return state
+
+    def workflow_command(self, cmd, values):
+        state = self.show_workflow(render=False)
+        try:
+            if cmd in ('/workflow', '/status'):
+                if values:
+                    raise ProbeError('Use /workflow or /status without arguments.')
+            elif cmd == '/next':
+                if values:
+                    raise ProbeError('Use /next without arguments.')
+                if state['state'] != 'READY':
+                    raise ProbeError('Workflow is not READY; answer its pending choice or wait for the host.')
+                if self.workflow_action is None:
+                    raise ProbeError('Workflow executor is unavailable; no attempt consumed or dispatched.')
+                self.workflow_action({'action': 'next', 'task_id': self.workflow.task_id})
+            elif cmd == '/mode':
+                if len(values) > 1:
+                    raise ProbeError('Use /mode [auto|ask_to_escalate|approve_plan].')
+                if values:
+                    self.workflow.change_mode(values[0])
+            else:
+                if len(values) != 1 or self.pending is None or values[0] != self.pending['token']:
+                    raise ProbeError('Invalid or stale workflow choice token.')
+                if self.pending['kind'] == 'workflow_model' and cmd in ('/approve', '/decline', '/pause'):
+                    self.workflow.answer_model(values[0], cmd[1:])
+                elif self.pending['kind'] == 'workflow_pause' and cmd in ('/continue', '/revise', '/pause'):
+                    self.workflow.answer_pause(values[0], {'/continue': 'continue', '/revise': 'revise_scope', '/pause': 'pause'}[cmd])
+                else:
+                    raise ProbeError('Choice does not match the current workflow request.')
+        except ProbeError as exc:
+            self.write(str(exc))
+        self.show_workflow()
+
     def line(self, text):
         import shlex
         text = text.strip()
@@ -1171,11 +1304,18 @@ class ChatShell:
                 self.write('รูปแบบคำสั่งไม่ถูกต้อง')
                 return
             cmd, *values = args
-            if cmd == '/help':
+            if self.workflow is not None and cmd in ('/workflow', '/next', '/status', '/mode',
+                                                      '/approve', '/decline', '/pause', '/continue', '/revise'):
+                self.workflow_command(cmd, values)
+            elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
+                self.write('คำสั่งนี้ยังไม่เชื่อม workflow host; ใช้ /workflow เพื่อดูแผนและสถานะ')
+            elif cmd == '/help':
                 self.write('/status /mode [auto|ask_to_escalate|approve_plan] /model [ID EFFORT]\n'
                            '/permissions [ask|read_only|workspace] /sessions [ID] /delete [ID]\n'
                            '/confirm-delete TOKEN /acknowledge TOKEN /cancel /exit\n'
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
+                if self.workflow is not None:
+                    self.write('/workflow /next /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
@@ -1245,6 +1385,9 @@ class ChatShell:
             else:
                 self.write('ไม่รู้จักคำสั่ง ใช้ /help')
             return
+        if self.workflow is not None:
+            self.write('Workflow UI ยังไม่รับโจทย์/ชี้แจงเข้าโมเดลอัตโนมัติ ใช้ /workflow หรือ /next')
+            return
         if self.pending is not None:
             self.write('ยังรอการอนุมัติ ใช้ /approve, /decline หรือ /pause พร้อม TOKEN')
             return
@@ -1270,6 +1413,11 @@ class ChatShell:
         if not isinstance(message, dict) or not isinstance(message.get('type'), str):
             raise ProbeError('Invalid chat controller event.')
         kind = message['type']
+        if self.workflow is not None and kind not in ('text', 'progress'):
+            if kind != 'workflow_changed' or set(message) != {'type', 'task_id'} or message['task_id'] != self.workflow.task_id:
+                raise ProbeError('Workflow event is stale/unsupported; no action approved.')
+            self.show_workflow()
+            return
         if kind in ('text', 'progress'):
             text = message.get('text')
             if not isinstance(text, str):
@@ -1314,11 +1462,13 @@ class ChatShell:
 
 
 def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
-             role_policy=None, prompt=None, backend=None):
+             role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None):
     """Multiplex Linux input and controller events in one owning thread."""
+    if workflow is not None and backend is not None:
+        raise ProbeError('Native live workflow integration is not enabled.')
     if backend is not None:
         send, catalog = backend.action, backend.catalog
-    shell = ChatShell(output, send, catalog, role_policy)
+    shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action)
     if backend is not None:
         backend.shell = shell
         shell.live = True
@@ -1385,7 +1535,12 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
         reason = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
         phase = getattr(backend, 'phase', 'terminal')
         shell.write('Terminal หยุด [' + phase + ']: ' + reason + '; ผลงานที่กำลังทำยังไม่ทราบ')
-        if shell.active and send is not None:
+        if shell.workflow is not None:
+            try:
+                shell.cancel(exit_after=True)
+            except (ProbeError, OSError):
+                pass
+        elif shell.active and send is not None:
             try:
                 send({'action': 'cancel'})
             except (ProbeError, OSError):

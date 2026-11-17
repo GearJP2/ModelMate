@@ -860,3 +860,67 @@ allow at most 4,096 ledger events; oversize fails without dropping history. No
 credentials, transcript, network call or live inference was added. P10/P12 remain
 IN_PROGRESS; next work is the explicit workflow UI/controller host integration,
 with execution/check adapters and their permission gates still separate.
+
+## P08/P10 workflow host UI — MOCK_VERIFIED
+
+ChatShell and run_chat now accept an explicit WorkflowController and optional
+trusted workflow_action callback. This is a host API milestone: the ordinary CLI
+and `--live` paths remain manual, and no workflow loading flag is introduced.
+Passing a native backend or legacy manual send callback alongside a workflow is
+rejected, so existing native execution is not implicitly enabled for workflows.
+
+The UI renders the plan, current step, cycle/attempt budget, planned model/effort,
+active requested selection, per-check results and recorded criterion coverage.
+Requested/planned models are not described as backend dispatch telemetry. All
+display text uses the existing terminal-control filter. Ordinary text is not
+forwarded into a classifier or executor while this prototype workflow UI is bound.
+
+Host/UI contract:
+
+- `/workflow` and `/status` read the bound controller without starting work.
+- `/next` is allowed only in READY and sends `{action: next, task_id}` to the
+  trusted callback. Without a host, no attempt is reserved. The host must obtain
+  current quota/catalog/bindings and use the controller's request_attempt before
+  any future dispatch. The UI ignores callback return values as completion claims.
+- `/approve`, `/decline` and `/pause` route exact tokens to the current model gate;
+  `/continue`, `/revise` and `/pause` route only matching workflow pause tokens.
+  Approval and continuation never invoke next automatically. No tool grant is
+  created. Revision requests pause for the host; they do not rewrite the plan.
+- `/mode` uses a controller method that invalidates old grants/tokens, preserves
+  budgets and persists the change when the controller is durably attached.
+  Active/finished attempts cannot change mode. Unsupported manual session/model
+  commands do not fall through to an unrelated backend.
+- `/cancel`, Ctrl+C, `/exit` and EOF pause pending choices or request host cancellation
+  for a running attempt. Host cancellation is attempted before persisting a running
+  pause, so a storage failure cannot prevent the interrupt request. An acknowledgement
+  alone never clears active state. A five-second unconfirmed-stop deadline exits
+  with unknown outcome; the controller retains its active attempt/budget.
+- A trusted host may signal `{type: workflow_changed, task_id}` after mutating its
+  controller from a real terminal/check event. The signal carries no state or evidence
+  fields. Foreign IDs, extra fields, replacement plans, legacy completed/stopped and
+  tool approval events are rejected in workflow UI mode. Model text is display data.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_workflow_ui.py -v`: 17 passed.
+- `python3 -m unittest discover -s tests -q`: 241 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Checks cover plan/status without execution, missing-host refusal, explicit model
+approval, stale tokens on mode change, correction-limit choices and retained cycles,
+no auto-next after approval, revision/pause, EOF during a synthetic running attempt,
+terminal confirmation versus acknowledgement, unconfirmed timeout, cancellation on
+storage failure, spoofed completion/foreign events, inert callback return values,
+read-only permissions, refused native/manual mixing, terminal text filtering and
+persisted UI choices. An actual synthetic subprocess runs the selector/EOF/event
+path; no real Codex or inference is used.
+
+Limits: callbacks and controller mutation remain trusted in-process APIs. This is
+not a sandbox for arbitrary Python callbacks. Hosts must correctly report native
+events, perform fresh preflight checks, bind actual check evidence and handle
+disconnect/interrupt outcomes. No native workflow executor, check adapter, classifier,
+clarification input, broad replan editor, workflow CLI loading/resume entry point or
+automatic multi-step loop is added. P08/P10/P12 remain IN_PROGRESS. Next work is
+the gated host/execution and explicit entry-point integration; source/mock evidence
+must not be presented as live workflow verification.
