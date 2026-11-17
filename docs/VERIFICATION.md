@@ -1088,10 +1088,30 @@ terminal confirmation where possible; uncertainty retains scratch and never retr
 
 The disconnect result covers a local host guard only. It does not verify dropped
 network recovery, all command/patch/tool paths, backend dispatch or remote erasure.
-No live result has been recorded for this command yet; auto routing and public
-native workflow CLI remain gated.
+Live results are recorded below. Auto routing and public native workflow CLI
+remain gated; this narrow probe does not pass every native permission gate.
 
 Validation: eight targeted workflow-probe tests and 296/296 full offline tests
 passed; `python3 -m py_compile modelmate.py doctor.py verify.py` and
 `git diff --check` passed. Help-only invocation without --run-live was checked.
 No live inference was run.
+
+### User-supplied native workflow live result (2026-11-18)
+
+LIVE_VERIFIED for this synthetic probe only. The user ran:
+`python3 verify.py --run-live --probe-workflow gpt-6.1-sol`
+and supplied the JSON report. All six checks reported passed: answerDisplay,
+contextRecall, approvalDenial, sentinelUnchanged, cancel, disconnectGuard; phase
+finished. Requested gpt-6.1-sol/low; reportedModels null. Process exit code was not
+provided. This is user-supplied evidence, not an independent agent-run live test.
+
+Runtime SHA-256: `d820c340a7d8cb2e7b1b431c7d41ed2aead539a8aebfb9d9f8fee31b3c36a914`
+Verifier SHA-256: `e00dadc70142de5807488f0df43719aab44c563281f25ebdcb39a852b906c91f`
+Both hashes match the local files at commit `326a819`.
+
+Scope remains at most four synthetic turns in ephemeral threads. Disconnect guard
+is local only; not network-drop recovery, all tool paths, backend dispatch telemetry
+or service-side erasure. Public workflow CLI/auto routing and other permission/web
+gates are not enabled by this result. The pasted Terminal output had an extra
+`hello` before the JSON. No literal hello or matching print path was found in the
+verifier; its origin and whether it was stdout, stderr or Terminal echo are unknown.

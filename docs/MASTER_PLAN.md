@@ -595,3 +595,11 @@ confirmed interruption และ local disconnect/no-new-dispatch guard ไม�
 ไม่เกิด approval/cancel race เป็น UNVERIFIED; unknown outcome เก็บ scratch
 No live gate passed: ผู้ใช้ต้องรันคำสั่ง live และตรวจหลักฐาน version/hash ก่อน
 เปิด native workflow CLI; network-drop recovery และ tool paths อื่นยังไม่พิสูจน์
+
+P10 scoped LIVE_VERIFIED update (2026-11-18): user-supplied workflow probe reports
+all six checks passed at commit 326a819; runtime/verifier hashes match local files.
+See VERIFICATION.md for hashes, provenance and scope. This verifies the synthetic
+happy path and local disconnect guard only; full G2/G3, network recovery, native
+workflow resume, classifier and public CLI remain gated. Next eligible work is a
+review of the verifier/evidence and an explicit-plan CLI design constrained to
+verified capabilities, without claiming full auto routing readiness.

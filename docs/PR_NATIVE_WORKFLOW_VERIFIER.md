@@ -14,6 +14,10 @@ or account/thread IDs. No inference runs without explicit --run-live.
 Validation: eight new offline test methods with fake subprocess App Servers; full
 suite, compilation and diff checks recorded in docs/VERIFICATION.md.
 
-Limits: no live inference performed during implementation. Disconnect is a local
+User-supplied live probe at commit 326a819 reported all six checks passed; both
+runtime/verifier hashes match local files. See docs/VERIFICATION.md for scope and
+provenance. No independent agent-run live inference was performed.
+
+Limits: disconnect is a local
 guard, not network-drop recovery. This does not prove all tool paths or actual model
 dispatch and does not enable public workflow CLI/auto routing. No merge requested.
