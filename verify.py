@@ -517,9 +517,10 @@ def probe_workflow(model, timeout):
         shell = ChatShell(output, workflow=controller, workflow_action=host)
         answers = []
         def observe(message):
+            before = output.tell()
             shell.event(message)
             if message.get('type') == 'text':
-                answers.append(message['text'].strip())
+                answers.append(output.getvalue()[before:].strip())
         host.on_change = observe
         for index in (0, 1):
             result['phase'] = 'answer_display' if index == 0 else 'context_recall'
@@ -527,7 +528,7 @@ def probe_workflow(model, timeout):
             host({'action': 'next', 'task_id': controller.task_id})
             status = wait_workflow(connection, timeout)
             expected = 'ACK' if index == 0 else nonce
-            # Only text events are answers; UI status/plan output is deliberately excluded.
+            # Compare text written by the UI for text events, excluding plan/status output.
             if status != 'completed' or answers != [expected]:
                 result['answerDisplay' if index == 0 else 'contextRecall'] = 'failed'
                 return result
@@ -561,13 +562,31 @@ def probe_workflow(model, timeout):
         host({'action': 'cancel', 'task_id': controller.task_id})
         status = wait_workflow(connection, timeout)
         result['cancel'] = 'passed' if status == 'interrupted' else 'unverified'
+        if status != 'interrupted':
+            return result
         result['phase'] = 'disconnect_guard'
         sent = len(connection._sent_attempts)
+        reached = {'preflight': False, 'dispatch': False}
+        def blocked_preflight():
+            reached['preflight'] = True
+            raise ProbeError('Disconnect probe reached preflight; no inference permitted.')
+        def blocked_dispatch(_):
+            reached['dispatch'] = True
+            raise ProbeError('Disconnect probe reached dispatch; no inference permitted.')
+        # Tripwires prevent extra inference even when the disconnect guard is broken.
+        host.preflight, host.dispatch = blocked_preflight, blocked_dispatch
         host.disconnect()
+        controller.answer_pause(controller.snapshot()['pause_token'], 'continue')
+        if controller.state != 'READY':
+            return result
         try:
             host({'action': 'next', 'task_id': controller.task_id})
         except ProbeError:
-            result['disconnectGuard'] = 'passed' if len(connection._sent_attempts) == sent else 'failed'
+            result['disconnectGuard'] = 'passed' if (not any(reached.values())
+                and len(connection._sent_attempts) == sent and controller.state == 'READY'
+                and host._connected is False and host._binding is None) else 'failed'
+        else:
+            result['disconnectGuard'] = 'failed'
         result['phase'] = 'finished'
         return result
     except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

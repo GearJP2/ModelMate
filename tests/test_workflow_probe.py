@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from verify import WorkflowVerificationConnection, main, probe_workflow
+from modelmate import ChatShell
 
 SERVER = r'''
 import sys,json,re
@@ -129,6 +130,24 @@ class WorkflowProbeTests(unittest.TestCase):
         result = self.probe('auth')
         self.assertEqual(result['answerDisplay'],'unverified')
         self.assertFalse(any(r.get('method')=='turn/start' for r in self.records()))
+
+    def test_noop_disconnect_does_not_pass_or_start_a_fifth_turn(self):
+        with patch('modelmate.WorkflowHost.disconnect', lambda self: None):
+            result = self.probe()
+        self.assertEqual(result['disconnectGuard'], 'failed')
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 4)
+        self.assertTrue(self.scratch.exists())
+
+    def test_dropped_display_text_does_not_pass_from_event_payload(self):
+        original = ChatShell.event
+        def drop_text(shell, message):
+            if message.get('type') != 'text':
+                return original(shell, message)
+        with patch.object(ChatShell, 'event', drop_text):
+            result = self.probe()
+        self.assertEqual(result['answerDisplay'], 'failed')
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 1)
+        self.assertTrue(self.scratch.exists())
 
     def test_cli_requires_optin_and_maps_incomplete_to_exit_one(self):
         with patch('sys.argv',['verify.py','--probe-workflow','synthetic']), \

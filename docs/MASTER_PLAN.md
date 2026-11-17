@@ -603,3 +603,9 @@ happy path and local disconnect guard only; full G2/G3, network recovery, native
 workflow resume, classifier and public CLI remain gated. Next eligible work is a
 review of the verifier/evidence and an explicit-plan CLI design constrained to
 verified capabilities, without claiming full auto routing readiness.
+
+PR #7 review correction (2026-11-18): answerDisplay/disconnectGuard in the original
+live report could be false positives. Those two live claims are UNVERIFIED pending
+a run with the fixed verifier. Offline regression tests now reject missing UI output
+and a no-op disconnect; the latter uses READY state and preflight/dispatch tripwires
+without additional inference. This supersedes the earlier blanket six-check claim.

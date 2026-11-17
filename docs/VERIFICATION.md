@@ -1098,7 +1098,7 @@ No live inference was run.
 
 ### User-supplied native workflow live result (2026-11-18)
 
-LIVE_VERIFIED for this synthetic probe only. The user ran:
+Historical pre-review report (partially superseded below). The user ran:
 `python3 verify.py --run-live --probe-workflow gpt-6.1-sol`
 and supplied the JSON report. All six checks reported passed: answerDisplay,
 contextRecall, approvalDenial, sentinelUnchanged, cancel, disconnectGuard; phase
@@ -1115,3 +1115,25 @@ or service-side erasure. Public workflow CLI/auto routing and other permission/w
 gates are not enabled by this result. The pasted Terminal output had an extra
 `hello` before the JSON. No literal hello or matching print path was found in the
 verifier; its origin and whether it was stdout, stderr or Terminal echo are unknown.
+
+### PR #7 — verifier false-positive fixes (2026-11-18)
+
+Review demonstrated two false positives: the old probe still passed when disconnect
+was replaced with a no-op, and when ChatShell dropped text events. Both new
+regression tests failed against the old verifier and passed after the fix.
+
+Answer comparison now reads the text written by ChatShell during each text event,
+not the event payload. Plan/status output is excluded. The disconnect probe resumes
+the synthetic controller to READY after confirmed interruption, then checks that
+submission is refused before preflight/dispatch. Both callbacks are replaced with
+tripwires, so a broken guard cannot start a fifth live turn. A cancellation race
+leaves disconnect unverified instead of testing from an unsuitable state.
+
+The earlier user-supplied six-pass JSON remains recorded as historical output at
+its exact hashes. Its answerDisplay and disconnectGuard claims are not accepted as
+live verification of those capabilities. The fixed verifier requires new opt-in
+live evidence; no new inference was run as part of this fix. Other earlier results
+remain scoped to their original tested version and synthetic actions.
+
+Validation: 10 targeted probe tests and 298/298 full offline tests passed;
+runtime/doctor/verifier compilation and `git diff --check` passed.

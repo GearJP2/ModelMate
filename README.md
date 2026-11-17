@@ -291,3 +291,8 @@ exit 0 เฉพาะทุกการตรวจผ่าน; exit 1 เม�
 ไม่ใช่หลักฐาน network-drop recovery ผลนี้ไม่พิสูจน์ทุก tool path, actual model
 backend dispatch หรือการลบข้อมูลทั้งหมดฝั่งบริการ; ephemeral ไม่ใช่ delete guarantee
 การผ่าน verifier ยังไม่เปิด auto routing/native workflow CLI โดยอัตโนมัติ
+
+Verifier ตรวจคำตอบจากข้อความที่ UI เขียนจริง แยกจากแผน/status และตรวจ disconnect
+จากสถานะ READY พร้อม tripwire ป้องกันการเรียกโมเดลเพิ่มแม้ guard เสีย
+ผล `answerDisplay`/`disconnectGuard` จาก verifier ก่อนแก้ PR #7 ยังไม่ถือเป็น
+หลักฐาน live สำหรับสองหัวข้อนี้ ต้องใช้ผลจาก verifier ที่แก้แล้วพร้อม hash ใหม่
