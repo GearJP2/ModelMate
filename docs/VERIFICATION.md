@@ -645,3 +645,43 @@ send a synthetic recall marker, record only the local session ID privately, /exi
 reopen with --resume, ask for the marker, and then /delete plus its confirmation
 token. Confirm the session disappears locally and in Codex, with a sentinel work
 file unchanged. This uses subscription quota; do not commit prompts, IDs or traces.
+
+### P12 opt-in session verification harness — MOCK_VERIFIED
+
+Added `python3 verify.py --run-live --probe-sessions MODEL`. It reuses the runtime's
+LiveChatConnection, SessionStore, ChatShell and confirmed-delete flow, with two
+separate App Server processes and a private temporary project/state store. The
+second prompt contains no recall marker. Both turns request low effort and pass
+the ordinary account/catalog/quota checks. No API-key fallback or billing changes.
+
+The explicit command authorizes automatic confirmation only when the preview
+contains exactly the harness-created thread and scratch project, without any
+descendants. A changed sentinel/extra file, failed recall, unexpected tool,
+incomplete turn, delete failure or lingering history entry prevents a success
+report. Success requires metadata removal, absence from both active and archived
+listings across all declared source kinds, and an unchanged sentinel after deletion.
+Runtime and verifier SHA-256 hashes identify the tested files. JSON output excludes
+account identity, thread/session IDs, paths, prompts and recall markers.
+
+Failure retains scratch metadata/files and prints the failed phase and scratch path
+on stderr for local inspection. Active turns are interrupted with a bounded wait
+before closing the connection and store; no retry or replay is performed. The
+harness never accepts a tool approval. Native permitted tools can start before
+observation, so detection is not a universal no-tools guarantee. Failed checks do
+not automatically delete their remote thread. Do not commit retained scratch state.
+
+Offline checks (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_session_probe.py -v`: 10 passed.
+- `python3 -m unittest discover -s tests -q`: 175 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Tests use real synthetic JSONL server subprocesses sharing temporary state across
+reconnects. They cover exact-scope deletion, redacted reports, a second prompt
+without the marker, recall/turn failures, descendants, failed deletion retaining
+its checkpoint, non-appServer history listings, sentinel changes, unexpected tool
+denial/interruption, timeout without replay, and opt-in/exclusive-mode validation.
+The source-kind list is shared with the runtime's deletion scope enumeration.
+No real inference was run. P12/live compatibility gates remain pending; the next
+step is an explicit user-run session probe from their normal Terminal.

@@ -106,7 +106,20 @@ Default tests ใช้ JSONL subprocess/fake controller ไม่ใช้ quot
 ```bash
 python3 verify.py --run-live --models gpt-6.1-sol gpt-6-astra
 python3 verify.py --run-live --probe-read-approval gpt-6.1-sol
+python3 verify.py --run-live --probe-sessions gpt-6.1-sol
 ```
+
+`--probe-sessions` ใช้สอง turn ที่ effort low และเปิด App Server ใหม่ระหว่าง turn
+เพื่อทดสอบบริบทหลัง reconnect ตรวจผ่าน runtime autosave/resume/delete จริง
+สร้างโปรเจกต์และ state แยกในโฟลเดอร์ชั่วคราว ใช้เฉพาะรหัสสังเคราะห์
+ยืนยันลบอัตโนมัติเฉพาะ thread ที่ตัวตรวจสร้าง เมื่อ preview มี thread เดียวตรงกัน
+หากพบ descendants จะไม่ยืนยันลบ ตรวจ sentinel ก่อน/หลังลบ และตรวจประวัติ
+ทั้ง active/archived listings หากผ่านจะล้าง scratch; หากผิดพลาดจะเก็บไว้พร้อมบอก path
+ไม่มีการยืนยัน tool approval: ถ้าพบเครื่องมือจะไม่ถือว่าผ่านและขอหยุด turn
+native sandbox อาจให้บางคำสั่งรันได้เองก่อนตรวจพบ จึงไม่อ้างว่าเป็น no-tools isolation
+รายงาน JSON ไม่มี prompt/รหัส/บัญชี/thread ID/path และมี SHA-256 ของ runtime/verifier
+เพื่อระบุรุ่นที่ตรวจ ไม่ยืนยัน actual model dispatch หรือการลบข้อมูลทั้งหมดฝั่งบริการ
+ถ้าไม่ใส่ `--run-live` จะโชว์ help โดยไม่เปิด Codex
 
 Read probe คืน `executed_without_approval` ได้ตาม native policy ที่ผู้ใช้เลือก
 เป็นข้อมูลเกี่ยวกับพฤติกรรม ไม่ใช่ข้อรับประกันทุกเส้นทาง

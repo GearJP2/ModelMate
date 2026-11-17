@@ -397,6 +397,8 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion
 เพิ่ม schema v2 ผูก account fingerprint/turn/deletion receipt; v1 ไม่เดาบัญชีเพื่อ resume
 หลักฐาน offline อยู่ใน VERIFICATION.md; ยังไม่อ้าง workflow lifecycle หรือ live gate ผ่าน
+มี `verify.py --run-live --probe-sessions MODEL` สำหรับเก็บหลักฐานสอง turn ข้าม reconnect
+พร้อมตรวจ deletion เฉพาะ scratch thread; harness ผ่าน offline tests แต่ยังไม่รันบัญชีจริง
 Resume ตรวจบัญชี/โปรเจกต์/catalog/quota ใหม่ก่อน turn
 RUNNING ที่หลงเหลือหลัง crash → outcome unknown จน reconcile กับ Codex
 ห้าม replay side effects; ถ้าไม่ทราบให้ผู้ใช้ตัดสินหลังแสดงหลักฐาน

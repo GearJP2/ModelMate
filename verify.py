@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Opt-in live Codex checks: context handoff and denial of scratch-file writes."""
+"""Opt-in live Codex checks: handoff, scratch permissions and session lifecycle."""
 import argparse
+import hashlib
+import io
 import json
 import math
 import secrets
@@ -10,7 +12,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from modelmate import Connection, ProbeError, inspect, ensure_quota, refresh_quota, select_model
+from modelmate import (Connection, ProbeError, inspect, ensure_quota, refresh_quota,
+                       select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS)
 
 
 APPROVALS = {
@@ -254,23 +257,185 @@ def run_in_scratch(connection, models, *, read_probe=False):
                     raise ProbeError('Scratch cleanup failed.')
 
 
+class SessionVerificationConnection(LiveChatConnection):
+    """Observe synthetic turns using the actual runtime lifecycle implementation."""
+
+    def __init__(self, command, timeout):
+        super().__init__(command, timeout)
+        self.answer = ''
+        self.completed_status = None
+        self.tool_observed = False
+
+    def handle_event(self, message):
+        params = message.get('params', {})
+        matching = self.shell is not None and params.get('threadId') == self.thread_id
+        method = message.get('method')
+        if matching:
+            item = params.get('item', {})
+            if 'id' in message or (method in ('item/started', 'item/completed')
+                    and item.get('type') not in ('userMessage', 'agentMessage', 'reasoning',
+                                                 'plan', 'contextCompaction')):
+                self.tool_observed = True
+            if method == 'item/completed' and params.get('turnId') == self.turn_id and item.get('type') == 'agentMessage':
+                text = item.get('text')
+                if not isinstance(text, str) or len(self.answer) + len(text) > 4096:
+                    raise ProbeError('Session probe returned oversized or invalid text.')
+                self.answer += text
+            if method == 'turn/completed' and params.get('turn', {}).get('id') == self.turn_id:
+                self.completed_status = params['turn'].get('status')
+        super().handle_event(message)
+
+    def wait_idle(self, timeout, *, cancelling=False):
+        deadline = time.monotonic() + timeout
+        while True:
+            self.drain()
+            self.tick()
+            if self.tool_observed and not cancelling:
+                raise ProbeError('Unexpected tool observed; session probe did not pass.')
+            if not self.shell.active and not self._rpcs:
+                return
+            if time.monotonic() >= deadline:
+                raise ProbeError('Session probe timed out; outcome unknown; no automatic replay.')
+            for key, _ in self.selector.select(min(.1, max(0, deadline - time.monotonic()))):
+                self.read_ready(key.fileobj)
+
+    def run_text(self, prompt):
+        self.shell = ChatShell(io.StringIO(), self.action, self.catalog)
+        self.shell.selection = self.selection
+        self.answer, self.completed_status = '', None
+        self.shell.line(prompt)
+        self.wait_idle(self.timeout)
+        if self.completed_status != 'completed' or self.record['state'] != 'UNVERIFIED':
+            raise ProbeError('Synthetic turn did not complete [' + self.phase + ']; session probe did not pass.')
+        return self.answer.strip()
+
+
+def check_session_sentinel(project, sentinel):
+    if (sentinel.is_symlink() or sentinel.read_text() != 'synthetic sentinel\n'
+            or set(project.iterdir()) != {sentinel}):
+        raise ProbeError('Scratch work files changed; sentinel check failed.')
+
+
+def probe_sessions(model, timeout):
+    """Opt-in creation/deletion only inside this harness's private scratch project."""
+    directory = Path(tempfile.mkdtemp(prefix='modelmate-session-verify-'))
+    project = directory / 'project'
+    sentinel = project / 'sentinel.txt'
+    nonce = secrets.token_hex(16)
+    connection = None
+    passed = False
+    phase = 'prepare'
+    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"',
+               '-c', 'approvals_reviewer="user"']
+    store = None
+    try:
+        project.mkdir(mode=0o700)
+        sentinel.write_text('synthetic sentinel\n')
+        phase = 'start'
+        store = SessionStore(project, directory / 'state')
+        connection = SessionVerificationConnection(command, timeout)
+        connection.connect(model, 'low', project, store=store)
+        session_id = connection.record['id']
+        thread_id = connection.thread_id
+        phase = 'first_turn'
+        connection.run_text('Remember this synthetic code for the next message: ' + nonce
+                            + '. Reply only ACK. Do not use tools, network or write files.')
+        connection.close()
+        connection = None
+        phase = 'resume'
+        connection = SessionVerificationConnection(command, timeout)
+        connection.connect(model, 'low', project, store=store, session_id=session_id)
+        if connection.thread_id != thread_id or connection.recovery_token is not None:
+            raise ProbeError('Resume did not restore the expected settled thread.')
+        phase = 'recall'
+        answer = connection.run_text('Reply only with the synthetic code from my previous message. '
+                                     'Do not use tools or network, and do not read or write files.')
+        if answer != nonce:
+            raise ProbeError('Context recall after reconnect failed.')
+        check_session_sentinel(project, sentinel)
+        phase = 'delete_preview'
+        connection.session_command('/delete', [])
+        proposal = connection.delete_proposal
+        if (proposal is None or proposal['record']['id'] != session_id
+                or proposal['tree'] != [{'thread_id': thread_id, 'project': str(project)}]):
+            raise ProbeError('Deletion scope is not exactly the harness-created scratch thread.')
+        phase = 'delete'
+        connection.session_command('/confirm-delete', [proposal['token']])
+        if connection.record is not None or not connection.shell.closed or store.list_sessions():
+            raise ProbeError('Confirmed deletion did not remove local metadata.')
+        phase = 'list_after_delete'
+        for archived in (False, True):
+            cursor, seen = None, set()
+            for _ in range(100):
+                page = connection.request('thread/list', {'cwd': str(project), 'archived': archived,
+                    'limit': 100, 'cursor': cursor, 'sourceKinds': THREAD_SOURCE_KINDS})
+                rows = page.get('data')
+                if not isinstance(rows, list) or any(not isinstance(r, dict) or not isinstance(r.get('id'), str) for r in rows):
+                    raise ProbeError('Invalid post-delete listing; deletion not verified.')
+                if any(row['id'] == thread_id for row in rows):
+                    raise ProbeError('Deleted thread remains in a history listing.')
+                cursor = page.get('nextCursor')
+                if cursor is None:
+                    break
+                if not isinstance(cursor, str) or not cursor or cursor in seen:
+                    raise ProbeError('Invalid post-delete pagination.')
+                seen.add(cursor)
+            else:
+                raise ProbeError('Post-delete listing exceeded verification limit.')
+        phase = 'sentinel'
+        check_session_sentinel(project, sentinel)
+        result = {'sessionResume': 'passed', 'contextRecallAfterReconnect': 'passed',
+                'confirmedDeletion': 'passed', 'localMetadataDeleted': 'passed',
+                'threadAbsentFromListings': 'passed', 'sentinelUnchanged': 'passed',
+                'requested': {'model': model, 'effort': 'low'}, 'reportedModels': None,
+                'runtimeSha256': hashlib.sha256(Path(sys.modules[LiveChatConnection.__module__].__file__).read_bytes()).hexdigest(),
+                'verifierSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                'scope': 'Two synthetic turns and one scratch thread; not crash recovery, all tool paths, '
+                         'backend dispatch telemetry or complete service-side data erasure.'}
+        passed = True
+        return result
+    finally:
+        if connection is not None:
+            try:
+                if connection.shell is not None and connection.shell.active:
+                    connection.shell.cancel()
+                    connection.wait_idle(5, cancelling=True)
+            except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                print('Interruption unconfirmed; inspect Codex before retrying.', file=sys.stderr)
+            finally:
+                connection.close()
+        if store is not None:
+            store.close()
+        if passed:
+            shutil.rmtree(directory)
+        else:
+            print('Session probe stopped at ' + phase + '; scratch retained: ' + str(directory), file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
     parser.add_argument('--models', nargs=2, metavar=('FIRST', 'SECOND'), help='two model IDs from doctor.py')
     parser.add_argument('--probe-read-approval', metavar='MODEL',
                         help='one live turn testing whether harmless printf runs without approval; no handoff rerun')
+    parser.add_argument('--probe-sessions', metavar='MODEL',
+                        help='two live turns across reconnect; delete only the harness-created scratch thread')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if not args.run_live:
         parser.print_help()
         return 0
-    if bool(args.models) == bool(args.probe_read_approval):
-        parser.error('choose either --models FIRST SECOND or --probe-read-approval MODEL')
+    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions)) != 1:
+        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_sessions:
+            result = probe_sessions(args.probe_sessions, args.timeout)
+            print(json.dumps(result, indent=2))
+            return 0
         connection = VerificationConnection(['codex', 'app-server', '--stdio'], args.timeout)
         report = inspect(connection)
         if args.probe_read_approval:

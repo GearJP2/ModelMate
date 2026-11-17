@@ -904,6 +904,10 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
 
 
 
+THREAD_SOURCE_KINDS = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview',
+                       'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown']
+
+
 class LiveChatConnection(Connection):
     """Manual-model chat using native Codex read-only/on-request permissions."""
     allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume',
@@ -1078,8 +1082,7 @@ class LiveChatConnection(Connection):
             cursor, seen = None, set()
             for _ in range(100):
                 page = self.request('thread/list', {'archived': archived, 'cursor': cursor, 'limit': 100,
-                    'sourceKinds': ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview',
-                                    'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown']})
+                    'sourceKinds': THREAD_SOURCE_KINDS})
                 rows = page.get('data')
                 if not isinstance(rows, list):
                     raise ProbeError('Cannot enumerate deletion scope.')
