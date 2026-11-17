@@ -72,9 +72,13 @@ project/user Codex configuration และ managed policy ยังมีผล
 | `/exit`, EOF | ขอหยุดถ้ามีงาน active แล้วออก |
 | `/mode` | สามโหมดมี policy ออฟไลน์; live ยังเป็น manual selection |
 | `/permissions` | แสดง read_only; ยังไม่เปลี่ยน profile ทั้ง session |
-| `/sessions`, `/delete` | ยังไม่พร้อม รอ P11/P12 |
+| `/sessions` | แสดง session metadata ของโปรเจกต์ปัจจุบันใน live chat |
+| `/sessions ID` | เปิด session เดิมเมื่อไม่มี turn/RPC ที่ค้างอยู่ |
+| `/delete [ID]`, `/confirm-delete TOKEN` | แสดงขอบเขตแล้วลบ Codex thread/subtree และ metadata หลังยืนยัน |
+| `/acknowledge TOKEN` | ยอมรับว่า outcome เดิมยังไม่ทราบ หลังตรวจไฟล์/process แล้ว; อนุญาตเฉพาะข้อความใหม่ |
 
-**ยังไม่มี autosave/resume ของ ModelMate** live thread เป็น ephemeral
+**มี autosave/resume สำหรับ manual live chat แล้ว แต่ยังรอทดสอบสด**
+ใช้ thread แบบบันทึกลง Codex และเก็บ metadata ในเครื่องอัตโนมัติ
 หากขาดการเชื่อมต่อหรือหยุดไม่ได้ ผลของคำสั่งอาจไม่ทราบ
 ไม่ retry หรือ replay คำสั่งให้อัตโนมัติ การอนุมัติให้เขียนอาจเปลี่ยนไฟล์จริง
 
@@ -121,15 +125,49 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 การประหยัด quota และคุณภาพ routing ยังต้องประเมินกับงานจริง ไม่มี benchmark รับรอง
 
 
-## Session metadata storage (P11)
+## Session และการกลับมาทำต่อ (P11/P12)
 
-มี `SessionStore` ใน runtime แล้ว แต่ **ยังไม่เชื่อม autosave หรือ /sessions ในแชต**
-ส่วนการ resume/cancel/delete จริงอยู่ใน P12
+เมื่อเปิด `--live` จะแสดง Session ID ใช้ `/sessions` เพื่อดูรายการ หรือเปิดใหม่ด้วย:
 
-เก็บ schema version 1 ใต้ `$XDG_STATE_HOME/modelmate` หรือ
+```bash
+python3 modelmate.py --live --model gpt-6.1-sol --effort low --resume SESSION_ID
+```
+
+ต้องอยู่ในโปรเจกต์เดิม ใช้บัญชีเดิม และเลือก model/effort อย่างชัดเจนอีกครั้ง
+ตรวจ account/catalog/quota ใหม่ และขอ read-only + on-request เสมอ ไม่คืน approval grants
+การเปิด session ไม่ส่ง prompt หรือ replay งานเดิม การส่งข้อความใหม่ยังผ่าน quota preflight
+เมื่อ quota หมดแต่ยังอ่านสถานะบัญชีได้ เปิดแชตเพื่อจัดการ/ลบ session ได้โดยไม่เริ่ม inference
+`/sessions ID` ใช้เปลี่ยน session ระหว่างแชตเมื่อ backend ว่าง
+
+หาก checkpoint ค้าง RUNNING/รอ tool approval จะตรวจสถานะ thread และ turn ล่าสุด
+ถ้า backend ยัง active หรือข้อมูลไม่ครบ จะไม่ resume ถ้าจบแล้วแต่ผลเครื่องมือยังไม่ทราบ
+จะพักและขอ `/acknowledge TOKEN` หลังผู้ใช้ตรวจไฟล์/process ใน Codex เอง
+การยอมรับนี้อนุญาตให้ส่งข้อความใหม่ ไม่รับรองผลเดิมหรือทำให้เกณฑ์งานผ่าน
+Ctrl+C หรือ `/exit` ระหว่างทำงานต้องรอ terminal event; RPC interrupt ack ไม่พอ
+
+ใช้ `/delete ID` (หรือ `/delete` สำหรับ session ปัจจุบัน) เพื่อดูชื่อและรายการ
+thread/descendants ก่อน `/confirm-delete TOKEN` ยืนยันครั้งเดียว
+ตรวจขอบเขตซ้ำก่อนลบ หากเปลี่ยนต้องขอ preview ใหม่ ไม่ลบหรือย้อนแก้ไฟล์งาน
+ลบ session ปัจจุบันสำเร็จแล้วจะออกจากแชต หาก remote deletion ล้มเหลว/ไม่ทราบผล
+จะเก็บ metadata และบล็อกการส่งงานใน session นั้นเพื่อไม่ใช้ thread ที่อาจถูกลบแล้ว
+หากยืนยัน remote deletion ได้แล้วแต่ลบ metadata ไม่สำเร็จ ให้ `/delete ID` อีกครั้ง
+จะเก็บกวาดเฉพาะ metadata โดยไม่ส่ง remote delete ซ้ำ
+หลังเปิดโปรแกรมใหม่ ใช้ live chat ใหม่แล้ว `/delete ID` จัดการรายการที่ลบค้างได้
+
+ข้อจำกัด: scan ขอบเขตลบแบบมีเพดาน รวม archived subagents; หากอ่านไม่ครบจะไม่ลบ
+หาก descendant มี ModelMate metadata แยก ต้องลบ descendant นั้นก่อน
+protocol ไม่มี delete แบบล็อกตาม scope ที่ preview จึงไม่รับประกันกรณี client อื่น
+เปลี่ยน subtree พร้อมกัน หากขาดการเชื่อมต่อหลัง remote delete แต่ก่อนบันทึก receipt
+อาจเหลือ metadata ที่ต้องตรวจใน Codex เอง; ไม่ตีความ missing thread ว่าลบสำเร็จ
+ไม่รับรองการลบข้อมูลทั้งหมดฝั่งบริการ
+
+เก็บใต้ `$XDG_STATE_HOME/modelmate` หรือ
 `~/.local/state/modelmate` แยกโปรเจกต์ด้วย SHA-256 ของ canonical real path
 ใช้ session ID ที่ controller สร้าง ไม่ใช้ชื่อจากโมเดลเป็น filename
-เก็บเฉพาะเป้าหมาย เกณฑ์ ขั้นงาน จำนวนรอบแก้ สถานะ สรุป และ Codex thread ID
+schema v2 เพิ่ม account fingerprint, turn ID และ deletion state จาก v1
+ยังอ่าน v1 ได้ แต่ไม่ resume/delete thread ที่ไม่เคยผูกบัญชี และไม่อัปเกรดโดยเดาบัญชี
+เก็บเป้าหมายจากข้อความแรกสูงสุด 4,096 ตัวอักษร ชื่อจาก 80 ตัวแรก เกณฑ์ ขั้นงาน
+จำนวนรอบแก้ สถานะ สรุปของ controller และ Codex thread ID
 ไม่มีสำเนา transcript, credentials หรือ approval grants
 metadata เป้าหมาย/สรุปอาจมีข้อมูลส่วนตัว จึงใช้ directory 0700 และไฟล์ 0600
 ไม่มีการเข้ารหัสหรือ cloud sync
@@ -137,7 +175,9 @@ metadata เป้าหมาย/สรุปอาจมีข้อมูล�
 Storage API รองรับ create/read/list และ `with store.edit(id)` เพื่อถือ exclusive
 writer lock ตลอด context พร้อม atomic save ตอนออกตามปกติ
 เรียก `store.save(record)` ภายใน context เพื่อ checkpoint ระหว่างงานได้
-Exception ก่อน save จะไม่เขียนข้อมูลค้าง; process ที่สองแก้ session เดียวกันไม่ได้
+Live chat ถือ lock ตลอดเวลาที่เปิด session; process ที่สองเปิดเขียน session เดียวกันไม่ได้
+Exception ก่อน save จะไม่เขียนข้อมูลค้าง
 symlink path ของโปรเจกต์เดียวกันใช้ identity เดียวกัน แต่ state-file symlink ถูกปฏิเสธ
 ไฟล์ JSON เสียหรือ schema รุ่นที่ไม่รู้จักจะไม่ถูกเขียนทับ
 ค่า permission profile ที่บันทึกเป็น metadata ไม่ใช่สิทธิ์อนุมัติให้กลับมาทำงานเอง
+ยังไม่เชื่อม workflow/correction controller ของ P10; P12 ทั้งใบงานยังไม่ถือว่าเสร็จ

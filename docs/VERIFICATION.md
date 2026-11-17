@@ -581,3 +581,67 @@ An abrupt process death can leave an ignored .tmp file; no speculative cleanup
 or schema migration framework was added. Actual power-loss and hardware storage
 faults were not tested. No live inference was run. Next eligible task: P12 planning
 and lifecycle integration, subject to its P10 dependency for workflow-specific state.
+
+## P12 — manual chat lifecycle MOCK_VERIFIED; full task IN_PROGRESS
+
+Manual live CLI now requests durable Codex threads and holds the per-session
+writer lock for its entire attachment. Schema v2 adds a SHA-256 account identity
+fingerprint, last known turn ID and deletion receipt state. No raw account ID,
+credentials, transcript or approval grant is added. V1 remains readable; it is
+not silently bound to the current account or resumed. Future versions are rejected.
+The first prompt supplies a bounded goal/title; it can contain private text.
+
+Checkpoints are written before turn/start and before accepting a tool decision.
+Terminal events save UNVERIFIED/FAILED/PAUSED, never model-claimed task success.
+Resume reads fresh account/catalog/quota and checks canonical project, thread ID,
+provider, durability, runtime status, latest turn and effective native permissions.
+An interrupted checkpoint remains outcome_unknown even if the backend reports a
+completed turn. The user must inspect files/processes and acknowledge a fresh token
+before sending new text. Nothing automatically replays the old prompt or command.
+Existing correction counters survive; P10 workflow is not implemented by this task.
+
+Deletion previews include root and spawned descendants, scanning active and archived
+history with bounded pagination and all declared source kinds. Scope is read again
+on exact, one-use confirmation. Separate descendant ModelMate records require their
+own deletion first. Remote failure/unknown outcome keeps metadata and blocks new work
+in that session. Confirmed remote success is checkpointed before local removal; an
+ordinary local cleanup failure can retry without another remote delete. A missing
+thread alone never proves successful deletion. No work files are removed or reverted.
+Deleting the current session closes the chat. /cancel and new work expire delete tokens.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_lifecycle.py -v`: 18 passed.
+- `python3 -m unittest discover -s tests -q`: 165 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Tests include an actual synthetic CLI exit/restart/resume/delete round trip, a
+subprocess death after a RUNNING checkpoint, lock release, crash before/after tool
+results, disconnect before turn response, wrong account/project, missing/legacy
+thread, weakened resume permissions, correction counter preservation, exact/stale
+tokens, changed subtree, active descendants, quota-exhausted deletion, partial
+deletion and lost remote-deletion receipts. Existing multi-turn subprocess tests
+now use temporary XDG state directories rather than the user's state directory.
+
+Protocol reference: locally generated Codex v0.169.0 schemas for ThreadResume,
+ThreadTurnsList, ThreadList and ThreadDelete, plus official request handler/tests:
+[thread_delete.rs](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server/src/request_processors/thread_delete.rs)
+and [deletion tests](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server/tests/suite/v2/thread_delete.rs).
+Source/schema inspection and synthetic replies are not proof of live interoperability.
+
+Limits: no real-account resume/delete inference was run. Native Codex state access
+is still constrained in this development sandbox. The server has no expected-scope
+delete parameter, so another client changing the subtree between the final read and
+delete cannot be excluded. Remote success followed by a lost receipt can leave a
+pending local record that requires explicit inspection; there is no automatic
+missing-thread cleanup. A lost thread/start response can leave an unassociated
+Codex thread; local metadata cannot recover its unknown ID. Filesystem fsync and
+power-loss limits from P11 remain. P12 stays IN_PROGRESS until P10 workflow
+integration and real-account evidence are available.
+
+Suggested opt-in live check in a disposable project: open a manual live session,
+send a synthetic recall marker, record only the local session ID privately, /exit,
+reopen with --resume, ask for the marker, and then /delete plus its confirmation
+token. Confirm the session disappears locally and in Codex, with a sentinel work
+file unchanged. This uses subscription quota; do not commit prompts, IDs or traces.

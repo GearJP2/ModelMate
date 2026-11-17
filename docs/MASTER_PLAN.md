@@ -213,8 +213,8 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell MOCK_VERIFIED; integration รอ P09/P11/P12 | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | TODO | จำเป็น |
-| P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API; chat integration รอ P12 | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | TODO | จำเป็น |
+| P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual chat lifecycle MOCK_VERIFIED; workflow integration รอ P10 และ live evidence | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | TODO | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | TODO | ตรวจคำกล่าวอ้าง |
@@ -394,6 +394,9 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 ### P12 — Resume / cancel / delete
 
 ไฟล์: modelmate.py, tests/test_lifecycle.py
+ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion
+เพิ่ม schema v2 ผูก account fingerprint/turn/deletion receipt; v1 ไม่เดาบัญชีเพื่อ resume
+หลักฐาน offline อยู่ใน VERIFICATION.md; ยังไม่อ้าง workflow lifecycle หรือ live gate ผ่าน
 Resume ตรวจบัญชี/โปรเจกต์/catalog/quota ใหม่ก่อน turn
 RUNNING ที่หลงเหลือหลัง crash → outcome unknown จน reconcile กับ Codex
 ห้าม replay side effects; ถ้าไม่ทราบให้ผู้ใช้ตัดสินหลังแสดงหลักฐาน

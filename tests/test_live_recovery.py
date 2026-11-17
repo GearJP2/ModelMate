@@ -64,6 +64,7 @@ sys.exit(modelmate.main())
             trace = str(Path(directory) / 'trace')
             master, slave = pty.openpty()
             p = subprocess.Popen([sys.executable, '-u', '-c', source, fake, trace], cwd=root,
+                                 env=dict(os.environ, XDG_STATE_HOME=str(Path(directory) / 'state')),
                                  stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             os.close(slave)
             received = b''
