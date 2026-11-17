@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modelmate import ChatShell, ProbeError, WorkflowController, run_workflow_file, SessionStore, main
+from modelmate import ChatShell, ProbeError, WorkflowController, run_workflow_file, SessionStore, main, workflow_statistics
 from test_routing import PLAN, CATALOG, POLICY, QUOTA
 from test_native_workflow import SERVER
 
@@ -93,6 +93,26 @@ class WorkflowEntryTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as exc:main()
                 self.assertEqual(exc.exception.code,2)
 
+    def test_statistics_count_attempts_without_inventing_usage_or_actual_models(self):
+        c = WorkflowController(json.dumps(self.plan), CATALOG, POLICY)
+        empty = workflow_statistics(c, 10, now=12)
+        self.assertEqual(empty['attempts'], 0)
+        self.assertEqual(empty['requestedSelections'], [])
+        for _ in range(2):
+            aid = c.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)['dispatch']['attempt_id']
+            c.finish_attempt(aid, 'completed')
+            c.record_check(aid, 0, origin='manual', result='fail', reference='user check', finding='failed')
+            c.evaluate_attempt(aid)
+        stats = workflow_statistics(c, 10, now=15.5)
+        self.assertEqual(stats['attempts'], 2)
+        self.assertEqual(stats['elapsedSeconds'], 5.5)
+        self.assertEqual(len(stats['requestedSelections']), 1)
+        self.assertTrue(stats['includesUserWait'])
+        self.assertIsNone(stats['reportedModels'])
+        self.assertIsNone(stats['tokenUsage'])
+        for start, now in ((True, 12), (10, 9), (10, float('nan'))):
+            with self.assertRaises(ProbeError):workflow_statistics(c, start, now=now)
+
     def test_real_cli_loop_preserves_confirmation_input_and_autosaves_done(self):
         trace=self.root/'trace'
         source='import sys;sys.path.insert(0,'+repr(str(ROOT))+');import modelmate\n'
@@ -134,6 +154,13 @@ sys.exit(modelmate.main())
         send('/finish 1='+evidence);until('สถานะ: DONE'.encode())
         send('/exit');p.wait(timeout=3)
         self.assertEqual(p.returncode,0,p.stderr.read())
+        buffer += p.stdout.read()
+        summary = next(line.split(': ', 1)[1] for line in buffer.decode().splitlines()
+                       if line.startswith('สถิติ workflow: '))
+        stats = json.loads(summary)
+        self.assertEqual(stats['state'], 'DONE')
+        self.assertEqual(stats['attempts'], 1)
+        self.assertIsNone(stats['reportedModels'])
         with SessionStore(self.root,self.root/'state',read_only=True) as store:
             records=store.list_sessions()
             self.assertEqual(len(records),1)

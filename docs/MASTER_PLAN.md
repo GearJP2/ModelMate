@@ -216,7 +216,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
-| P14 | Metrics และรายงาน | P10, P11 | TODO | ไม่จำเป็นถ้าไม่แตะ policy |
+| P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | TODO | ตรวจคำกล่าวอ้าง |
 | P16 | End-to-end / evaluation / release | P01–P15 | TODO | จำเป็น |
 
@@ -629,3 +629,10 @@ inspection-only/ephemeral with no resume support. No automatic classifier or too
 approval acceptance was added. The new CLI needs user-run live verification before
 claiming its happy path is live-verified. Commit milestones now follow the user's
 latest autonomous-work instructions; no per-increment PR or merge is required.
+
+
+P14 local metrics increment (2026-11-18): explicit workflow CLI prints a final
+structured summary with local session duration including user wait, consumed
+attempt count, distinct requested selections and workflow state. reportedModels
+and tokenUsage stay null; no pricing, savings or actual-dispatch inference.
+No persistent metrics file/schema change yet. Offline-tested; new CLI live test pending.

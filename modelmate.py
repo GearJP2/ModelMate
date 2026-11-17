@@ -2937,8 +2937,28 @@ def inspect_local_sessions(project, output, session_id=None):
                   + str(len(checkpoint['criterion_evidence'].get(str(index), []))))
 
 
+def workflow_statistics(controller, started_at, *, now=None):
+    """Local session duration includes user wait; requested selections are not dispatch telemetry."""
+    now = time.monotonic() if now is None else now
+    if (type(started_at) not in (int, float) or type(now) not in (int, float)
+            or not math.isfinite(started_at) or not math.isfinite(now) or now < started_at):
+        raise ProbeError('Invalid workflow statistics clock.')
+    state = controller.snapshot()
+    attempts = [event for event in state['history'] if 'checks' in event]
+    if state['active_attempt'] is not None:
+        attempts.append(state['active_attempt'])
+    selections = []
+    for attempt in attempts:
+        if attempt['selection'] not in selections:
+            selections.append(attempt['selection'])
+    return {'state': state['state'], 'elapsedSeconds': round(now - started_at, 3),
+            'includesUserWait': True, 'attempts': len(attempts), 'requestedSelections': selections,
+            'reportedModels': None, 'tokenUsage': None}
+
+
 def run_workflow_file(path, bindings, mode, execute, input_stream, output):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
+    started_at = time.monotonic()
     with open(path, 'rb') as source:
         raw = source.read(65537).decode('utf-8')
     plan = validate_plan(raw)
@@ -3002,6 +3022,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output):
     finally:
         if backend is not None:
             backend.close()
+        preview.write('สถิติ workflow: ' + json.dumps(workflow_statistics(controller, started_at), ensure_ascii=False))
 
 
 def main():

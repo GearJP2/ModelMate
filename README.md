@@ -344,3 +344,8 @@ manual chat เพื่อข้าม checkpoint ผลค้าง และ�
 This increment is offline-tested only. Earlier live probe evidence applies to its
 recorded hashes, not this CLI build. Classifier/auto routing, stronger permission
 paths, private-web isolation and native recovery remain gated.
+
+
+ตอนจบ explicit workflow session จะแสดง `สถิติ workflow` เป็น JSON: elapsedSeconds
+รวมเวลารอผู้ใช้, จำนวน attempts, requestedSelections และ state ส่วน reportedModels
+และ tokenUsage เป็น null เมื่อยังไม่มีข้อมูล ไม่ได้คำนวณค่าใช้จ่ายหรืออ้างว่าประหยัด

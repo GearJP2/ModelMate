@@ -1173,3 +1173,14 @@ No live inference run. Native workflow recovery and automatic routing remain gat
 
 Validation: seven targeted entry tests and 305/305 full offline tests passed;
 runtime/doctor/verifier compilation and `git diff --check` passed.
+
+
+### P14 local explicit-workflow statistics (2026-11-18)
+
+Final CLI summary reports elapsedSeconds from preview start through session close
+(including user wait), attempt count and distinct requested model/effort pairs.
+reportedModels and tokenUsage are null, never estimated from prompts or plan roles.
+The summary does not include task text, answers, account IDs or approval tokens.
+Eight targeted entry tests, including statistics/count/clock checks and an actual
+fake-server CLI exit summary, passed. Full offline suite: 306/306 passed; runtime,
+doctor and verifier compilation plus git diff --check passed. No live inference.
