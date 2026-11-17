@@ -2401,6 +2401,7 @@ class NativeWorkflowConnection(Connection):
         self._events = []
         self._event_bytes = 0
         self._sent_attempts = set()
+        self._displayed = set()
 
     def connect(self, controller, cwd, role_policy=None):
         if self.host is not None or self.thread_id is not None:
@@ -2453,6 +2454,7 @@ class NativeWorkflowConnection(Connection):
         if selection['effort'] == 'ultra':
             raise ProbeError('Workflow delegation is disabled.')
         self._sent_attempts.add(active['id'])
+        self._displayed.clear()
         result = self.request('turn/start', {'threadId': self.thread_id, 'model': selection['model'],
             'effort': selection['effort'], 'input': [{'type': 'text', 'text': json.dumps({
                 'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step']}, ensure_ascii=False)}]})
@@ -2474,6 +2476,29 @@ class NativeWorkflowConnection(Connection):
         self._events.append(message)
         self._event_bytes += size
 
+    def _display_answer(self, message):
+        binding = self.host._binding
+        params = message.get('params', {})
+        if (binding is None or self.host._terminal is not None
+                or message.get('method') != 'item/completed'
+                or params.get('threadId') != binding['thread_id']
+                or params.get('turnId') != binding['turn_id']):
+            return
+        item = params.get('item')
+        if not isinstance(item, dict) or item.get('type') != 'agentMessage':
+            return
+        item_id, text = item.get('id'), item.get('text')
+        if (not isinstance(item_id, str) or not item_id or len(item_id) > 256
+                or not isinstance(text, str) or len(text.encode()) > 4 * 1024 * 1024):
+            raise ProbeError('Invalid workflow assistant text.')
+        if item_id in self._displayed or self.host.on_change is None:
+            return
+        if len(self._displayed) >= 10000:
+            raise ProbeError('Too many workflow assistant messages.')
+        self._displayed.add(item_id)
+        # Display completed text only: deltas never become evidence or duplicate the final answer.
+        self.host.on_change({'type': 'text', 'text': text})
+
     def drain(self):
         while True:
             message = self.pop_message()
@@ -2491,6 +2516,7 @@ class NativeWorkflowConnection(Connection):
                 self.host.observe_native(message)
             else:
                 self.host.observe_native(message)
+                self._display_answer(message)
         if self.stdout_closed:
             raise ProbeError('Workflow backend disconnected; no automatic replay.')
 

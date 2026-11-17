@@ -580,3 +580,8 @@ reuse thread ใน correction; decline tool approvals แล้วพัก; �
 และ public CLI entry point ยังไม่เปิด ไม่มี live gate ผ่านจากข้อมูลจำลอง
 Next: opt-in synthetic live verifier สำหรับ transport/deny/interrupt/context recall
 ก่อนพิจารณาเปิด CLI โดยต้องตรวจ stronger managed policy และ private-web gates แยก
+
+PR #6 display fix (2026-11-18): native transport forwards completed assistant
+messages to UI as text only, scoped to current binding and deduplicated per turn.
+Foreign/late messages and text claims cannot advance workflow or supply evidence.
+No native permission or live gate status changes.

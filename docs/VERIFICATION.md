@@ -1051,3 +1051,20 @@ Runtime/doctor/verifier compilation and `git diff --check` passed. No live infer
 
 Validation: 10 targeted native workflow tests and 284/284 full offline tests
 passed; runtime/doctor/verifier compilation and `git diff --check` passed.
+
+### PR #6 — assistant answer display regression (2026-11-18)
+
+The native transport previously dropped assistant messages. Two new regression
+tests failed against the old implementation (zero displayed answers), then passed
+with completed-message forwarding. UI events carry text only after current
+thread/turn checks. Per-turn item IDs suppress duplicate completions; deltas do not
+repeat the answer. A new turn may reuse an item ID. Foreign and post-terminal
+messages do not display. Terminal/bidi controls are filtered by existing ChatShell.
+
+Text claiming tests passed or DONE leaves checks empty and the turn RUNNING until
+an actual terminal event. No assistant text is copied into workflow checkpoints.
+The subprocess Terminal-loop test now asserts that an answer is visible once.
+
+Validation: 14 native workflow tests and 288/288 full offline tests passed;
+`python3 -m py_compile modelmate.py doctor.py verify.py` and `git diff --check`
+passed. No live inference was run.

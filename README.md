@@ -264,3 +264,8 @@ state directory หรือ lock เพิ่ม สถานะ `DONE` เป�
 caller ต้องปิด connection ใน `finally` และถือ timeout/start failure ว่า outcome unknown
 ไม่เรียก dispatch ซ้ำเอง การเรียก native host API จริงใช้โควตา; tests ใช้ fake server เท่านั้น
 การตั้ง model/effort เป็นเพียงค่าที่ร้องขอ ไม่ใช่หลักฐาน backend dispatch
+
+Native workflow แสดงข้อความจาก `agentMessage` ที่ completed และตรง thread/turn
+ปัจจุบันเพียงครั้งเดียวต่อ item ผ่าน UI ที่กรอง terminal controls ไม่พิมพ์ delta ซ้ำ
+ข้อความเป็นข้อมูลแสดงผลเท่านั้น ไม่ยืนยัน checks หรือเปลี่ยนสถานะงาน และไม่ถูก
+คัดลอกลง checkpoint; ข้อความจาก thread/turn อื่นหรือหลัง terminal event ถูกละทิ้ง
