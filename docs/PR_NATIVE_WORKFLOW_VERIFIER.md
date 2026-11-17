@@ -26,3 +26,10 @@ Review fixes: compare actual ChatShell output instead of text payloads; test the
 local disconnect guard from READY with preflight/dispatch tripwires. New tests reject
 a no-op disconnect and dropped UI text. Earlier live answerDisplay/disconnectGuard
 claims are superseded pending a run with the fixed verifier. No live rerun performed.
+
+
+Updated live evidence: the user reran the fixed verifier at 2679ca7. All six checks
+reported passed; runtime/verifier hashes match local files. This supersedes the
+pending-rerun note above for those two corrected checks. Provenance and exact
+hashes are in docs/VERIFICATION.md. Scope stays synthetic/local-guard only; no
+network recovery, complete permission matrix or backend model telemetry claim.

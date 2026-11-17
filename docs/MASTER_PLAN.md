@@ -609,3 +609,10 @@ live report could be false positives. Those two live claims are UNVERIFIED pendi
 a run with the fixed verifier. Offline regression tests now reject missing UI output
 and a no-op disconnect; the latter uses READY state and preflight/dispatch tripwires
 without additional inference. This supersedes the earlier blanket six-check claim.
+
+
+P10 fixed-probe evidence update (2026-11-18): user-supplied rerun at commit 2679ca7
+reports all six checks passed, including actual rendered answers and the corrected
+READY-state local disconnect probe. Runtime/verifier hashes match local files;
+see VERIFICATION.md. Scoped LIVE_VERIFIED for this probe only. Full permission/web
+and native recovery gates remain open; this does not enable auto routing or CLI.

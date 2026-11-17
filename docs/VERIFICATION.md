@@ -1137,3 +1137,26 @@ remain scoped to their original tested version and synthetic actions.
 
 Validation: 10 targeted probe tests and 298/298 full offline tests passed;
 runtime/doctor/verifier compilation and `git diff --check` passed.
+
+
+### Fixed verifier — user-supplied live rerun (2026-11-18)
+
+Scoped LIVE_VERIFIED: after the PR #7 fixes, the user ran
+`python3 verify.py --run-live --probe-workflow gpt-6.1-sol` again and supplied
+JSON with answerDisplay, contextRecall, approvalDenial, sentinelUnchanged, cancel
+and disconnectGuard all passed; phase finished. Requested gpt-6.1-sol/low;
+reportedModels null. Process exit code was not provided. Evidence was supplied by
+the user, not independently rerun by the agent.
+
+Runtime SHA-256: `d820c340a7d8cb2e7b1b431c7d41ed2aead539a8aebfb9d9f8fee31b3c36a914`
+Verifier SHA-256: `acd3db1d9fe448165e90556fbe68d2c1626a418561dfa16ec3e76d58698a21cd`
+Both match local files at commit `2679ca7`. This rerun supplies scoped evidence
+for the corrected rendered-answer and READY-state disconnect tests; the earlier
+verifier's false-positive claims remain superseded.
+
+Scope: at most four synthetic turns in ephemeral threads. Disconnect guard is
+local only, with preflight/dispatch tripwires. It does not verify network-drop
+recovery, all tool paths, backend dispatch telemetry or service-side erasure.
+No public native workflow CLI, auto routing, native recovery or private-web gate
+is enabled by this result. This evidence update changes documentation only;
+`git diff --check` passed; no additional inference was run by the agent.
