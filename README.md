@@ -141,7 +141,7 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 มี `WorkflowController` สำหรับทดสอบลำดับขั้น/ผลตรวจ/งบแก้ไขแบบออฟไลน์แล้ว
 ผูกกับ `SessionStore.workflow(...)` เพื่อบันทึกแต่ละ transition และคืนสถานะข้าม process ได้
 มี Workflow UI แบบ host-injected ผ่าน `run_chat(..., workflow=controller, workflow_action=host)` แล้ว
-ยังไม่มี CLI entry point สำหรับโหลด workflow และยังไม่ต่อกับ native backend จึงไม่มี auto execution ในรุ่นนี้
+ยังไม่มี CLI entry point สำหรับโหลด workflow; native transport เป็น experimental host API ที่ยังไม่ผ่าน live gate จึงไม่มี auto execution ในรุ่นนี้
 รายละเอียดสัญญา trusted host callbacks และข้อจำกัดอยู่ใน [ผลตรวจ P10](docs/VERIFICATION.md)
 
 เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/check`, `/mode`
@@ -159,7 +159,7 @@ host ต้องส่ง preflight ใหม่ และคืน thread/turn
 item ที่มี start/completion ตรงกัน ผลจากคำสั่งอื่นหรือข้อความว่า “tests passed” ไม่ผ่านเป็นหลักฐาน
 ใช้ `/check` ประเมินผลหลัง terminal event; ยังต้องมี host ยืนยัน coverage ของเกณฑ์ก่อน DONE
 `executor_stream` ของ `run_chat` แยกจากข้อความโมเดลและ UI events และรับได้เฉพาะเมื่อผูก WorkflowHost
-ไม่มี built-in native transport หรือ command runner เพิ่ม และยังไม่รับ tool approval ใน workflow
+มี experimental native transport สำหรับ host API แต่ไม่มี command runner แยก และยังไม่รับ tool approval ใน workflow
 producer ที่เชื่อถือได้ต้องบังคับ sandbox/approval policy แยกต่างหาก; การลงทะเบียน check ไม่อนุมัติคำสั่ง
 timeout/disconnect ไม่ retry; binding/check registrations ไม่ถูก restore โดยเดา ต้องตรวจ native state ใหม่
 
@@ -250,3 +250,17 @@ state directory หรือ lock เพิ่ม สถานะ `DONE` เป�
 ให้ครบก่อนประเมิน attempt หรือจบงาน การยืนยัน terminal status อย่างเดียวไม่ยืนยันผลตรวจ
 ผลใหม่ต้องทราบและตรงกับผลเดิม มิฉะนั้นคง unverified เพื่อให้ host จัดการต่ออย่างชัดเจน
 การยืนยันนี้ไม่ถูกเก็บข้าม restore และไม่สั่งรันคำสั่งหรือโมเดลซ้ำเอง
+
+### Experimental native workflow transport
+
+`NativeWorkflowConnection` เชื่อม explicit `WorkflowController` กับ Codex App Server
+และ `run_chat(..., workflow=controller, workflow_action=host, backend=connection)`
+โดย `connection.connect(controller, cwd, role_policy)` คืน host สำหรับลงทะเบียน checks
+ใช้ native read-only/on-request, ephemeral thread เดียว และ model/effort override ราย turn
+ตัว transport ตรวจ subscription/catalog/quota ก่อนส่งงาน และยืนยัน sandbox จาก thread/start
+คำขอ tool approval จะถูก decline และพัก; ไม่ยกระดับสิทธิ์ ไม่เปิด classifier/auto routing
+
+ในรุ่นนี้ยังไม่เปิด native workflow ผ่าน CLI และไม่รองรับ native workflow resume
+caller ต้องปิด connection ใน `finally` และถือ timeout/start failure ว่า outcome unknown
+ไม่เรียก dispatch ซ้ำเอง การเรียก native host API จริงใช้โควตา; tests ใช้ fake server เท่านั้น
+การตั้ง model/effort เป็นเพียงค่าที่ร้องขอ ไม่ใช่หลักฐาน backend dispatch
