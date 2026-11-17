@@ -786,3 +786,77 @@ workflow/ledger restore and live crash recovery are not implemented here. Do not
 reset a task/controller on model request to evade its budget. No live inference
 was run. Next work is the gated host adapter/CLI and persistence integration;
 P10 and workflow-specific P12 remain IN_PROGRESS.
+
+## P10/P12 durable workflow checkpoints — MOCK_VERIFIED
+
+WorkflowController now has explicit checkpoint export/restore and optional trusted
+persistence binding through `SessionStore.workflow`. Unattached controllers remain
+in-memory and perform no I/O. The context holds the existing Linux session writer
+lock for its entire lifetime and persists each transition before returning it to
+the host. In particular, the reserved attempt is durable before the inert dispatch
+descriptor is returned. Storage errors propagate; a host must stop instead of
+dispatching after a failed write. Exiting the context closes that controller's
+attachment; use a newly restored controller rather than continuing a stale object.
+
+Session schema v3 extends v2 with a nested schema-v1 workflow checkpoint. It stores
+the validated plan, original task/step IDs, attempts/cycles, active attempt, accepted
+evidence, criterion coverage, user choices and budget-extension ledger. Original
+model baseline and account fingerprint are retained. Approval grants, pending model
+requests, approval/pause tokens, raw account ID and tool permissions are excluded.
+Evidence result derivation is shared between newly observed and persisted checks.
+
+Checkpoint validation replays ledger ordering, cycle extensions and attempt counters,
+checks unique identities and exact field sets, matches evidence to the correct
+attempt/check and rejects inconsistent result/exit-code pairs. A budget extension
+requires its preceding explicit continue choice. Session summary fields must match
+the workflow; deletion receipts may override the top-level deletion/pause state.
+Save rejects task/step/baseline replacement, criterion/structure changes, ledger
+truncation, active-attempt loss, status rollback and removal of existing evidence.
+This detects corrupt/inconsistent state; it is not cryptographic protection from
+the same local user deliberately rewriting an entire state file.
+
+Restore requires a fresh allowed quota snapshot, matching account and a still
+supported original baseline. Current catalog/role policy is supplied by the host.
+Temporary model grants are rebuilt empty. Nonterminal workflows restore paused
+with fresh tokens, not dispatches. Running attempts retain their IDs and consumed
+slots and require a native terminal event before continuing. Completed attempts
+can continue CHECKING after an explicit choice, without another model turn.
+Exhausted budgets remain exhausted until an explicit new-cycle choice. Cached
+DONE restores UNVERIFIED and preserves its historical evidence/coverage; the host
+must inspect current files/processes and reassess evidence before asserting DONE.
+FAILED/CLARIFYING retain their phase. No pending model/tool action is replayed.
+
+V1/v2 records remain readable and unchanged by read/list operations. Only explicit
+workflow attachment upgrades a bound v2 record to v3. Unbound/deleting sessions,
+wrong accounts, unsafe quota and unknown existing manual outcomes cannot attach.
+Manual LiveChatConnection resume rejects workflow records before any thread RPC,
+so it cannot discard counters by treating them as ordinary chat. Confirmed deletion
+of workflow metadata still follows the existing preview/token/remote-receipt flow.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_workflow_persistence.py -v`: 25 passed.
+- `python3 -m unittest discover -s tests -q`: 224 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Tests include actual subprocess death both after reserving an attempt and after
+recording an observed synthetic check result; both restore the original counters.
+Other checks cover exhausted/extended cycles, user choices, pending approval/token
+expiry, partial/out-of-order checks, multi-step/source evidence, terminal phases,
+no raw account storage, unknown quota/account/catalog, corrupt/unsupported schema,
+metadata/counter/evidence tampering, task/ledger/status rollback, disk failure before
+dispatch, failed extension save, lock ownership, closed attachments, legacy reads,
+manual-resume refusal and confirmed deletion. All fixtures/account IDs are synthetic.
+
+Limits: this is the persistence/host API milestone, not a user-facing workflow CLI
+or live executor. The existing trusted-callback contract still applies: metadata
+cannot establish whether a host's manual/source finding or exit code is truthful,
+or whether files have changed since evidence was collected. Native thread/turn
+reconciliation must be wired by the future host adapter. These process-death tests
+do not verify native Codex crash recovery or hardware power loss. Existing atomic
+replace/fsync limits remain. Full checkpoints share the session's 1 MiB cap and
+allow at most 4,096 ledger events; oversize fails without dropping history. No
+credentials, transcript, network call or live inference was added. P10/P12 remain
+IN_PROGRESS; next work is the explicit workflow UI/controller host integration,
+with execution/check adapters and their permission gates still separate.

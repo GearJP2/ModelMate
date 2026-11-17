@@ -61,7 +61,7 @@ class SessionStoreTests(unittest.TestCase):
     def test_corrupt_and_future_version_files_are_not_overwritten(self):
         record = self.store.create('task')
         path = self.path(record)
-        for payload in [b'broken JSON', json.dumps(dict(record, version=3)).encode()]:
+        for payload in [b'broken JSON', json.dumps(dict(record, version=4)).encode()]:
             path.write_bytes(payload)
             with self.assertRaises(ProbeError):
                 with self.store.edit(record['id']):

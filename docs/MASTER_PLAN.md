@@ -212,9 +212,9 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell MOCK_VERIFIED; integration รอ P09/P11/P12 | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
-| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: offline controller MOCK_VERIFIED; execution/CLI/persistence integration pending permission gates | จำเป็น |
+| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller + workflow checkpoints MOCK_VERIFIED; execution/CLI integration pending permission gates | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual reconnect/recall/delete happy path LIVE_VERIFIED; workflow รอ P10 และ crash recovery ยังไม่ตรวจสด | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | TODO | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | TODO | ตรวจคำกล่าวอ้าง |
@@ -366,9 +366,11 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 ### P10 — Workflow และ correction budget
 
 ไฟล์: modelmate.py, tests/test_workflow.py
-มี WorkflowController แบบ in-memory/offline แล้ว: ไม่มี network/process/tool execution
+มี WorkflowController แบบ offline แล้ว: ไม่มี network/process/tool execution
 เชื่อม ModelApprovals และ quota_decision; dispatch descriptor ยังไม่ถูกส่งไป backend
-เก็บ controller IDs, attempts/cycles/evidence และ user-choice ledger; ยังไม่ restore จาก session
+เก็บ controller IDs, attempts/cycles/evidence และ user-choice ledger
+ใช้ SessionStore.workflow เพื่อ autosave ทุก transition ภายใต้ writer lock และ restore จาก session schema v3
+restore ไม่คืน approval/token/grant; active turn ที่ยังไม่ทราบผลต้อง reconcile ก่อน ไม่ replay
 controller methods รับเฉพาะ trusted host/UI events ไม่ใช่ API ที่เปิดให้โมเดลเรียกโดยตรง
 Controller ถือ state/step IDs/counters; classifier แค่เสนอ
 initial attempt + correction 1 + correction 2 จากนั้นหยุดถาม
@@ -403,6 +405,8 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion
 เพิ่ม schema v2 ผูก account fingerprint/turn/deletion receipt; v1 ไม่เดาบัญชีเพื่อ resume
+เพิ่ม schema v3 เฉพาะเมื่อผูก workflow: checkpoint schema v1 พร้อม validated ledger/counters/evidence
+v1/v2 ไม่ถูกอัปเกรดจากการอ่าน; manual chat ปฏิเสธการ resume workflow เพื่อไม่ทิ้ง controller state
 หลักฐาน offline อยู่ใน VERIFICATION.md; ยังไม่อ้าง workflow lifecycle หรือ live gate ผ่าน
 มี `verify.py --run-live --probe-sessions MODEL` สำหรับเก็บหลักฐานสอง turn ข้าม reconnect
 พร้อมตรวจ deletion เฉพาะ scratch thread; ผู้ใช้รันสดผ่านบน 5647656 และ hashes ตรงกัน

@@ -139,6 +139,7 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 การประหยัด quota และคุณภาพ routing ยังต้องประเมินกับงานจริง ไม่มี benchmark รับรอง
 
 มี `WorkflowController` สำหรับทดสอบลำดับขั้น/ผลตรวจ/งบแก้ไขแบบออฟไลน์แล้ว
+ผูกกับ `SessionStore.workflow(...)` เพื่อบันทึกแต่ละ transition และคืนสถานะข้าม process ได้
 ยังไม่ต่อเข้าคำสั่งแชตหรือ backend จึงยังไม่มี auto execution ในรุ่นนี้
 รายละเอียดสัญญา trusted host callbacks และข้อจำกัดอยู่ใน [ผลตรวจ P10](docs/VERIFICATION.md)
 
@@ -198,4 +199,16 @@ Exception ก่อน save จะไม่เขียนข้อมูลค�
 symlink path ของโปรเจกต์เดียวกันใช้ identity เดียวกัน แต่ state-file symlink ถูกปฏิเสธ
 ไฟล์ JSON เสียหรือ schema รุ่นที่ไม่รู้จักจะไม่ถูกเขียนทับ
 ค่า permission profile ที่บันทึกเป็น metadata ไม่ใช่สิทธิ์อนุมัติให้กลับมาทำงานเอง
-ยังไม่เชื่อม workflow/correction controller ของ P10; P12 ทั้งใบงานยังไม่ถือว่าเสร็จ
+มี persistence API ของ workflow/correction controller แล้ว แต่ยังไม่เชื่อม UI หรือ execution
+session ที่ผูก workflow ใช้ schema v3 และ manual `--resume` จะปฏิเสธ เพื่อไม่ข้าม controller
+P10/P12 ทั้งใบงานยังไม่ถือว่าเสร็จ
+
+สำหรับ host integration: `SessionStore.workflow` ถือ lock ตลอด context และบันทึกก่อนคืน
+dispatch descriptor/ผล transition หากเขียนดิสก์ไม่สำเร็จจะ raise และไม่คืน descriptor ให้ส่งงาน
+เมื่อออกจาก context controller นั้นใช้ต่อไม่ได้ ต้อง restore ใหม่
+เก็บ step IDs, attempts/cycles, ledger และหลักฐาน แต่ไม่เก็บ approval grants/tokens หรือ raw account ID
+อ่าน schema v1/v2 เดิมได้ตามปกติ และไม่อัปเกรดจนกว่าจะผูก workflow อย่างชัดเจน
+การ restore ต้องมี quota/account/catalog snapshot ใหม่และตรวจ baseline ที่ยังรองรับ
+งานที่กำลังรันจะพักเป็น outcome_unknown; งาน DONE เดิมคืนเป็น UNVERIFIED
+host ต้องตรวจ native thread/process/files และหลักฐานปัจจุบันก่อนยืนยันผลหรือทำต่อ
+checkpoint เต็มไฟล์จำกัด 1 MiB และ ledger 4,096 events; เกินเพดานจะไม่บันทึกทับหรือตัดประวัติทิ้ง

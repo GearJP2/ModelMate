@@ -591,6 +591,53 @@ class ModelApprovals:
         return result
 
 
+def workflow_check_result(kind, origin, result, exit_code, reference, finding):
+    """Shared validation for newly observed evidence and its persisted representation."""
+    if origin not in ('tool', 'manual', 'source', 'model_review') or result not in ('pass', 'fail', 'unknown'):
+        raise ProbeError('Invalid evidence provenance or result.')
+    _plan_text(reference)
+    _plan_text(finding)
+    if exit_code is not None and (type(exit_code) is not int or origin != 'tool'):
+        raise ProbeError('Exit codes must be observed integers from tools.')
+    if kind in ('test', 'lint') and origin == 'tool' and exit_code is not None:
+        return 'pass' if exit_code == 0 else 'fail'
+    if kind in ('rubric', 'manual') and origin == 'manual':
+        return result
+    if kind == 'source' and origin == 'source':
+        from urllib.parse import urlsplit
+        try:
+            url = urlsplit(reference)
+        except ValueError:
+            raise ProbeError('Invalid source evidence URL.') from None
+        if url.scheme not in ('https', 'http') or not url.netloc or url.username or url.password:
+            raise ProbeError('Source evidence requires an HTTP(S) URL and a verified claim finding.')
+        return result
+    return 'unknown'
+
+
+def _workflow_id(value):
+    import re
+    if not isinstance(value, str) or re.fullmatch('[0-9a-f]{32}', value) is None:
+        raise ProbeError('Invalid workflow ID.')
+    return value
+
+
+def _workflow_timestamp(value):
+    try:
+        stamp = datetime.fromisoformat(value)
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise ValueError('timezone required')
+    except (ValueError, TypeError, AttributeError):
+        raise ProbeError('Invalid workflow evidence timestamp.') from None
+
+
+def _workflow_selection(value):
+    if not isinstance(value, dict) or set(value) != {'model', 'effort'}:
+        raise ProbeError('Invalid workflow model selection.')
+    _plan_text(value['model'])
+    _plan_text(value['effort'])
+
+
 class WorkflowController:
     """Offline state only. Methods accept trusted host/UI events, never model claims as authority."""
 
@@ -614,6 +661,62 @@ class WorkflowController:
         self._model_request = None
         self._account_id = None
         self._coverage = {}
+        self._persist = None
+
+    def _updated(self):
+        if self._persist is not None:
+            self._persist(self)
+        return self.snapshot()
+
+    def export_checkpoint(self):
+        import hashlib
+        history = copy.deepcopy(self._history)
+        active = copy.deepcopy(self._active)
+        for attempt in history + ([active] if active is not None else []):
+            if 'checks' in attempt:
+                attempt['checks'] = sorted(attempt['checks'].values(), key=lambda e: e['check_index'])
+        steps = copy.deepcopy(self._steps)
+        for step in steps:
+            step['evidence'].sort(key=lambda e: e['check_index'])
+        data = {'version': 1, 'plan': self._raw, 'task_id': self.task_id, 'mode': self.mode,
+            'baseline': copy.deepcopy(self._approvals.baseline), 'state': self.state, 'reason': self.reason,
+            'step_index': self._index, 'steps': steps, 'active_attempt': active, 'history': history,
+            'criterion_evidence': {str(i): ids for i, ids in self._coverage.items()},
+            'account_hash': None if self._account_id is None else hashlib.sha256(self._account_id.encode()).hexdigest()}
+        return validate_workflow_checkpoint(data)
+
+    @classmethod
+    def restore_checkpoint(cls, data, quota, checked_at, catalog, role_policy=None):
+        import hashlib
+        data = validate_workflow_checkpoint(data)
+        decision = quota_decision(quota, checked_at)
+        if decision['state'] != 'allow':
+            raise ProbeError('Workflow restore paused: ' + decision['reason'])
+        fingerprint = hashlib.sha256(decision['account_id'].encode()).hexdigest()
+        if data['account_hash'] is not None and data['account_hash'] != fingerprint:
+            raise ProbeError('Workflow account mismatch.')
+        baseline = select_model(catalog, data['baseline']['model'], data['baseline']['effort'])
+        restored = cls(data['plan'], catalog, role_policy, data['mode'])
+        restored.task_id = restored._approvals.task_id = data['task_id']
+        restored._approvals.baseline = baseline
+        restored._account_id = decision['account_id']
+        restored._index, restored._steps = data['step_index'], data['steps']
+        restored._active, restored._history = data['active_attempt'], data['history']
+        for attempt in restored._history + ([restored._active] if restored._active is not None else []):
+            if 'checks' in attempt:
+                attempt['checks'] = {e['check_index']: e for e in attempt['checks']}
+        restored._coverage = {int(i): ids for i, ids in data['criterion_evidence'].items()}
+        if data['state'] == 'CLARIFYING':
+            restored.state = 'CLARIFYING'
+        elif data['state'] in ('DONE', 'FAILED'):
+            restored.state = 'UNVERIFIED' if data['state'] == 'DONE' else 'FAILED'
+            restored.reason = 'restored_result_unverified' if data['state'] == 'DONE' else data['reason']
+        else:
+            step = restored._steps[restored._index] if restored._index < len(restored._steps) else None
+            running = restored._active is not None and restored._active['status'] == 'running'
+            limit = restored._active is None and step is not None and step['attempts'] >= 3
+            restored._pause('outcome_unknown' if running else 'correction_limit' if limit else 'user_pause')
+        return restored
 
     def snapshot(self):
         return copy.deepcopy({'task_id': self.task_id, 'state': self.state, 'reason': self.reason,
@@ -630,13 +733,13 @@ class WorkflowController:
         self._pause_token = uuid.uuid4().hex
         self._model_request = None
         self._approvals._invalidate()
-        return self.snapshot()
+        return self._updated()
 
     def request_attempt(self, quota, checked_at, catalog, role_policy=None):
         """Consume a slot before dispatch. Returned data does not grant any tool permission."""
         import uuid
         if self.state not in ('READY', 'AWAITING_MODEL_APPROVAL'):
-            return self.snapshot()
+            return self._updated()
         decision = quota_decision(quota, checked_at, expected_account=self._account_id)
         if decision['state'] != 'allow':
             return self._pause(decision['reason'])
@@ -649,7 +752,7 @@ class WorkflowController:
         if gate['state'] == 'ask':
             self.state = 'AWAITING_MODEL_APPROVAL'
             self._model_request = gate
-            return self.snapshot()
+            return self._updated()
         if gate['state'] != 'allow_model':
             return self._pause(gate.get('reason', 'model_unavailable'))
         step['attempts'] += 1
@@ -658,7 +761,7 @@ class WorkflowController:
         self._model_request = None
         self._active = {'id': uuid.uuid4().hex, 'step_id': step['id'], 'cycle': step['cycle'],
             'number': step['attempts'], 'selection': gate['selection'], 'status': 'running', 'checks': {}}
-        return dict(self.snapshot(), dispatch=copy.deepcopy({
+        return dict(self._updated(), dispatch=copy.deepcopy({
             'attempt_id': self._active['id'], 'step_id': step['id'], 'selection': gate['selection'],
             'step': self._plan['steps'][self._index], 'execution': 'not_dispatched', 'tool_permissions': 'none'}))
 
@@ -669,7 +772,7 @@ class WorkflowController:
         self._model_request = None
         if choice == 'approve':
             self.state = 'READY'
-            return self.snapshot()
+            return self._updated()
         return self._pause('model_selection_declined')
 
     def revise_step(self, raw):
@@ -691,7 +794,7 @@ class WorkflowController:
             self.state = 'READY'
         if self.state == 'PAUSED':
             return self._pause(self.reason)
-        return self.snapshot()
+        return self._updated()
 
     def _attempt(self, attempt_id):
         if self._active is None or not isinstance(attempt_id, str) or attempt_id != self._active['id']:
@@ -713,7 +816,7 @@ class WorkflowController:
             if status == 'interrupted':
                 return self._pause('outcome_unknown')
             self.state, self.reason = 'FAILED', 'execution_failed'
-        return self.snapshot()
+        return self._updated()
 
     def record_check(self, attempt_id, check_index, *, origin, result='unknown', exit_code=None,
                      reference, finding):
@@ -725,32 +828,14 @@ class WorkflowController:
                 or type(check_index) is not int or not 0 <= check_index < len(checks)
                 or check_index in attempt['checks']):
             raise ProbeError('Invalid, duplicate or out-of-phase check.')
-        if origin not in ('tool', 'manual', 'source', 'model_review') or result not in ('pass', 'fail', 'unknown'):
-            raise ProbeError('Invalid evidence provenance or result.')
-        _plan_text(reference)
-        _plan_text(finding)
-        if exit_code is not None and (type(exit_code) is not int or origin != 'tool'):
-            raise ProbeError('Exit codes must be observed integers from tools.')
         kind = checks[check_index]['kind']
-        verified = 'unknown'
-        if kind in ('test', 'lint') and origin == 'tool' and exit_code is not None:
-            verified = 'pass' if exit_code == 0 else 'fail'
-        elif kind in ('rubric', 'manual') and origin == 'manual':
-            verified = result
-        elif kind == 'source' and origin == 'source':
-            from urllib.parse import urlsplit
-            try:
-                url = urlsplit(reference)
-            except ValueError:
-                raise ProbeError('Invalid source evidence URL.') from None
-            if url.scheme not in ('https', 'http') or not url.netloc or url.username or url.password:
-                raise ProbeError('Source evidence requires an HTTP(S) URL and a verified claim finding.')
-            verified = result
+        verified = workflow_check_result(kind, origin, result, exit_code, reference, finding)
         evidence = {'id': uuid.uuid4().hex, 'step_id': attempt['step_id'], 'attempt_id': attempt_id,
             'check_index': check_index, 'kind': kind, 'origin': origin, 'result': verified,
             'exit_code': exit_code, 'reference': reference, 'finding': finding,
             'timestamp': datetime.now(timezone.utc).isoformat()}
         attempt['checks'][check_index] = evidence
+        self._updated()
         return copy.deepcopy(evidence)
 
     def evaluate_attempt(self, attempt_id):
@@ -776,7 +861,7 @@ class WorkflowController:
             self._index += 1
             self.state = 'READY' if self._index < len(self._steps) else 'CHECKING'
             self.reason = None if self.state == 'READY' else 'task_criteria_pending'
-        return self.snapshot()
+        return self._updated()
 
     def finish_task(self, coverage):
         """Trusted checker maps each success criterion to accepted, current evidence IDs."""
@@ -795,7 +880,7 @@ class WorkflowController:
         else:
             self.state, self.reason = 'DONE', None
         self._coverage = copy.deepcopy(coverage)
-        return self.snapshot()
+        return self._updated()
 
     def pause(self, reason='user_pause'):
         if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'connection_lost'):
@@ -808,7 +893,7 @@ class WorkflowController:
         decision = quota_decision(quota, checked_at, expected_account=self._account_id)
         if decision['state'] != 'allow' and self.state not in ('DONE', 'FAILED', 'CLARIFYING'):
             return self._pause(decision['reason'])
-        return self.snapshot()
+        return self._updated()
 
     def answer_pause(self, token, choice):
         if (self.state != 'PAUSED' or not isinstance(token, str) or token != self._pause_token
@@ -830,7 +915,167 @@ class WorkflowController:
         self._pause_token = None
         self.state = 'CHECKING' if self._active is not None or step is None else 'READY'
         self.reason = None
-        return self.snapshot()
+        return self._updated()
+
+
+def validate_workflow_checkpoint(data):
+    """Validate JSON shape and replay the ledger's counters; never restore grants or execute actions."""
+    import re
+    fields = {'version', 'plan', 'task_id', 'mode', 'baseline', 'state', 'reason', 'step_index',
+              'steps', 'active_attempt', 'history', 'criterion_evidence', 'account_hash'}
+    if not isinstance(data, dict) or set(data) != fields or type(data['version']) is not int or data['version'] != 1:
+        raise ProbeError('Invalid or unsupported workflow checkpoint schema.')
+    try:
+        # shortcut: full checkpoints share the session's 1 MiB cap; add storage changes only when needed.
+        if len(json.dumps(data, ensure_ascii=True, allow_nan=False).encode()) > 1024 * 1024:
+            raise ProbeError('Workflow checkpoint is too large; nothing saved.')
+    except (ValueError, TypeError, RecursionError):
+        raise ProbeError('Invalid workflow checkpoint JSON.') from None
+    plan = validate_plan(data['plan'])
+    _workflow_id(data['task_id'])
+    _workflow_selection(data['baseline'])
+    if data['mode'] not in ('auto', 'ask_to_escalate', 'approve_plan') or data['state'] not in (
+            'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'RUNNING', 'CHECKING',
+            'DONE', 'UNVERIFIED', 'PAUSED', 'FAILED'):
+        raise ProbeError('Invalid saved workflow mode/state.')
+    if data['reason'] is not None and (not isinstance(data['reason'], str)
+            or not data['reason'].strip() or len(data['reason']) > 256):
+        raise ProbeError('Invalid workflow pause reason.')
+    if data['state'] == 'PAUSED' and data['reason'] is None:
+        raise ProbeError('Paused workflow requires a reason.')
+    if data['account_hash'] is not None and (not isinstance(data['account_hash'], str)
+            or re.fullmatch('[0-9a-f]{64}', data['account_hash']) is None):
+        raise ProbeError('Invalid workflow account binding.')
+    steps = data['steps']
+    if not isinstance(steps, list) or len(steps) != len(plan['steps']):
+        raise ProbeError('Workflow steps do not match the saved plan.')
+    ids = []
+    for step in steps:
+        if not isinstance(step, dict) or set(step) != {'id', 'cycle', 'attempts', 'state', 'evidence'}:
+            raise ProbeError('Invalid workflow step checkpoint.')
+        ids.append(_workflow_id(step['id']))
+    if len(set(ids)) != len(ids) or data['task_id'] in ids:
+        raise ProbeError('Duplicate workflow identity.')
+    count, cycles = [0] * len(steps), [0] * len(steps)
+    states, accepted = ['READY'] * len(steps), [[] for _ in steps]
+    attempt_ids, evidence_ids = set(ids) | {data['task_id']}, set()
+    index = 0
+    history = data['history']
+    if not isinstance(history, list) or len(history) > 4096:
+        raise ProbeError('Invalid or oversized workflow ledger.')
+
+    def attempt_record(attempt, active=False):
+        if (index >= len(steps) or not isinstance(attempt, dict)
+                or set(attempt) != {'id', 'step_id', 'cycle', 'number', 'selection', 'status', 'checks'}):
+            raise ProbeError('Invalid workflow attempt checkpoint.')
+        aid = _workflow_id(attempt['id'])
+        if aid in attempt_ids or aid in evidence_ids or attempt['step_id'] != ids[index]:
+            raise ProbeError('Duplicate/stale workflow attempt identity.')
+        attempt_ids.add(aid)
+        if (type(attempt['cycle']) is not int or attempt['cycle'] != cycles[index]
+                or type(attempt['number']) is not int or attempt['number'] != count[index] + 1
+                or not 1 <= attempt['number'] <= 3):
+            raise ProbeError('Workflow attempt counter does not match its ledger.')
+        _workflow_selection(attempt['selection'])
+        allowed = ('running', 'completed') if active else ('completed', 'failed', 'interrupted')
+        if attempt['status'] not in allowed or not isinstance(attempt['checks'], list):
+            raise ProbeError('Invalid workflow attempt status/checks.')
+        checks = plan['steps'][index]['checks']
+        if len(attempt['checks']) > len(checks) or (attempt['status'] != 'completed' and attempt['checks']):
+            raise ProbeError('Evidence cannot precede a completed attempt.')
+        seen = set()
+        for e in attempt['checks']:
+            if not isinstance(e, dict) or set(e) != {'id', 'step_id', 'attempt_id', 'check_index', 'kind',
+                    'origin', 'result', 'exit_code', 'reference', 'finding', 'timestamp'}:
+                raise ProbeError('Invalid workflow evidence fields.')
+            eid, check = _workflow_id(e['id']), e['check_index']
+            if (eid in evidence_ids or eid in attempt_ids or type(check) is not int or not 0 <= check < len(checks)
+                    or check in seen or e['step_id'] != ids[index] or e['attempt_id'] != aid
+                    or e['kind'] != checks[check]['kind']):
+                raise ProbeError('Workflow evidence identity/check mismatch.')
+            seen.add(check)
+            evidence_ids.add(eid)
+            _workflow_timestamp(e['timestamp'])
+            if workflow_check_result(e['kind'], e['origin'], e['result'], e['exit_code'], e['reference'], e['finding']) != e['result']:
+                raise ProbeError('Workflow evidence result disagrees with its observation.')
+        count[index] += 1
+        return len(attempt['checks']) == len(checks) and all(e['result'] == 'pass' for e in attempt['checks'])
+
+    for position, event in enumerate(history):
+        if not isinstance(event, dict) or (index < len(steps) and states[index] == 'FAILED'):
+            raise ProbeError('Invalid workflow ledger progression.')
+        if 'kind' not in event:
+            passed = attempt_record(event)
+            if event['status'] == 'completed':
+                if passed:
+                    states[index], accepted[index] = 'DONE', event['checks']
+                    index += 1
+                else:
+                    states[index] = 'READY' if any(e['result'] == 'fail' for e in event['checks']) else 'UNVERIFIED'
+            else:
+                states[index] = 'FAILED' if event['status'] == 'failed' else 'PAUSED'
+        elif event['kind'] == 'user_choice':
+            if (set(event) != {'kind', 'choice', 'reason', 'step_id', 'timestamp'}
+                    or event['choice'] not in ('continue', 'revise_scope', 'pause')
+                    or event['step_id'] != (ids[index] if index < len(steps) else None)):
+                raise ProbeError('Invalid workflow user-choice event.')
+            _plan_text(event['reason'])
+            _workflow_timestamp(event['timestamp'])
+        elif event['kind'] == 'budget_extension':
+            previous = history[position - 1] if position else {}
+            if (set(event) != {'kind', 'step_id', 'cycle', 'attempts', 'timestamp'} or index >= len(steps)
+                    or event['step_id'] != ids[index] or type(event['cycle']) is not int
+                    or event['cycle'] != cycles[index] or type(event['attempts']) is not int
+                    or event['attempts'] != count[index] or count[index] != 3
+                    or previous.get('kind') != 'user_choice' or previous.get('choice') != 'continue'
+                    or previous.get('reason') != 'correction_limit' or previous.get('step_id') != ids[index]):
+                raise ProbeError('Workflow budget extension lacks its explicit user choice.')
+            _workflow_timestamp(event['timestamp'])
+            count[index] = 0
+            cycles[index] += 1
+        else:
+            raise ProbeError('Unknown workflow ledger event.')
+    active = data['active_attempt']
+    if active is not None:
+        attempt_record(active, active=True)
+        states[index] = 'RUNNING'
+    if type(data['step_index']) is not int or data['step_index'] != index:
+        raise ProbeError('Workflow position disagrees with its ledger.')
+    for i, step in enumerate(steps):
+        if (type(step['cycle']) is not int or step['cycle'] != cycles[i]
+                or type(step['attempts']) is not int or step['attempts'] != count[i]
+                or step['state'] != states[i] or step['evidence'] != accepted[i]):
+            raise ProbeError('Workflow state/evidence/counters disagree with their ledger.')
+    coverage = data['criterion_evidence']
+    passed_ids = {e['id'] for group in accepted for e in group}
+    criterion_keys = {str(i) for i in range(len(plan['success_criteria']))}
+    if not isinstance(coverage, dict) or not set(coverage) <= criterion_keys:
+        raise ProbeError('Invalid saved criterion coverage.')
+    for entries in coverage.values():
+        if (not isinstance(entries, list) or not 1 <= len(entries) <= 384
+                or any(not isinstance(eid, str) or eid not in passed_ids for eid in entries)):
+            raise ProbeError('Saved criterion references stale or invalid evidence.')
+    state = data['state']
+    if bool(plan['clarifications']) != (state == 'CLARIFYING') or (state == 'CLARIFYING' and (history or active)):
+        raise ProbeError('Saved clarification state is inconsistent.')
+    if (any('kind' not in event for event in history) or active) and data['account_hash'] is None:
+        raise ProbeError('Attempt history requires an account binding.')
+    if active is not None:
+        expected = 'RUNNING' if active['status'] == 'running' else 'CHECKING'
+        if state not in (expected, 'PAUSED'):
+            raise ProbeError('Saved active-attempt phase is inconsistent.')
+    elif index == len(steps):
+        if state not in ('CHECKING', 'UNVERIFIED', 'DONE', 'PAUSED'):
+            raise ProbeError('Saved finished-step phase is inconsistent.')
+    elif state not in ('READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'UNVERIFIED', 'PAUSED', 'FAILED'):
+        raise ProbeError('Saved idle-step phase is inconsistent.')
+    if state == 'FAILED' and (index >= len(steps) or states[index] != 'FAILED'):
+        raise ProbeError('Saved failure has no failed attempt.')
+    if state != 'FAILED' and index < len(steps) and states[index] == 'FAILED':
+        raise ProbeError('Failed attempt cannot become ready without a new task.')
+    if state == 'DONE' and (index != len(steps) or set(coverage) != criterion_keys):
+        raise ProbeError('Saved DONE lacks completed steps or criterion evidence.')
+    return copy.deepcopy(data)
 
 
 def diagnostic_code(error):
@@ -1270,6 +1515,8 @@ class LiveChatConnection(Connection):
         try:
             record = self.store.read(session_id)
             self._check_identity(record)
+            if record.get('workflow') is not None:
+                raise ProbeError('Saved workflow requires its controller; manual chat cannot resume it.')
             if record['deletion_state'] != 'none' or not record['thread_id']:
                 raise ProbeError('Session has no resumable thread or has a pending deletion.')
             tid = record['thread_id']
@@ -1679,6 +1926,7 @@ SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'cri
                   'step_id', 'correction_count', 'mode', 'permission_profile', 'state',
                   'pause_reason', 'summary', 'updated_at'}
 SESSION_V2_FIELDS = SESSION_FIELDS | {'account_hash', 'turn_id', 'deletion_state'}
+SESSION_V3_FIELDS = SESSION_V2_FIELDS | {'workflow'}
 SESSION_STATES = {'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'AWAITING_TOOL_APPROVAL',
                   'RUNNING', 'CHECKING', 'DONE', 'UNVERIFIED', 'PAUSED', 'FAILED'}
 
@@ -1747,11 +1995,11 @@ class SessionStore:
         if not isinstance(record, dict):
             raise ProbeError('Invalid session metadata fields; file not modified.')
         version = record.get('version')
-        if type(version) is not int or version not in (1, 2):
+        if type(version) is not int or version not in (1, 2, 3):
             raise ProbeError('Unsupported session version; file not modified.')
-        if set(record) != (SESSION_FIELDS if version == 1 else SESSION_V2_FIELDS):
+        if set(record) != {1: SESSION_FIELDS, 2: SESSION_V2_FIELDS, 3: SESSION_V3_FIELDS}[version]:
             raise ProbeError('Invalid session metadata fields; file not modified.')
-        if version == 2:
+        if version >= 2:
             import re
             if (not isinstance(record['account_hash'], str)
                     or re.fullmatch('[0-9a-f]{64}', record['account_hash']) is None
@@ -1792,6 +2040,17 @@ class SessionStore:
                 raise ValueError('timezone required')
         except (ValueError, TypeError, AttributeError):
             raise ProbeError('Invalid session timestamp.') from None
+        if version == 3:
+            flow = validate_workflow_checkpoint(record['workflow'])
+            plan = validate_plan(flow['plan'])
+            step = flow['steps'][flow['step_index']] if flow['step_index'] < len(flow['steps']) else None
+            mirror = {'goal': plan['goal'], 'criteria': plan['success_criteria'], 'mode': flow['mode'],
+                      'step_id': step['id'] if step else None,
+                      'correction_count': max(0, step['attempts'] - 1) if step else 0}
+            if record['deletion_state'] == 'none':
+                mirror.update(state=flow['state'], pause_reason=flow['reason'] if flow['state'] == 'PAUSED' else None)
+            if flow['account_hash'] != record['account_hash'] or any(record[k] != v for k, v in mirror.items()):
+                raise ProbeError('Session metadata disagrees with its workflow checkpoint.')
         return record
 
     def _open_file(self, name, flags):
@@ -1886,6 +2145,84 @@ class SessionStore:
             else:
                 raise ProbeError('Session ID collision; existing file not modified.')
         return self.read(session_id)
+
+    def save_workflow(self, session_id, controller):
+        self._name(session_id)
+        if session_id not in self._locked_ids or not isinstance(controller, WorkflowController):
+            raise ProbeError('Workflow checkpoint requires the session writer lock and controller.')
+        record = self.read(session_id)
+        if record['version'] < 2 or record['deletion_state'] != 'none':
+            raise ProbeError('Cannot attach a workflow to unbound or deleting metadata.')
+        if 'workflow' not in record and (record['state'] in ('RUNNING', 'CHECKING', 'AWAITING_TOOL_APPROVAL')
+                or (record['state'] == 'PAUSED' and record['pause_reason'] in (
+                    'outcome_unknown', 'connection_lost', 'thread_start_unknown'))):
+            raise ProbeError('Reconcile the existing session outcome before attaching a workflow.')
+        data = controller.export_checkpoint()
+        if data['account_hash'] is None:
+            data['account_hash'] = record['account_hash']
+        if data['account_hash'] != record['account_hash']:
+            raise ProbeError('Workflow/session account mismatch.')
+        previous = record.get('workflow')
+        if previous is not None:
+            if (previous['task_id'] != data['task_id'] or previous['history'] != data['history'][:len(previous['history'])]):
+                raise ProbeError('Cannot replace a workflow task or roll back its ledger.')
+            if (previous['baseline'] != data['baseline']
+                    or [s['id'] for s in previous['steps']] != [s['id'] for s in data['steps']]):
+                raise ProbeError('Cannot replace workflow baseline or step identities.')
+            old_plan, new_plan = validate_plan(previous['plan']), validate_plan(data['plan'])
+            allowed_plan = copy.deepcopy(old_plan)
+            for i, old_step in enumerate(previous['steps']):
+                if old_step['state'] != 'DONE':
+                    for field in ('objective', 'role', 'effort', 'reason'):
+                        allowed_plan['steps'][i][field] = new_plan['steps'][i][field]
+            if new_plan != allowed_plan:
+                raise ProbeError('Cannot rewrite saved workflow criteria, structure or completed steps.')
+            old = previous['active_attempt']
+            if old is not None:
+                attempts = [event for event in data['history'] if 'kind' not in event]
+                if data['active_attempt'] is not None:
+                    attempts.append(data['active_attempt'])
+                newer = next((event for event in attempts if event['id'] == old['id']), None)
+                if (newer is None or any(e not in newer['checks'] for e in old['checks'])
+                        or any(old[k] != newer[k] for k in old if k not in ('checks', 'status'))
+                        or (old['status'] == 'completed' and newer['status'] != 'completed')):
+                    raise ProbeError('Cannot discard an active attempt or its existing evidence.')
+        plan = validate_plan(data['plan'])
+        step = data['steps'][data['step_index']] if data['step_index'] < len(data['steps']) else None
+        record.update(version=3, workflow=data, goal=plan['goal'], criteria=plan['success_criteria'],
+            step_id=step['id'] if step else None, correction_count=max(0, step['attempts'] - 1) if step else 0,
+            mode=data['mode'], permission_profile='read_only', state=data['state'],
+            pause_reason=data['reason'] if data['state'] == 'PAUSED' else None)
+        self.save(record)
+
+    @contextmanager
+    def workflow(self, session_id, quota, checked_at, catalog, role_policy=None, *, controller=None):
+        """Hold one writer lock and persist every controller transition before returning to its caller."""
+        import hashlib
+        with self._lock(session_id):
+            record = self.read(session_id)
+            decision = quota_decision(quota, checked_at)
+            if decision['state'] != 'allow':
+                raise ProbeError('Workflow attachment paused: ' + decision['reason'])
+            fingerprint = hashlib.sha256(decision['account_id'].encode()).hexdigest()
+            if record.get('account_hash') != fingerprint:
+                raise ProbeError('Workflow session account mismatch or legacy unbound record.')
+            if controller is None:
+                if 'workflow' not in record:
+                    raise ProbeError('Session has no saved workflow.')
+                controller = WorkflowController.restore_checkpoint(record['workflow'], quota, checked_at, catalog, role_policy)
+            elif controller._persist is not None:
+                raise ProbeError('Workflow is already attached or closed; restore its checkpoint instead.')
+            elif controller._account_id is None:
+                controller._account_id = decision['account_id']
+            self.save_workflow(session_id, controller)
+            controller._persist = lambda current: self.save_workflow(session_id, current)
+            try:
+                yield controller
+            finally:
+                def closed(_):
+                    raise ProbeError('Workflow attachment is closed; restore from its checkpoint.')
+                controller._persist = closed
 
     def remove(self, session_id):
         name = self._name(session_id)
