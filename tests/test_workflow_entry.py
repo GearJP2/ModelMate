@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modelmate import ChatShell, ProbeError, WorkflowController, run_workflow_file, SessionStore, main, workflow_statistics
+from modelmate import ChatShell, ProbeError, WorkflowController, run_workflow_file, SessionStore, main, workflow_statistics, WorkflowHost
 from test_routing import PLAN, CATALOG, POLICY, QUOTA
 from test_native_workflow import SERVER
 
@@ -78,6 +78,40 @@ class WorkflowEntryTests(unittest.TestCase):
             shell.line(command);self.assertNotEqual(c.state,'DONE')
         shell.line('/finish 1='+evidence['id'])
         self.assertEqual(c.state,'DONE')
+
+    def test_short_evidence_refs_require_accepted_checks_and_explicit_coverage(self):
+        c = WorkflowController(json.dumps(self.plan), CATALOG, POLICY)
+        shell = ChatShell(io.StringIO(), workflow=c)
+        aid = c.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)['dispatch']['attempt_id']
+        c.finish_attempt(aid, 'completed')
+        shell.line('/verify 1 pass')
+        shell.line('/finish 1=1.1')
+        self.assertNotEqual(c.state, 'DONE')
+        c.evaluate_attempt(aid)
+        for ref in ('EVIDENCE_ID', '0.1', '2.1', '1.0', '1.2', '1.1.1', 'a.b'):
+            shell.line('/finish 1=' + ref)
+            self.assertNotEqual(c.state, 'DONE')
+        shell.line('/finish 1=1.1')
+        self.assertEqual(c.state, 'DONE')
+        self.assertIn('ref 1.1', shell.output.getvalue())
+
+    def test_host_actions_render_once_and_completed_attempt_displays_checking(self):
+        c = WorkflowController(json.dumps(self.plan), CATALOG, POLICY)
+        host = WorkflowHost(c, lambda: dict(quota=QUOTA, checked_at=time.monotonic(), catalog=CATALOG,
+                                           role_policy=POLICY),
+                            lambda _: dict(thread_id='synthetic-thread', turn_id='synthetic-turn'), lambda _: None)
+        output = io.StringIO()
+        shell = ChatShell(output, workflow=c, workflow_action=host)
+        shell.line('/next')
+        self.assertEqual(output.getvalue().count('สถานะ: RUNNING'), 1)
+        host.observe_native({'method':'turn/completed','params':{'threadId':'synthetic-thread',
+            'turn':{'id':'synthetic-turn','status':'completed'}}})
+        latest = output.getvalue().split('สถานะ: CHECKING')[-1]
+        self.assertNotIn(' · RUNNING ·', latest)
+        shell.line('/verify 1 pass')
+        output.seek(0);output.truncate()
+        shell.line('/check')
+        self.assertEqual(output.getvalue().count('สถานะ: CHECKING'), 1)
 
     def test_ui_cannot_supply_manual_results_for_tool_checks(self):
         c=WorkflowController(json.dumps(PLAN),CATALOG,POLICY)
@@ -151,7 +185,7 @@ sys.exit(modelmate.main())
         until(b'evidence ')
         evidence=re.search(rb'evidence ([0-9a-f]{32})',buffer).group(1).decode()
         send('/check');until(b'task_criteria_pending')
-        send('/finish 1='+evidence);until('สถานะ: DONE'.encode())
+        send('/finish 1=1.1');until('สถานะ: DONE'.encode())
         send('/exit');p.wait(timeout=3)
         self.assertEqual(p.returncode,0,p.stderr.read())
         buffer += p.stdout.read()

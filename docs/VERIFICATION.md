@@ -1184,3 +1184,25 @@ The summary does not include task text, answers, account IDs or approval tokens.
 Eight targeted entry tests, including statistics/count/clock checks and an actual
 fake-server CLI exit summary, passed. Full offline suite: 306/306 passed; runtime,
 doctor and verifier compilation plus git diff --check passed. No live inference.
+
+
+### User-supplied explicit-plan CLI transcript and usability fix (2026-11-18)
+
+User supplied a live explain-lists CLI transcript: confirmation, one native attempt,
+answer display, explicit manual pass, accepted step evidence and final statistics
+were observed. The user entered the literal EVIDENCE_ID placeholder; the controller
+correctly rejected it. Final task criteria were not accepted; exit paused the task.
+This is partial live evidence, not a successful DONE or native resume test. No
+runtime/verifier hashes or process exit code were supplied. No raw transcript,
+session IDs, evidence UUIDs or approval tokens are stored here.
+
+Usability fix: /finish now accepts explicit STEP.CHECK refs (e.g. 1=1.1) resolving
+only accepted completed-step evidence; UUID syntax remains supported. Placeholder
+errors explain the reference form. Completed attempts display CHECKING for the
+current step without changing the durable controller ledger. Successful host
+/next and /check commands no longer render duplicate state blocks. No extra live
+turn is required to reproduce or regression-test these UI changes.
+
+Validation: 10 targeted workflow-entry tests and 308/308 full offline tests
+passed; runtime/doctor/verifier compilation and git diff --check passed.
+No additional live inference was run.

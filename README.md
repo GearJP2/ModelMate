@@ -317,7 +317,7 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 /next
 /verify 1 pass
 /check
-/finish 1=EVIDENCE_ID
+/finish 1=1.1
 /exit
 ```
 
@@ -325,8 +325,10 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 `/verify` รับเฉพาะ manual/rubric checks; ค่าที่รับคือ pass/fail/unknown
 หมายเลข check เริ่มที่ 1 ในขั้นปัจจุบัน ใช้ `/check` เพื่อประเมินและไปขั้นถัดไป
 หาก fail จะใช้ correction budget เดิม; unknown/missing ไม่ถือว่าผ่าน
-`EVIDENCE_ID` คือ ID ที่แสดงหลังบันทึกผลตรวจ; `/finish` ต้องระบุหลักฐานสำหรับ
-ทุกเกณฑ์สำเร็จ เช่น `/finish 1=ID_A 2=ID_B,ID_C` ไม่อนุญาตให้โมเดลจบงานเอง
+`1.1` หมายถึงขั้น 1 check 1 ตาม `ref` ที่แสดง ใช้ได้หลัง `/check` ยอมรับขั้นนั้นแล้ว
+`/finish` ต้องระบุหลักฐานสำหรับทุกเกณฑ์ เช่น `/finish 1=1.1 2=2.1,2.2`
+เลือกเฉพาะหลักฐานที่รองรับเกณฑ์จริง UUID เดิมยังใช้ได้ แต่ไม่ต้องคัดลอกแล้ว
+ไม่อนุญาตให้โมเดลจบงานเอง
 การออกจาก CLI สำเร็จไม่ได้แปลว่างานผ่านเกณฑ์ ต้องดูสถานะ DONE แยกต่างหาก
 
 ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`

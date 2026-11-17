@@ -636,3 +636,10 @@ structured summary with local session duration including user wait, consumed
 attempt count, distinct requested selections and workflow state. reportedModels
 and tokenUsage stay null; no pricing, savings or actual-dispatch inference.
 No persistent metrics file/schema change yet. Offline-tested; new CLI live test pending.
+
+
+Explicit-plan CLI feedback (2026-11-18): user live transcript confirms startup,
+answer/manual check/step acceptance and stats, but not final DONE (literal example
+placeholder was rejected). Added short explicit evidence refs and removed duplicate
+host state rendering. Offline tests verify final coverage and ref rejection; the
+transcript does not establish native recovery or complete workflow live readiness.

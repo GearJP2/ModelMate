@@ -1513,8 +1513,10 @@ class ChatShell:
                 model = select_role(self.catalog, proposal['role'], self.role_policy, proposal['effort'])['model']
             except ProbeError:
                 model = 'ยัง resolve โมเดลไม่ได้'
+            step_state = 'CHECKING' if (active is not None and active['step_id'] == step['id']
+                                              and active['status'] == 'completed') else step['state']
             self.write(marker + ' ' + str(i + 1) + '. ' + proposal['kind'] + ': ' + proposal['objective']
-                       + ' · ' + step['state'] + ' · รอบ ' + str(step['cycle'] + 1)
+                       + ' · ' + step_state + ' · รอบ ' + str(step['cycle'] + 1)
                        + ' · attempt ' + str(step['attempts']) + '/3'
                        + ' · โมเดลตามแผน: ' + model + '/' + proposal['effort'])
             self.write('  ความเสี่ยง: ' + proposal['risk'] + ' · เหตุผล: ' + proposal['reason'])
@@ -1525,7 +1527,8 @@ class ChatShell:
                 evidence = checked.get(index, {})
                 result = 'stale' if evidence.get('id') in state['stale_evidence'] else evidence.get('result', 'pending')
                 self.write('  [' + result + '] ' + check['kind'] + ': ' + check['criterion'] + ' · check ' + str(index + 1)
-                           + (' · evidence ' + evidence['id'] if evidence.get('id') else ''))
+                           + (' · evidence ' + evidence['id'] + ' · ref ' + str(i + 1) + '.' + str(index + 1)
+                              if evidence.get('id') else ''))
         for i, criterion in enumerate(state['success_criteria']):
             self.write('เกณฑ์ ' + str(i + 1) + ': ' + criterion + ' · หลักฐานที่บันทึก ' + str(len(state['criterion_evidence'].get(i, []))))
         if active is not None:
@@ -1558,6 +1561,8 @@ class ChatShell:
                 if self.workflow_action is None:
                     raise ProbeError('Workflow executor is unavailable; no attempt consumed or dispatched.')
                 self.workflow_action({'action': cmd[1:], 'task_id': self.workflow.task_id})
+                if isinstance(self.workflow_action, WorkflowHost):
+                    return  # Host already emitted workflow_changed and rendered the authoritative state.
             elif cmd == '/verify':
                 if len(values) != 2 or values[1] not in ('pass', 'fail', 'unknown'):
                     raise ProbeError('Use /verify CHECK_NUMBER pass|fail|unknown (numbers start at 1).')
@@ -1572,14 +1577,27 @@ class ChatShell:
                     reference='Explicit user verification in Terminal', finding='User recorded ' + values[1])
             elif cmd == '/finish':
                 if not values:
-                    raise ProbeError('Use /finish CRITERION_NUMBER=EVIDENCE_ID[,EVIDENCE_ID] ...')
+                    raise ProbeError('Use /finish CRITERION_NUMBER=STEP.CHECK[,STEP.CHECK] ... (numbers start at 1).')
                 coverage = {}
                 for value in values:
                     number, evidence = value.split('=', 1)
                     index = int(number) - 1
                     if index in coverage:
                         raise ProbeError('Duplicate criterion number.')
-                    coverage[index] = evidence.split(',')
+                    coverage[index] = []
+                    for reference in evidence.split(','):
+                        if reference == 'EVIDENCE_ID':
+                            raise ProbeError('EVIDENCE_ID เป็นตัวอย่าง; ใช้ ref ที่แสดง เช่น /finish 1=1.1')
+                        if '.' in reference:
+                            step_number, check_number = (int(part) for part in reference.split('.'))
+                            if not 1 <= step_number <= len(state['steps']) or check_number < 1:
+                                raise ProbeError('Invalid step/check evidence reference.')
+                            step = state['steps'][step_number - 1]
+                            matches = [item for item in step['evidence'] if item['check_index'] == check_number - 1]
+                            if step['state'] != 'DONE' or len(matches) != 1:
+                                raise ProbeError('Reference has no accepted completed-step evidence; use /check first.')
+                            reference = matches[0]['id']
+                        coverage[index].append(reference)
                 self.workflow.finish_task(coverage)
             elif cmd == '/mode':
                 if len(values) > 1:
@@ -1625,7 +1643,7 @@ class ChatShell:
                            '/confirm-delete TOKEN /acknowledge TOKEN /cancel /exit\n'
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
                 if self.workflow is not None:
-                    self.write('/workflow /next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=EVIDENCE_ID /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
+                    self.write('/workflow /next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
