@@ -1068,3 +1068,30 @@ The subprocess Terminal-loop test now asserts that an answer is visible once.
 Validation: 14 native workflow tests and 288/288 full offline tests passed;
 `python3 -m py_compile modelmate.py doctor.py verify.py` and `git diff --check`
 passed. No live inference was run.
+
+### Native workflow opt-in verifier (2026-11-18)
+
+Command: `python3 verify.py --run-live --probe-workflow MODEL` (requested effort low).
+At most four synthetic turns; no inference without --run-live, no hidden retry.
+Uses the real NativeWorkflowConnection/WorkflowHost/ChatShell path against Codex
+only when explicitly opted in. It does not read the user's project for prompts.
+Only the harness-created scratch sentinel is targeted by a write-denial test.
+No tool approval acceptance or sandbox expansion is implemented.
+
+Eight offline test methods use synthetic subprocess App Servers: four-turn happy
+path, no approval (unverified), changed sentinel (failed), recall mismatch, cancel
+race (unverified), timeout/failed turn without replay, auth rejection, and CLI
+opt-in/exit behavior. Reports omit raw answers, nonce, account/thread IDs and paths;
+include runtime/verifier hashes and requested selection with reportedModels null.
+Scratch path appears only on stderr when inspection is required. Cleanup waits for
+terminal confirmation where possible; uncertainty retains scratch and never retries.
+
+The disconnect result covers a local host guard only. It does not verify dropped
+network recovery, all command/patch/tool paths, backend dispatch or remote erasure.
+No live result has been recorded for this command yet; auto routing and public
+native workflow CLI remain gated.
+
+Validation: eight targeted workflow-probe tests and 296/296 full offline tests
+passed; `python3 -m py_compile modelmate.py doctor.py verify.py` and
+`git diff --check` passed. Help-only invocation without --run-live was checked.
+No live inference was run.

@@ -585,3 +585,13 @@ PR #6 display fix (2026-11-18): native transport forwards completed assistant
 messages to UI as text only, scoped to current binding and deduplicated per turn.
 Foreign/late messages and text claims cannot advance workflow or supply evidence.
 No native permission or live gate status changes.
+
+### P10 native workflow verification harness (2026-11-18)
+
+MOCK_VERIFIED: `verify.py --run-live --probe-workflow MODEL` ใช้ native transport
+จริงในเส้นทาง opt-in; offline tests ใช้ fake App Server เท่านั้น สูงสุด 4 turns
+ใน ephemeral threads: exact displayed ACK/recall, approval denial + sentinel,
+confirmed interruption และ local disconnect/no-new-dispatch guard ไม่มี retry
+ไม่เกิด approval/cancel race เป็น UNVERIFIED; unknown outcome เก็บ scratch
+No live gate passed: ผู้ใช้ต้องรันคำสั่ง live และตรวจหลักฐาน version/hash ก่อน
+เปิด native workflow CLI; network-drop recovery และ tool paths อื่นยังไม่พิสูจน์
