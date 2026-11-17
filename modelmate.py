@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """ModelMate runtime primitives. Importing this module performs no I/O."""
 import json
+import copy
 import math
 import os
 import selectors
@@ -437,6 +438,11 @@ def validate_plan(raw):
     if any(step['risk'] == 'high' for step in steps):
         if not any(step['kind'] == 'review' and step['role'] == 'strong' for step in steps):
             raise ProbeError('High-risk plan requires strong review.')
+        last_risky_work = max((i for i, step in enumerate(steps)
+                               if step['risk'] == 'high' and step['kind'] != 'review'), default=-1)
+        if last_risky_work >= 0 and not any(step['kind'] == 'review' and step['role'] == 'strong'
+                                            for step in steps[last_risky_work + 1:]):
+            raise ProbeError('Strong review must follow the high-risk work.')
     return plan
 
 
@@ -583,6 +589,248 @@ class ModelApprovals:
             return self.decision(raw, catalog, role_policy, step_id=step_id,
                                  step_index=step_index, mode='ask_to_escalate')
         return result
+
+
+class WorkflowController:
+    """Offline state only. Methods accept trusted host/UI events, never model claims as authority."""
+
+    def __init__(self, raw, catalog, role_policy=None, mode='ask_to_escalate'):
+        import uuid
+        if mode not in ('auto', 'ask_to_escalate', 'approve_plan'):
+            raise ProbeError('Invalid workflow mode.')
+        self._plan = validate_plan(raw)
+        self._raw = raw
+        self._approvals = ModelApprovals(catalog, role_policy)
+        self.task_id = self._approvals.task_id
+        self.mode = mode
+        self.state = 'CLARIFYING' if self._plan['clarifications'] else 'READY'
+        self.reason = None
+        self._steps = [{'id': uuid.uuid4().hex, 'cycle': 0, 'attempts': 0,
+                        'state': 'READY', 'evidence': []} for _ in self._plan['steps']]
+        self._index = 0
+        self._active = None
+        self._history = []
+        self._pause_token = None
+        self._model_request = None
+        self._account_id = None
+        self._coverage = {}
+
+    def snapshot(self):
+        return copy.deepcopy({'task_id': self.task_id, 'state': self.state, 'reason': self.reason,
+            'mode': self.mode, 'step_index': self._index, 'steps': self._steps,
+            'active_attempt': self._active, 'history': self._history,
+            'model_request': self._model_request, 'pause_token': self._pause_token,
+            'choices': ['continue', 'revise_scope', 'pause'] if self.state == 'PAUSED' else [],
+            'clarifications': self._plan['clarifications'],
+            'success_criteria': self._plan['success_criteria'], 'criterion_evidence': self._coverage})
+
+    def _pause(self, reason):
+        import uuid
+        self.state, self.reason = 'PAUSED', reason
+        self._pause_token = uuid.uuid4().hex
+        self._model_request = None
+        self._approvals._invalidate()
+        return self.snapshot()
+
+    def request_attempt(self, quota, checked_at, catalog, role_policy=None):
+        """Consume a slot before dispatch. Returned data does not grant any tool permission."""
+        import uuid
+        if self.state not in ('READY', 'AWAITING_MODEL_APPROVAL'):
+            return self.snapshot()
+        decision = quota_decision(quota, checked_at, expected_account=self._account_id)
+        if decision['state'] != 'allow':
+            return self._pause(decision['reason'])
+        self._account_id = decision['account_id']
+        step = self._steps[self._index]
+        if step['attempts'] >= 3:
+            return self._pause('correction_limit')
+        gate = self._approvals.decision(self._raw, catalog, role_policy, step_id=step['id'],
+                                        step_index=self._index, mode=self.mode)
+        if gate['state'] == 'ask':
+            self.state = 'AWAITING_MODEL_APPROVAL'
+            self._model_request = gate
+            return self.snapshot()
+        if gate['state'] != 'allow_model':
+            return self._pause(gate.get('reason', 'model_unavailable'))
+        step['attempts'] += 1
+        step['state'] = self.state = 'RUNNING'
+        self.reason = None
+        self._model_request = None
+        self._active = {'id': uuid.uuid4().hex, 'step_id': step['id'], 'cycle': step['cycle'],
+            'number': step['attempts'], 'selection': gate['selection'], 'status': 'running', 'checks': {}}
+        return dict(self.snapshot(), dispatch=copy.deepcopy({
+            'attempt_id': self._active['id'], 'step_id': step['id'], 'selection': gate['selection'],
+            'step': self._plan['steps'][self._index], 'execution': 'not_dispatched', 'tool_permissions': 'none'}))
+
+    def answer_model(self, token, choice):
+        if self.state != 'AWAITING_MODEL_APPROVAL' or self._model_request is None:
+            raise ProbeError('No current model approval request.')
+        self._approvals.answer(token, choice)
+        self._model_request = None
+        if choice == 'approve':
+            self.state = 'READY'
+            return self.snapshot()
+        return self._pause('model_selection_declined')
+
+    def revise_step(self, raw):
+        """Rename or change selection without replacing identity, criteria or budget."""
+        if self._active is not None or self._index >= len(self._steps) or self.state in ('DONE', 'FAILED'):
+            raise ProbeError('Cannot revise an active or finished step.')
+        candidate = validate_plan(raw)
+        if len(candidate['steps']) != len(self._plan['steps']):
+            raise ProbeError('Revision cannot replace step structure; budget is preserved.')
+        expected = copy.deepcopy(self._plan)
+        for key in ('objective', 'role', 'effort', 'reason'):
+            expected['steps'][self._index][key] = candidate['steps'][self._index][key]
+        if candidate != expected:
+            raise ProbeError('Revision cannot replace task criteria or step structure; budget is preserved.')
+        self._plan, self._raw = candidate, raw
+        self._approvals._invalidate()
+        self._model_request = None
+        if self.state == 'AWAITING_MODEL_APPROVAL':
+            self.state = 'READY'
+        if self.state == 'PAUSED':
+            return self._pause(self.reason)
+        return self.snapshot()
+
+    def _attempt(self, attempt_id):
+        if self._active is None or not isinstance(attempt_id, str) or attempt_id != self._active['id']:
+            raise ProbeError('Invalid or stale workflow attempt.')
+        return self._active
+
+    def finish_attempt(self, attempt_id, status):
+        attempt = self._attempt(attempt_id)
+        if attempt['status'] != 'running' or status not in ('completed', 'failed', 'interrupted'):
+            raise ProbeError('Invalid attempt terminal event.')
+        attempt['status'] = status
+        if status == 'completed':
+            self.state, self.reason = 'CHECKING', None
+            self._pause_token = None
+        else:
+            self._history.append(copy.deepcopy(attempt))
+            self._active = None
+            self._steps[self._index]['state'] = 'PAUSED' if status == 'interrupted' else 'FAILED'
+            if status == 'interrupted':
+                return self._pause('outcome_unknown')
+            self.state, self.reason = 'FAILED', 'execution_failed'
+        return self.snapshot()
+
+    def record_check(self, attempt_id, check_index, *, origin, result='unknown', exit_code=None,
+                     reference, finding):
+        """Host adapters supply observed exit codes or verified findings, not parsed model assertions."""
+        import uuid
+        attempt = self._attempt(attempt_id)
+        checks = self._plan['steps'][self._index]['checks']
+        if (self.state != 'CHECKING' or attempt['status'] != 'completed'
+                or type(check_index) is not int or not 0 <= check_index < len(checks)
+                or check_index in attempt['checks']):
+            raise ProbeError('Invalid, duplicate or out-of-phase check.')
+        if origin not in ('tool', 'manual', 'source', 'model_review') or result not in ('pass', 'fail', 'unknown'):
+            raise ProbeError('Invalid evidence provenance or result.')
+        _plan_text(reference)
+        _plan_text(finding)
+        if exit_code is not None and (type(exit_code) is not int or origin != 'tool'):
+            raise ProbeError('Exit codes must be observed integers from tools.')
+        kind = checks[check_index]['kind']
+        verified = 'unknown'
+        if kind in ('test', 'lint') and origin == 'tool' and exit_code is not None:
+            verified = 'pass' if exit_code == 0 else 'fail'
+        elif kind in ('rubric', 'manual') and origin == 'manual':
+            verified = result
+        elif kind == 'source' and origin == 'source':
+            from urllib.parse import urlsplit
+            try:
+                url = urlsplit(reference)
+            except ValueError:
+                raise ProbeError('Invalid source evidence URL.') from None
+            if url.scheme not in ('https', 'http') or not url.netloc or url.username or url.password:
+                raise ProbeError('Source evidence requires an HTTP(S) URL and a verified claim finding.')
+            verified = result
+        evidence = {'id': uuid.uuid4().hex, 'step_id': attempt['step_id'], 'attempt_id': attempt_id,
+            'check_index': check_index, 'kind': kind, 'origin': origin, 'result': verified,
+            'exit_code': exit_code, 'reference': reference, 'finding': finding,
+            'timestamp': datetime.now(timezone.utc).isoformat()}
+        attempt['checks'][check_index] = evidence
+        return copy.deepcopy(evidence)
+
+    def evaluate_attempt(self, attempt_id):
+        attempt = self._attempt(attempt_id)
+        if self.state != 'CHECKING' or attempt['status'] != 'completed':
+            raise ProbeError('Attempt is not ready for evaluation.')
+        step = self._steps[self._index]
+        expected = len(self._plan['steps'][self._index]['checks'])
+        results = [e['result'] for e in attempt['checks'].values()]
+        self._history.append(copy.deepcopy(attempt))
+        self._active = None
+        if 'fail' in results:
+            step['state'] = 'READY'
+            if step['attempts'] >= 3:
+                return self._pause('correction_limit')
+            self.state, self.reason = 'READY', 'checks_failed'
+        elif len(results) != expected or 'unknown' in results:
+            step['state'] = self.state = 'UNVERIFIED'
+            self.reason = 'checks_unavailable'
+        else:
+            step['state'] = 'DONE'
+            step['evidence'] = list(attempt['checks'].values())
+            self._index += 1
+            self.state = 'READY' if self._index < len(self._steps) else 'CHECKING'
+            self.reason = None if self.state == 'READY' else 'task_criteria_pending'
+        return self.snapshot()
+
+    def finish_task(self, coverage):
+        """Trusted checker maps each success criterion to accepted, current evidence IDs."""
+        if self._index != len(self._steps) or self.state not in ('CHECKING', 'UNVERIFIED') or self._active is not None:
+            raise ProbeError('Task steps are not fully checked.')
+        if not isinstance(coverage, dict) or any(type(i) is not int or not 0 <= i < len(
+                self._plan['success_criteria']) for i in coverage):
+            raise ProbeError('Invalid success-criterion coverage.')
+        accepted = {e['id'] for step in self._steps for e in step['evidence'] if e['result'] == 'pass'}
+        for ids in coverage.values():
+            if (not isinstance(ids, list) or not ids or len(ids) > 384
+                    or any(not isinstance(eid, str) or eid not in accepted for eid in ids)):
+                raise ProbeError('Criterion references missing or stale evidence.')
+        if set(coverage) != set(range(len(self._plan['success_criteria']))):
+            self.state, self.reason = 'UNVERIFIED', 'task_criteria_unverified'
+        else:
+            self.state, self.reason = 'DONE', None
+        self._coverage = copy.deepcopy(coverage)
+        return self.snapshot()
+
+    def pause(self, reason='user_pause'):
+        if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'connection_lost'):
+            raise ProbeError('Invalid pause reason.')
+        if self.state in ('DONE', 'FAILED', 'CLARIFYING'):
+            raise ProbeError('Cannot pause a terminal or unclarified task.')
+        return self._pause(reason)
+
+    def observe_quota(self, quota, checked_at):
+        decision = quota_decision(quota, checked_at, expected_account=self._account_id)
+        if decision['state'] != 'allow' and self.state not in ('DONE', 'FAILED', 'CLARIFYING'):
+            return self._pause(decision['reason'])
+        return self.snapshot()
+
+    def answer_pause(self, token, choice):
+        if (self.state != 'PAUSED' or not isinstance(token, str) or token != self._pause_token
+                or choice not in ('continue', 'revise_scope', 'pause')):
+            raise ProbeError('Invalid or stale workflow pause choice.')
+        if self._active is not None and self._active['status'] == 'running':
+            raise ProbeError('Turn outcome still unknown; reconcile a terminal event before continuing.')
+        step = self._steps[self._index] if self._index < len(self._steps) else None
+        self._history.append({'kind': 'user_choice', 'choice': choice, 'reason': self.reason,
+                              'step_id': step['id'] if step is not None else None,
+                              'timestamp': datetime.now(timezone.utc).isoformat()})
+        if choice != 'continue':
+            return self._pause(self.reason if choice == 'pause' else 'revise_scope')
+        if self.reason == 'correction_limit' and step is not None:
+            self._history.append({'kind': 'budget_extension', 'step_id': step['id'], 'cycle': step['cycle'],
+                                  'attempts': step['attempts'], 'timestamp': datetime.now(timezone.utc).isoformat()})
+            step['cycle'] += 1
+            step['attempts'] = 0
+        self._pause_token = None
+        self.state = 'CHECKING' if self._active is not None or step is None else 'READY'
+        self.reason = None
+        return self.snapshot()
 
 
 def diagnostic_code(error):

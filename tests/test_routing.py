@@ -47,6 +47,13 @@ class PlanTests(unittest.TestCase):
                                       {'kind': 'source', 'criterion': 'แหล่งข้อมูลรองรับข้ออ้าง'}]
         self.assertEqual(routing_decision(encoded(plan), CATALOG, POLICY)['state'], 'ready_for_approval')
 
+    def test_strong_review_before_high_risk_work_does_not_satisfy_review_requirement(self):
+        plan = copy.deepcopy(PLAN)
+        plan['steps'][0]['risk'] = 'high'
+        plan['steps'].insert(0, dict(copy.deepcopy(PLAN['steps'][0]), kind='review', role='strong'))
+        with self.assertRaisesRegex(ProbeError, 'follow'):
+            validate_plan(encoded(plan))
+
     def test_clarifications_prevent_step_selection(self):
         plan = copy.deepcopy(PLAN)
         plan['clarifications'] = ['ต้องค้นหาคอลัมน์ใด?']

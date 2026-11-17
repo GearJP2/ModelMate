@@ -717,3 +717,72 @@ Documentation-only follow-up: file hashes matched; `git diff --check` passed.
 No repeated inference or full test rerun was needed. Next work: workflow/controller
 development under P10's permission gates, with live crash/tool-path checks tracked
 separately rather than inferred from this happy-path result.
+
+## P10 offline workflow controller — MOCK_VERIFIED; full task IN_PROGRESS
+
+Added WorkflowController to the single-file runtime. It validates a fixed task
+plan, creates task/step/attempt/evidence IDs, and owns step position, attempts and
+cycles. A RUNNING snapshot reserves an attempt slot before dispatch; the returned
+descriptor explicitly says `execution: not_dispatched` and grants no tool access.
+The controller opens no connection, process or file and is not wired into ChatShell
+or LiveChatConnection. P09/classifier gates are not bypassed to enable auto mode.
+
+Host API and lifecycle:
+
+- `request_attempt` checks a fresh timestamped quota snapshot with account pinning,
+  resolves the supplied catalog/role bindings through ModelApprovals, and counts a
+  slot only after model approval. All three model modes retain existing P07 rules.
+- `answer_model` accepts exact UI tokens. `revise_step` can change only the current
+  objective/role/effort/reason. It keeps step ID and budget, rejects changed task
+  criteria/checks/structure and invalidates model grants/tokens immediately.
+- `finish_attempt` accepts a host terminal event. Completion enters CHECKING;
+  interruption pauses with unknown outcome; execution failure is FAILED. None
+  of these events means that the task's checks passed.
+- `record_check` binds evidence to the active attempt and exact check index.
+  Observed integer exit codes determine test/lint results. Source checks require
+  an HTTP(S) URL and a verified claim finding from the trusted source checker;
+  URL presence is not treated as fact verification. Manual/rubric results must
+  come from a trusted manual check. `model_review` is recorded as unknown and
+  cannot turn a model assertion into a passed test or human/source verification.
+- `evaluate_attempt` advances a fully checked step, offers a bounded correction
+  after known failure, or marks incomplete/unknown checks UNVERIFIED. One initial
+  attempt plus two corrections exhausts a step's cycle. A fourth attempt cannot
+  start without the user's exact pause token and explicit continue choice.
+- `answer_pause` retains old cycles and a user-choice/budget-extension ledger.
+  It cannot resume an active unknown turn. `observe_quota` blocks new work when
+  quota/account state is unsafe; the future executor must issue the native
+  interrupt and feed back its terminal event. The pure controller does not do I/O.
+- `finish_task` requires trusted checker coverage of every task success criterion
+  using accepted evidence IDs from the current successful step attempts. Missing
+  coverage is UNVERIFIED; fabricated/stale/failed-attempt evidence is rejected.
+  Snapshots retain the criterion/evidence mapping and return defensive copies.
+
+Shared plan validation now requires a strong review after the last high-risk
+non-review step. A review before the risky work no longer satisfies the gate.
+
+Offline validation (2026-11-17):
+
+- `python3 -m unittest discover -s tests -p test_workflow.py -v`: 23 passed.
+- Additional routing regression rejects strong review before high-risk work.
+- `python3 -m unittest discover -s tests -q`: 199 passed.
+- `python3 -m py_compile modelmate.py doctor.py verify.py`: passed.
+- `git diff --check`: passed.
+
+Checks cover simple code, plan/implement/strong-review ordering, document rubric
+and source checks, per-step correction budgets, explicit cycle extensions, rename
+and scope-reset attacks, model/effort gate changes, stale tokens, paused checks,
+quota exhaustion during work, unknown/stale/account-changed quota, missing models,
+unknown/model-claimed checks, actual synthetic Python subprocess exit codes,
+duplicate/stale evidence, criteria coverage, large Thai JSON plans without ASCII
+re-encoding inflation, and no process creation by the core.
+
+Limits: these are trusted in-process controller callbacks, not a security boundary
+against Python callers. Production adapters must bind exit codes, terminal events,
+manual choices and verified source findings to actual actions; feeding parsed model
+JSON into these methods would violate the contract. Role bindings remain explicitly
+supplied; no live model ranking is added. Clarification resolution, broader replan,
+model/tool execution, automatic check adapters, CLI workflow commands, durable
+workflow/ledger restore and live crash recovery are not implemented here. Do not
+reset a task/controller on model request to evade its budget. No live inference
+was run. Next work is the gated host adapter/CLI and persistence integration;
+P10 and workflow-specific P12 remain IN_PROGRESS.
