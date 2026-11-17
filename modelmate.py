@@ -629,7 +629,10 @@ class ChatShell:
         if getattr(self, 'live', False):
             self.write('ModelMate · live ChatGPT/Codex · read-only + on-request')
             self.write('คำสั่งที่ sandbox อนุญาตทำงานได้เอง; การขยายสิทธิ์จะถามก่อน')
-            self.write('เลือกโมเดลเองในรุ่นนี้; ยังไม่มี auto routing หรือ autosave · /help /exit')
+            self.write('เลือกโมเดลเองในรุ่นนี้; ยังไม่มี auto routing · /help /exit')
+            if getattr(self, 'sessions', None):
+                self.write('บันทึก session ในเครื่องอัตโนมัติ; /sessions แสดงรายการ')
+                self.write('Session: ' + self.session_id)
             self.write('โมเดลที่ร้องขอ: ' + json.dumps(self.selection, ensure_ascii=False))
         else:
             self.write('ModelMate · Terminal shell prototype · live execution unavailable')
@@ -639,6 +642,8 @@ class ChatShell:
 
     def cancel(self, exit_after=False):
         self.pending = None
+        if getattr(self, 'sessions', None):
+            self.sessions('/cancel', [])
         self.exiting = self.exiting or exit_after
         if self.active:
             if not self.stopping:
@@ -675,11 +680,13 @@ class ChatShell:
             cmd, *values = args
             if cmd == '/help':
                 self.write('/status /mode [auto|ask_to_escalate|approve_plan] /model [ID EFFORT]\n'
-                           '/permissions [ask|read_only|workspace] /sessions /delete /cancel /exit\n'
+                           '/permissions [ask|read_only|workspace] /sessions [ID] /delete [ID]\n'
+                           '/confirm-delete TOKEN /acknowledge TOKEN /cancel /exit\n'
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
+                                       'session': getattr(self, 'session_id', None),
                                        'stopping': self.stopping, 'quota': getattr(self, 'quota_status', 'unknown'),
                                        'backend': 'codex' if getattr(self, 'live', False) else
                                        ('injected test controller' if self.send else 'unavailable')},
@@ -717,8 +724,13 @@ class ChatShell:
                         self.write('เลือกโมเดลสำหรับงานถัดไป: ' + json.dumps(self.selection))
                     except ProbeError as exc:
                         self.write(str(exc))
-            elif cmd in ('/sessions', '/delete'):
-                self.write('ยังไม่พร้อม: รอ session persistence และ lifecycle ใน P11/P12')
+            elif cmd in ('/sessions', '/delete', '/confirm-delete', '/acknowledge'):
+                if not getattr(self, 'sessions', None):
+                    self.write('Session lifecycle ยังไม่เปิดในโหมดนี้')
+                elif self.active or self.stopping:
+                    self.write('รอยืนยันว่า turn จบก่อนจัดการ session')
+                else:
+                    self.sessions(cmd, values)
             elif cmd in ('/approve', '/decline', '/pause'):
                 if len(values) != 1 or self.pending is None or values[0] != self.pending.get('token'):
                     self.write('คำขออนุมัติไม่ถูกต้องหรือหมดอายุ')
@@ -819,6 +831,13 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
         shell.live = True
         shell.mode = 'manual'
         shell.selection = dict(backend.selection)
+        if backend.store is not None:
+            shell.sessions = backend.session_command
+            shell.session_id = backend.record['id']
+            shell.quota_status = {k: backend.quota_status[k] for k in ('state', 'reason', 'checked_at')}
+            if backend.recovery_token is not None:
+                shell.write('ผล turn ก่อนปิดโปรแกรมยังไม่ทราบ; ตรวจไฟล์/process แล้วใช้ /acknowledge '
+                            + backend.recovery_token + ' ก่อนส่งข้อความใหม่')
     selector = selectors.SelectSelector()
     buffers = {}
     try:
@@ -885,9 +904,14 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
 
 
 
+THREAD_SOURCE_KINDS = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview',
+                       'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown']
+
+
 class LiveChatConnection(Connection):
     """Manual-model chat using native Codex read-only/on-request permissions."""
-    allowed_methods = Connection.allowed_methods | {'thread/start'}
+    allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume',
+        'thread/turns/list', 'thread/list', 'thread/delete'}
 
     def __init__(self, command, timeout=15):
         super().__init__(command, timeout)
@@ -906,24 +930,270 @@ class LiveChatConnection(Connection):
         self._previews = {}
         self._streamed = set()
         self._finished = set()
+        self.store = None
+        self.record = None
+        self._session_lock = None
+        self.recovery_token = None
+        self.delete_proposal = None
 
-    def connect(self, model, effort, cwd):
+    def connect(self, model, effort, cwd, store=None, session_id=None):
         self.catalog = inspect(self)['models']
         self.selection = select_model(self.catalog, model, effort)
         if effort == 'ultra':
             raise ProbeError('Automatic delegation effort is not enabled in this live chat.')
-        result = self.request('thread/start', {
-            'model': model, 'modelProvider': 'openai', 'cwd': os.path.realpath(cwd),
-            'sandbox': 'read-only', 'approvalPolicy': 'on-request', 'approvalsReviewer': 'user',
-            'ephemeral': True, 'serviceTier': 'default',
-            'config': {'web_search': 'disabled', 'agents.enabled': False,
-                       'features.apps': False, 'features.plugins': False,
-                       'features.multi_agent_v2': False},
-        })
+        self.cwd = os.path.realpath(cwd)
+        self.store = store
+        if store is not None:
+            if store.project != self.cwd:
+                raise ProbeError('Session store project mismatch.')
+            if session_id is not None:
+                self.open_session(session_id)
+                return
+            self._fresh_account(require_usage=False)
+            self.record = store.create('New manual chat', account_hash=self._account_hash())
+            self._session_lock = store._lock(self.record['id'])
+            self._session_lock.__enter__()
+            self.checkpoint(state='PAUSED', pause_reason='thread_start_unknown')
+        result = self.request('thread/start', dict(self._thread_options(),
+            ephemeral=store is None))
         thread = result.get('thread')
         if not isinstance(thread, dict) or not isinstance(thread.get('id'), str) or not thread['id']:
             raise ProbeError('Invalid live thread response.')
         self.thread_id = thread['id']
+        self.checkpoint(thread_id=self.thread_id, mode='manual', state='READY', pause_reason=None)
+
+    def _thread_options(self):
+        return {
+            'model': self.selection['model'], 'modelProvider': 'openai', 'cwd': self.cwd,
+            'sandbox': 'read-only', 'approvalPolicy': 'on-request', 'approvalsReviewer': 'user',
+            'serviceTier': 'default',
+            'config': {'web_search': 'disabled', 'agents.enabled': False,
+                       'features.apps': False, 'features.plugins': False,
+                       'features.multi_agent_v2': False},
+        }
+
+    def _account_hash(self):
+        import hashlib
+        return hashlib.sha256(self.account_id.encode()).hexdigest()
+
+    def _fresh_account(self, require_usage=True):
+        quota = refresh_quota(self, self.account_id)
+        if quota['state'] != 'allow' and not (not require_usage and quota['reason'] == 'quota_exhausted'
+                                             and quota.get('account_id')):
+            raise ProbeError('Session preflight paused: ' + quota['reason'])
+        self.account_id = quota['account_id']
+        self.quota_status = quota
+
+    def checkpoint(self, **changes):
+        if self.record is not None:
+            self.record.update(changes)
+            self.store.save(self.record)
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            if self._session_lock is not None:
+                self._session_lock.__exit__(None, None, None)
+                self._session_lock = None
+
+    def _check_identity(self, record):
+        if record.get('account_hash') != self._account_hash():
+            raise ProbeError('Session account mismatch or legacy unbound metadata; nothing resumed/deleted.')
+
+    def _check_thread(self, thread, thread_id):
+        if (not isinstance(thread, dict) or thread.get('id') != thread_id
+                or thread.get('cwd') != self.cwd or thread.get('ephemeral') is not False
+                or thread.get('modelProvider') != 'openai'
+                or thread.get('status', {}).get('type') not in ('idle', 'notLoaded')):
+            raise ProbeError('Thread identity/project/state is unsafe or unknown; no turn started.')
+
+    def open_session(self, session_id):
+        import uuid
+        if self.start_pending or self.turn_id or self._rpcs or self._approvals:
+            raise ProbeError('Current turn outcome is not settled.')
+        if self.record is not None and self.record['id'] == session_id:
+            raise ProbeError('Session is already open.')
+        self._fresh_account(require_usage=False)
+        catalog = read_models(self)
+        select_model(catalog, self.selection['model'], self.selection['effort'])
+        lock = self.store._lock(session_id)
+        lock.__enter__()
+        try:
+            record = self.store.read(session_id)
+            self._check_identity(record)
+            if record['deletion_state'] != 'none' or not record['thread_id']:
+                raise ProbeError('Session has no resumable thread or has a pending deletion.')
+            tid = record['thread_id']
+            self._check_thread(self.request('thread/read', {'threadId': tid, 'includeTurns': False}).get('thread'), tid)
+            history = self.request('thread/turns/list', {'threadId': tid, 'limit': 1,
+                'sortDirection': 'desc', 'itemsView': 'summary'}).get('data')
+            if not isinstance(history, list) or len(history) > 1:
+                raise ProbeError('Cannot reconcile previous turn.')
+            if history:
+                turn = history[0]
+                if (not isinstance(turn, dict) or not isinstance(turn.get('id'), str)
+                        or turn.get('status') not in ('completed', 'failed', 'interrupted')):
+                    raise ProbeError('Previous turn is active or unknown; inspect Codex before resuming.')
+            result = self.request('thread/resume', dict(self._thread_options(), threadId=tid, excludeTurns=True))
+            self._check_thread(result.get('thread'), tid)
+            if (result.get('approvalPolicy') != 'on-request' or result.get('approvalsReviewer') != 'user'
+                    or result.get('sandbox', {}).get('type') != 'readOnly'):
+                raise ProbeError('Resumed permissions were not confirmed; no turn started.')
+        except BaseException:
+            lock.__exit__(None, None, None)
+            raise
+        if self._session_lock is not None:
+            self._session_lock.__exit__(None, None, None)
+        self._session_lock, self.record = lock, record
+        self.thread_id, self.catalog = tid, catalog
+        # An interrupted client cannot prove tool outcomes from a terminal turn alone.
+        uncertain = record['state'] in ('RUNNING', 'AWAITING_TOOL_APPROVAL', 'CHECKING') or (
+            record['state'] == 'PAUSED' and record['pause_reason'] == 'outcome_unknown')
+        self.recovery_token = uuid.uuid4().hex if uncertain else None
+        self.checkpoint(state='PAUSED' if uncertain else 'UNVERIFIED',
+            pause_reason='outcome_unknown' if uncertain else None, mode='manual', permission_profile='read_only',
+            summary='Resume checked; latest turn: ' + (history[0]['status'] if history else 'none'))
+        if self.shell is not None:
+            self.shell.catalog = catalog
+            self.shell.session_id = record['id']
+            self.shell.pending = self.shell.route = self.shell.approvals = None
+            self.shell.write('เปิด session: ' + record['id'] + ' · ' + record['summary'])
+            if uncertain:
+                self.shell.write('ผลเครื่องมือเดิมยังไม่ทราบ ตรวจไฟล์/process ใน Codex ก่อน แล้วใช้ /acknowledge '
+                                 + self.recovery_token + ' เพื่ออนุญาตข้อความใหม่; ไม่ replay งานเดิม')
+
+    @contextmanager
+    def _target_record(self, session_id):
+        if self.record is not None and session_id == self.record['id']:
+            yield self.record
+        else:
+            with self.store._lock(session_id):
+                yield self.store.read(session_id)
+
+    def _deletion_tree(self, record):
+        """Bounded snapshots include archived subagents; never infer an empty subtree."""
+        if record['deletion_state'] == 'remote_deleted' or record['thread_id'] is None:
+            return []
+        root = self.request('thread/read', {'threadId': record['thread_id'], 'includeTurns': False}).get('thread')
+        self._check_thread(root, record['thread_id'])
+        threads = {root['id']: root}
+        for archived in (False, True):
+            cursor, seen = None, set()
+            for _ in range(100):
+                page = self.request('thread/list', {'archived': archived, 'cursor': cursor, 'limit': 100,
+                    'sourceKinds': THREAD_SOURCE_KINDS})
+                rows = page.get('data')
+                if not isinstance(rows, list):
+                    raise ProbeError('Cannot enumerate deletion scope.')
+                for row in rows:
+                    if not isinstance(row, dict) or not isinstance(row.get('id'), str):
+                        raise ProbeError('Invalid deletion scope metadata.')
+                    source = row.get('source')
+                    agent = source.get('subAgent') if isinstance(source, dict) else None
+                    if isinstance(agent, dict) and 'thread_spawn' in agent:
+                        spawn = agent['thread_spawn']
+                        parent = spawn.get('parent_thread_id') if isinstance(spawn, dict) else None
+                        if (not isinstance(parent, str) or not parent
+                                or row.get('parentThreadId') not in (None, parent)):
+                            raise ProbeError('Cannot resolve spawned ancestry; nothing deleted.')
+                        row = dict(row, parentThreadId=parent)
+                    threads[row['id']] = row
+                cursor = page.get('nextCursor')
+                if cursor is None:
+                    break
+                if not isinstance(cursor, str) or not cursor or cursor in seen:
+                    raise ProbeError('Invalid deletion scope pagination.')
+                seen.add(cursor)
+            else:
+                raise ProbeError('Deletion scope exceeds scan limit; nothing deleted.')
+        selected = {record['thread_id']}
+        while True:
+            more = {tid for tid, row in threads.items() if row.get('parentThreadId') in selected}
+            if more <= selected:
+                break
+            selected.update(more)
+        tree = []
+        for tid in sorted(selected):
+            row = threads[tid]
+            if row.get('status', {}).get('type') not in ('idle', 'notLoaded'):
+                raise ProbeError('Deletion scope contains an active or unknown thread.')
+            tree.append({'thread_id': tid, 'project': row.get('cwd')})
+        # Other ModelMate records need their own writer locks and deletion receipts.
+        for saved in self.store.list_sessions():
+            if saved['id'] != record['id'] and saved['thread_id'] in selected:
+                raise ProbeError('A descendant has separate ModelMate metadata; delete it first.')
+        return tree
+
+    def session_command(self, command, values):
+        import uuid
+        try:
+            if command == '/cancel':
+                self.delete_proposal = None
+                return
+            if self._rpcs or self.turn_id or self.start_pending:
+                raise ProbeError('Wait for pending backend requests before managing sessions.')
+            if command == '/sessions':
+                self.delete_proposal = None
+                if not values:
+                    for record in self.store.list_sessions():
+                        self.shell.write(json.dumps({k: record[k] for k in ('id', 'title', 'state', 'updated_at')},
+                                                    ensure_ascii=True))
+                    return
+                if len(values) != 1:
+                    raise ProbeError('Use /sessions [ID].')
+                self.open_session(values[0])
+                return
+            if command == '/acknowledge':
+                if len(values) != 1 or self.recovery_token is None or values[0] != self.recovery_token:
+                    raise ProbeError('Invalid or stale recovery token.')
+                self._fresh_account()
+                self._check_thread(self.request('thread/read', {'threadId': self.thread_id,
+                    'includeTurns': False}).get('thread'), self.thread_id)
+                self.checkpoint(state='UNVERIFIED', pause_reason=None,
+                                summary='User acknowledged unknown prior outcome; no replay performed.')
+                self.recovery_token = None
+                self.shell.write('อนุญาตข้อความใหม่แล้ว; งานเดิมยังไม่ถือว่าผ่านเกณฑ์')
+                return
+            if command == '/delete':
+                self.delete_proposal = None
+                if len(values) > 1:
+                    raise ProbeError('Use /delete [ID].')
+                sid = values[0] if values else self.record['id']
+                self._fresh_account(require_usage=False)
+                with self._target_record(sid) as record:
+                    self._check_identity(record)
+                    tree = self._deletion_tree(record)
+                    token = uuid.uuid4().hex
+                    self.delete_proposal = {'token': token, 'record': dict(record), 'tree': tree}
+                    self.shell.write(json.dumps({'delete_session': sid, 'title': record['title'],
+                        'threads_including_descendants': tree, 'work_files_deleted': False}, ensure_ascii=True))
+                    self.shell.write('ลบประวัติ Codex และ metadata; ไม่ย้อนการแก้ไฟล์ '
+                                     'และไม่รับรองการลบข้อมูลทั้งหมดฝั่งบริการ · /confirm-delete ' + token)
+                return
+            proposal, self.delete_proposal = self.delete_proposal, None
+            if len(values) != 1 or proposal is None or values[0] != proposal['token']:
+                raise ProbeError('Invalid or stale deletion token.')
+            self._fresh_account(require_usage=False)
+            sid = proposal['record']['id']
+            with self._target_record(sid) as record:
+                self._check_identity(record)
+                if record != proposal['record'] or self._deletion_tree(record) != proposal['tree']:
+                    raise ProbeError('Deletion scope changed; request a new preview.')
+                if record['deletion_state'] != 'remote_deleted' and record['thread_id'] is not None:
+                    record.update(deletion_state='requested', state='PAUSED', pause_reason='deletion_pending')
+                    self.store.save(record)
+                    self.request('thread/delete', {'threadId': record['thread_id']})
+                    record['deletion_state'] = 'remote_deleted'
+                    self.store.save(record)
+                self.store.remove(sid)
+            self.shell.write('ลบ session ตามขอบเขตที่ยืนยันแล้ว: ' + sid)
+            if self.record is not None and sid == self.record['id']:
+                self.record = None
+                self.shell.closed = True
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            self.shell.write('Session operation paused: ' + (str(exc) if isinstance(exc, ProbeError)
+                                                           else diagnostic_code(exc)))
 
     def _async(self, method, params):
         if method not in ('turn/start', 'turn/steer', 'turn/interrupt') or len(self._rpcs) >= 8:
@@ -935,6 +1205,12 @@ class LiveChatConnection(Connection):
     def action(self, action):
         kind = action['action']
         if kind == 'submit':
+            self.delete_proposal = None
+            if self.recovery_token is not None or (self.record is not None
+                                                   and self.record['deletion_state'] != 'none'):
+                self.shell.active = False
+                self.shell.write('Session พักอยู่: ตรวจ outcome เดิมหรือจัดการ deletion ก่อนส่งข้อความใหม่')
+                return
             if self.start_pending or self.turn_id:
                 raise ProbeError('Previous turn outcome unknown; cannot start another.')
             if self._rpcs:
@@ -949,6 +1225,7 @@ class LiveChatConnection(Connection):
                 selected = select_model(self.catalog, selection['model'], selection['effort'])
             except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
                 self.shell.active = False
+                self.checkpoint(state='PAUSED', pause_reason='catalog_unavailable')
                 self.shell.write('พักก่อนส่ง prompt [catalog_preflight]: ' + diagnostic_code(exc)
                                  + '; ยังไม่เริ่ม turn ใหม่ ใช้ /model หรือส่งข้อความอีกครั้งเมื่อพร้อม')
                 return
@@ -961,6 +1238,7 @@ class LiveChatConnection(Connection):
             self.shell.quota_status = {k: self.quota_status[k] for k in ('state', 'reason', 'checked_at')}
             if self.quota_status['state'] != 'allow':
                 self.shell.active = False
+                self.checkpoint(state='PAUSED', pause_reason=self.quota_status['reason'])
                 self.shell.write('พักงาน: ' + self.quota_status['reason'])
                 return
             self.account_id = self.quota_status['account_id']
@@ -969,11 +1247,16 @@ class LiveChatConnection(Connection):
             self._previews.clear()
             self._finished.clear()
             self.phase = 'starting_turn'
+            changes = {'state': 'RUNNING', 'pause_reason': None, 'turn_id': None}
+            if self.record is not None and self.record['goal'] == 'New manual chat':
+                changes.update(goal=action['text'][:4096], title=action['text'][:80])
+            self.checkpoint(**changes)
             self.start_pending = True
             self._async('turn/start', {'threadId': self.thread_id, 'model': selected['model'],
                                       'effort': selected['effort'],
                                       'input': [{'type': 'text', 'text': action['text']}]})
         elif kind == 'steer':
+            self.delete_proposal = None
             if self.turn_id is None or self.start_pending:
                 self.shell.write('ยังรอ turn ID; กรุณาส่งข้อความเพิ่มหลังเริ่มตอบ')
                 return
@@ -999,6 +1282,7 @@ class LiveChatConnection(Connection):
                 or request['turn_id'] != self.turn_id):
             raise ProbeError('Stale or invalid tool approval.')
         self._approvals.pop(token)
+        self.checkpoint(state='RUNNING', pause_reason=None)
         self.send({'id': request['id'], 'result': {
             'decision': 'accept' if choice == 'approve' else 'decline'}})
 
@@ -1040,6 +1324,7 @@ class LiveChatConnection(Connection):
                 self.shell.write('ปฏิเสธคำขอที่ใหญ่เกินแสดงอย่างครบถ้วน')
                 return
             token = uuid.uuid4().hex
+            self.checkpoint(state='AWAITING_TOOL_APPROVAL')
             self._approvals[token] = {'id': message['id'], 'turn_id': self.turn_id}
             self.shell.event({'type': 'tool_approval', 'token': token, 'preview': preview})
             return
@@ -1049,6 +1334,7 @@ class LiveChatConnection(Connection):
             if not isinstance(tid, str) or not tid or (self.turn_id and self.turn_id != tid):
                 raise ProbeError('Invalid active turn metadata.')
             self.turn_id = tid
+            self.checkpoint(turn_id=tid)
             self.phase = 'running_turn'
             if self.cancel_after_start:
                 self.cancel_after_start = False
@@ -1094,6 +1380,9 @@ class LiveChatConnection(Connection):
             status = turn.get('status')
             if status not in ('completed', 'failed', 'interrupted'):
                 raise ProbeError('Invalid terminal status.')
+            self.checkpoint(state={'completed': 'UNVERIFIED', 'failed': 'FAILED', 'interrupted': 'PAUSED'}[status],
+                            pause_reason='user_pause' if status == 'interrupted' else None,
+                            summary='Backend turn ' + status + '; task checks are separate.')
             self.shell.write('')
             if status == 'failed':
                 self.shell.write('Turn ล้มเหลว; ไม่ retry อัตโนมัติ')
@@ -1124,6 +1413,7 @@ class LiveChatConnection(Connection):
                     if self.turn_id and tid != self.turn_id:
                         raise ProbeError('Conflicting live turn ID.')
                     self.turn_id = tid
+                    self.checkpoint(turn_id=tid)
                     if self.cancel_after_start:
                         self.cancel_after_start = False
                         self._async('turn/interrupt', {'threadId': self.thread_id, 'turnId': tid})
@@ -1140,6 +1430,7 @@ class LiveChatConnection(Connection):
 SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'criteria',
                   'step_id', 'correction_count', 'mode', 'permission_profile', 'state',
                   'pause_reason', 'summary', 'updated_at'}
+SESSION_V2_FIELDS = SESSION_FIELDS | {'account_hash', 'turn_id', 'deletion_state'}
 SESSION_STATES = {'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'AWAITING_TOOL_APPROVAL',
                   'RUNNING', 'CHECKING', 'DONE', 'UNVERIFIED', 'PAUSED', 'FAILED'}
 
@@ -1205,10 +1496,22 @@ class SessionStore:
         return session_id + '.json'
 
     def _validate(self, record, session_id):
-        if not isinstance(record, dict) or set(record) != SESSION_FIELDS:
+        if not isinstance(record, dict):
             raise ProbeError('Invalid session metadata fields; file not modified.')
-        if type(record['version']) is not int or record['version'] != 1:
+        version = record.get('version')
+        if type(version) is not int or version not in (1, 2):
             raise ProbeError('Unsupported session version; file not modified.')
+        if set(record) != (SESSION_FIELDS if version == 1 else SESSION_V2_FIELDS):
+            raise ProbeError('Invalid session metadata fields; file not modified.')
+        if version == 2:
+            import re
+            if (not isinstance(record['account_hash'], str)
+                    or re.fullmatch('[0-9a-f]{64}', record['account_hash']) is None
+                    or record['deletion_state'] not in ('none', 'requested', 'remote_deleted')):
+                raise ProbeError('Invalid session account binding or deletion state.')
+            if record['turn_id'] is not None and (not isinstance(record['turn_id'], str)
+                    or not record['turn_id'].strip() or len(record['turn_id']) > 256):
+                raise ProbeError('Invalid saved turn ID.')
         if record['id'] != session_id or record['project'] != self.project:
             raise ProbeError('Session identity or project mismatch; file not modified.')
         for field in ('title', 'goal', 'summary'):
@@ -1317,7 +1620,7 @@ class SessionStore:
             except FileNotFoundError:
                 pass
 
-    def create(self, goal, title=None, thread_id=None):
+    def create(self, goal, title=None, thread_id=None, account_hash=None):
         import uuid
         session_id = uuid.uuid4().hex
         record = {'version': 1, 'id': session_id, 'project': self.project, 'thread_id': thread_id,
@@ -1325,6 +1628,8 @@ class SessionStore:
                   'step_id': None, 'correction_count': 0, 'mode': 'ask_to_escalate',
                   'permission_profile': 'read_only', 'state': 'READY', 'pause_reason': None,
                   'summary': '', 'updated_at': datetime.now(timezone.utc).isoformat()}
+        if account_hash is not None:
+            record.update(version=2, account_hash=account_hash, turn_id=None, deletion_state='none')
         with self._lock(session_id):
             try:
                 os.stat(self._name(session_id), dir_fd=self._fd, follow_symlinks=False)
@@ -1333,6 +1638,14 @@ class SessionStore:
             else:
                 raise ProbeError('Session ID collision; existing file not modified.')
         return self.read(session_id)
+
+    def remove(self, session_id):
+        name = self._name(session_id)
+        if session_id not in self._locked_ids:
+            raise ProbeError('Deleting metadata requires the session lock.')
+        self.read(session_id)
+        os.unlink(name, dir_fd=self._fd)
+        os.fsync(self._fd)
 
     @contextmanager
     def edit(self, session_id):
@@ -1358,19 +1671,24 @@ def main():
     parser.add_argument('--live', action='store_true', help='manual-model live chat using ChatGPT subscription quota')
     parser.add_argument('--model', help='explicit model ID for --live')
     parser.add_argument('--effort', default='low', help='explicit effort for --live (default: low)')
+    parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     parser.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
     if args.live and (args.doctor or not args.model):
         parser.error('--live requires --model and cannot be combined with --doctor')
     if args.model and not args.live:
         parser.error('--model requires --live')
+    if args.resume and not args.live:
+        parser.error('--resume requires --live and --model')
     if args.live:
         backend = None
+        store = None
         try:
+            store = SessionStore(os.getcwd())
             backend = LiveChatConnection(['codex', 'app-server', '--stdio',
                 '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
                 '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
-            backend.connect(args.model, args.effort, os.getcwd())
+            backend.connect(args.model, args.effort, os.getcwd(), store=store, session_id=args.resume)
             return run_chat(sys.stdin, sys.stdout, backend=backend, prompt=args.prompt)
         except KeyboardInterrupt:
             return 130
@@ -1381,6 +1699,8 @@ def main():
         finally:
             if backend is not None:
                 backend.close()
+            if store is not None:
+                store.close()
     if args.doctor:
         if args.prompt is not None:
             parser.error('--doctor does not accept a prompt')

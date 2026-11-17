@@ -201,6 +201,7 @@ sys.argv=['modelmate.py','--live','--model','synthetic-model']
 sys.exit(modelmate.main())
 '''
             p = subprocess.Popen([sys.executable,'-u','-c',source,FAKE,trace],cwd=root,
+                                 env=dict(os.environ, XDG_STATE_HOME=str(Path(directory) / 'state')),
                                  stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             buffer = b''
             def read_until(target):
