@@ -1444,3 +1444,43 @@ not verify tool-check revalidation, crash/network recovery, a no-tools security
 boundary, all permission paths or backend dispatch telemetry. Durable scratch/thread
 remain retained, not deleted. Public tool-check resume and auto routing remain gated.
 Documentation-only evidence update; git diff --check passed. No new agent inference.
+
+
+## P03/P12 — standalone recheck capability decision, 2026-11-18
+
+Decision: keep public test/lint resume and standalone command execution disabled.
+The installed Codex 0.169.0 generated CommandExecParams schema supports argv, cwd,
+sandboxPolicy and timeoutMs, but no approvalPolicy. A schema is not enforcement
+evidence. The official [App Server documentation](https://developers.openai.com/codex/app-server/)
+describes command/exec as standalone execution without a thread/turn; this could
+avoid a model turn, but does not establish parity with native tool command rules.
+
+The upstream [command execution request processor](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/command_exec_processor.rs)
+inspected on this date selects effective sandbox permissions, builds ExecParams
+with UseDefault and starts an execution request. That processor does not show a
+command-rule decision or turn approval routing. This is a reason to withhold the
+capability, not proof of a bypass in the installed binary: upstream main may differ
+from 0.169.0, and downstream enforcement has not been demonstrated. Reading
+configRequirements alone would not prove that every applicable command rule was
+preserved. A user accepting a check plan cannot waive stronger host restrictions.
+
+The existing RPC allowlist remains unchanged. An offline transport regression
+asserts command/exec, command/exec/write and command/exec/terminate are refused
+before send in diagnostic and native workflow connections. This proves only the
+client gate; it does not test backend enforcement. No command executor, permission
+override, local subprocess fallback, new model turn or quota-consuming probe was
+introduced. Runtime and verifier hashes remain unchanged.
+
+Next required proof: on the exact supported server version, demonstrate that a
+harmless permitted command runs while the same harmless command under an applicable
+deny rule is denied, and that approval-required commands cannot execute before the
+native decision. Cover project configuration, stronger managed restrictions,
+timeout/disconnect and no replay. Use synthetic fixtures without changing user
+configuration. Until a supported path can establish these properties, do not add
+a standalone executor or advertise zero-model-cost tool revalidation. If that
+path becomes supported, reserve each recheck durably before execution and record
+unknown outcomes without resetting correction budgets or silently retrying.
+
+Offline validation: protocol tests 7/7 passed; full unittest discovery 354/354
+passed; git diff --check passed. These checks do not close the native permission
+gate described above.

@@ -737,3 +737,14 @@ sentinel. Runtime/verifier hashes match local 0a9c86b; diagnostics show userMess
 metadata and zero observed tool/unknown items. See VERIFICATION.md. This does not
 close tool revalidation, crash/network, no-tools classifier or all permission gates.
 No repeat is needed for this synthetic manual-check happy path.
+
+
+P03/P12 tool recheck investigation (2026-11-18): standalone command/exec is a
+candidate for checks without a model turn, but sandboxing alone does not establish
+equivalence with native tool command rules and approval handling. Current upstream
+source builds an execution request directly; the installed schema does not expose
+a per-request approval policy. This approach is BLOCKED pending version-specific
+enforcement evidence; P12 manual/rubric resume remains available. No direct-command
+executor, local subprocess fallback or model turn was added. A transport regression
+checks that standalone command requests are rejected before sending an RPC.
+See VERIFICATION.md for sources, scope and the next required proof.
