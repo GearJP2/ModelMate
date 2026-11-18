@@ -1947,3 +1947,10 @@ after approval and before dispatch, with zero attempts. The launcher printed
 runtime SHA-256 `f6446317165ef09446736fbf7598d0ac5cee0b61fb3a98ad204eda55c10b1209`.
 Paired scoring remains pending. Requested model is recorded without reported
 dispatch telemetry or token usage.
+
+C1 baseline follow-up: the user requested `gpt-6.2-astra/low` once, then
+entered `/exit` while RUNNING before an answer appeared. Read-only inspection
+of the local workflow checkpoint found the attempt's terminal status recorded
+as `interrupted`. The task remained paused with no gradeable answer. Keep this
+interruption separate from the earlier zero-attempt exit and from any subsequent
+baseline run. The routed score remains 5/5. The pair has no baseline score yet.
