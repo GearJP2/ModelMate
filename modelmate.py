@@ -18,12 +18,12 @@ class ProbeError(Exception):
 class Connection:
     allowed_methods = {"initialize", "account/read", "model/list", "account/rateLimits/read"}
 
-    def __init__(self, command, timeout):
+    def __init__(self, command, timeout, *, cwd=None):
         try:
             self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
         except FileNotFoundError as exc:
-            if command and command[0] == 'codex':
+            if command and command[0] == 'codex' and exc.filename == 'codex':
                 raise ProbeError('Codex CLI ไม่พบใน PATH; ตรวจ command -v codex แล้วติดตั้ง/เพิ่ม Codex ใน PATH ก่อนเรียกใหม่') from exc
             raise
         os.set_blocking(self.process.stdout.fileno(), False)

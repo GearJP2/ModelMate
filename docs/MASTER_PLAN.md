@@ -748,3 +748,17 @@ enforcement evidence; P12 manual/rubric resume remains available. No direct-comm
 executor, local subprocess fallback or model turn was added. A transport regression
 checks that standalone command requests are rejected before sending an RPC.
 See VERIFICATION.md for sources, scope and the next required proof.
+
+
+P03 standalone diagnostic increment (2026-11-18): probe_policy.py opt-in --run
+evaluates a disposable allow/forbidden printf rules fixture with the installed CLI,
+confirms its trusted project config before attempting at most two standalone
+commands, and never sends account/thread/model RPCs. Configuration trust is scoped
+to the disposable project and server process; user/managed settings remain in place.
+The runtime RPC allowlists are unchanged. Connection accepts an optional subprocess
+cwd so the server actually starts within the fixture project. Tests cover that cwd
+and fail-closed prerequisites, bad outputs, approvals, EOF and no replay. This is
+a negative diagnostic, not permission parity certification. Local Codex 0.169.0
+matched fixture decisions but stopped at server_initialize, so no native command
+was attempted. Next: run this no-inference probe from a normal user terminal to
+collect version/hash-bound output; even a completed run does not close G2 or P12.

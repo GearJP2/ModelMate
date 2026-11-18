@@ -1484,3 +1484,47 @@ unknown outcomes without resetting correction budgets or silently retrying.
 Offline validation: protocol tests 7/7 passed; full unittest discovery 354/354
 passed; git diff --check passed. These checks do not close the native permission
 gate described above.
+
+
+## P03 — no-inference standalone policy probe, 2026-11-18
+
+Added opt-in `python3 probe_policy.py --run`. No flag prints help without starting
+Codex. The diagnostic creates its own private temporary directory and trusted
+project config/rules, then removes only that directory on exit. It does not edit
+real configuration, change HOME/CODEX_HOME, copy credentials or create threads.
+The process-local trust override names only the synthetic project; managed/user
+configuration remains loaded. Connection's optional cwd argument is used to start
+the server in that project rather than merely passing a cwd to individual RPCs.
+
+The installed CLI evaluates two explicit fixture commands with execpolicy check:
+one allow and one forbidden. This utility evaluates policy without executing the
+supplied command; see the official [rules documentation](https://developers.openai.com/codex/rules/).
+Only after both decisions match, initialization succeeds and config/read confirms
+the effective marker plus enabled project layer does the probe send command/exec.
+It requests read-only with network disabled, bounded output and timeout, and uses
+only two fixed printf argv vectors. No shell, user prompt, test suite or arbitrary
+command is accepted. No account, catalog, quota, thread or turn request is sent.
+
+The probe reports version, source/rule hashes and redacted stages/results. Exit 1
+means the forbidden fixture command also executed; this prevents treating the path
+as verified, but is not conclusive proof that server-side rules were loaded and
+bypassed. Config visibility and a CLI rule decision do not prove server loading.
+Exit 2 means prerequisites/execution remain unverified, including RPC errors:
+unsupported methods, sandbox startup failure and genuine denial can look alike.
+Neither result passes permission parity; only help returns 0 (interrupt returns
+130). Unexpected approval requests are never accepted, and timeout/EOF/error never
+triggers a retry. The runtime standalone command allowlist remains closed.
+
+Agent-run installed CLI check on 2026-11-18: codex-cli 0.169.0; fixtureDecisions
+matched; phase server_initialize; projectConfigObserved false; both native command
+results unverified; process exit 2. Thus no command/exec request was sent. No new
+inference was run. This does not establish a backend denial or a passed live gate.
+Normal-terminal output is still needed to investigate this exact native path.
+Even that narrow result cannot certify managed restrictions, approval timing,
+crash recovery or permission parity; public tool-check resume stays disabled.
+
+Offline validation: 10 policy-probe tests passed, including native fake-server
+execution and command capture from the actual fixture cwd; full suite 365/365
+passed. The shared transport also distinguishes a missing cwd from a missing
+Codex executable. Compile checks for all four entry points and git diff --check
+passed. No new dependency or model invocation was added.

@@ -96,13 +96,25 @@ python3 modelmate.py --help
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m py_compile modelmate.py doctor.py verify.py
+python3 -m py_compile modelmate.py doctor.py verify.py probe_policy.py
 ```
 
 Default tests ใช้ JSONL subprocess/fake controller ไม่ใช้ quota จริง
 ตัวเชื่อม live chat ผ่านการทดสอบจำลองแล้ว แต่ยังรอผลใช้งานสดจาก Terminal ของผู้ใช้
 ผลตรวจสดที่ได้รับแล้วครอบคลุม account/catalog/quota, synthetic context recall,
 การปฏิเสธ scratch command/patch และการรัน printf ตาม native policy
+
+ตรวจเส้นทาง standalone command โดย **ไม่เรียกโมเดล** (เป็น diagnostic แยกจาก runtime):
+
+```bash
+python3 probe_policy.py --run
+```
+
+สร้าง config/rules สังเคราะห์ในโฟลเดอร์ชั่วคราว ตรวจ rule decisions และลอง native
+`printf` ไม่เกินสองคำสั่ง ไม่แก้ config จริง ไม่เปิด tool recheck ให้เอง
+Exit `1` หมายถึงคำสั่งใน deny fixture ยังรันได้; `2` หมายถึงยังยืนยันไม่ได้
+ไม่มีผลจาก probe นี้ที่รับรอง permission parity อ่านขอบเขตใน
+[ผลตรวจ standalone policy probe](docs/VERIFICATION.md#p03--no-inference-standalone-policy-probe-2026-11-18)
 
 คำสั่งต่อไปนี้ **ใช้ quota จริง** เลือกรันเฉพาะกรณีที่ต้องตรวจ:
 

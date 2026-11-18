@@ -26,6 +26,15 @@ class ProtocolTests(unittest.TestCase):
         self.addCleanup(c.close)
         return c
 
+    def test_missing_server_cwd_is_not_reported_as_missing_codex(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / 'absent')
+            with self.assertRaises(FileNotFoundError) as raised:
+                Connection(['codex', 'app-server', '--stdio'], .5, cwd=missing)
+            self.assertEqual(raised.exception.filename, missing)
+
     def test_standalone_runtime_import_does_not_launch_process_or_network(self):
         import tempfile
         import shutil
