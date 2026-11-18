@@ -1954,3 +1954,13 @@ of the local workflow checkpoint found the attempt's terminal status recorded
 as `interrupted`. The task remained paused with no gradeable answer. Keep this
 interruption separate from the earlier zero-attempt exit and from any subsequent
 baseline run. The routed score remains 5/5. The pair has no baseline score yet.
+
+C1 paired live result: the completed baseline run requested
+`gpt-6.2-astra/low`, reached CHECKING and displayed the same answer as the
+completed routed run. The independent scorer passed all five cases for each
+arm. Both completed runs recorded one attempt, zero rechecks, and PAUSED
+after exit before rubric entry. Earlier baseline exits remain recorded
+separately. Both reports used the same runtime SHA-256, which matches the
+checkout. `reportedModels` and `tokenUsage` were null. Recorded wall times
+were 75.337 seconds (routed) and 43.694 seconds (baseline), including user
+wait. The pair provides no attributable inference-time or quota comparison.

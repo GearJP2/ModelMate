@@ -33,7 +33,7 @@ before requesting subscription turns.
 All critical checks must pass and routed quality must meet the baseline before
 claiming equivalent quality. Report any observed consumption difference with
 its denominator, paired sample count and scope. The table defines planned
-cases. No paired live results or quota savings have been established.
+cases. The C1 pilot result is recorded below. Quota savings remain unmeasured.
 
 ## Run the C1 pilot
 
@@ -79,3 +79,12 @@ the same script path. Enter `/verify 1 pass` if all five cases passed, or
 with `/finish 1=1.1`. Use `/exit` to print the workflow statistics. Record a
 failure, missing response or permission pause as observed, without replaying
 the turn. Record both requested selections, score results and exit statistics.
+
+### C1 result
+
+The user-run pair scored 5/5 for both requested selections,
+`gpt-6.2-sol/low` (routed) and `gpt-6.2-astra/low` (baseline), with one attempt
+in each completed run. The initial baseline exits are recorded separately
+in [VERIFICATION.md](VERIFICATION.md). The independent score was calculated
+from the displayed answers. Both local workflows were paused after exit
+before rubric entry. The comparison covers one synthetic repair-choice task.
