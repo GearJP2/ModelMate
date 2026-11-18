@@ -104,6 +104,9 @@ class WorkflowEntryTests(unittest.TestCase):
         shell = ChatShell(output, workflow=c, workflow_action=host)
         shell.line('/next')
         self.assertEqual(output.getvalue().count('สถานะ: RUNNING'), 1)
+        shell.line('/check')
+        self.assertIsNone(shell._workflow_check_attempt)
+        self.assertEqual(c.state, 'RUNNING')
         host.observe_native({'method':'turn/completed','params':{'threadId':'synthetic-thread',
             'turn':{'id':'synthetic-turn','status':'completed'}}})
         latest = output.getvalue().split('สถานะ: CHECKING')[-1]

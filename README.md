@@ -394,3 +394,11 @@ check failure ใช้ initial attempt + corrections 2 รอบเหมือ
 นี่คือการผูกผลคำสั่งใน turn นั้น ไม่ใช่การรับประกันไฟล์ทั้งหมดไม่เปลี่ยนภายหลัง
 bindings ไม่ถูก persist สำหรับ native resume ซึ่งยังไม่เปิด; metadata เก็บผล/IDs
 ตามเดิมโดยไม่คัดลอก stdout/stderr การเชื่อมคำสั่งรุ่นนี้ยังรอ user-run live test
+
+
+สำหรับขั้นที่มีเฉพาะ test/lint: หากสั่ง `/check` ระหว่าง RUNNING ระบบจะรอ
+terminal event ของ attempt นั้นแล้วตรวจครั้งเดียว ไม่มี model turn เพิ่ม
+การกดซ้ำไม่เพิ่มงาน และ `/cancel` หรือ `/exit` ล้างคำขอที่รอไว้
+manual/rubric ไม่รองรับการรอตรวจล่วงหน้า ต้องรอ CHECKING และ `/verify` ก่อน
+ถ้าไม่ได้สั่งล่วงหน้า เมื่อเห็น CHECKING ให้พิมพ์ `/check` ก่อน `/finish`
+ข้อความโมเดลที่เริ่มพูดหรือบอกผลไม่ได้หมายความว่า backend จบ turn แล้ว

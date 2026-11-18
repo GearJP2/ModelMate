@@ -1224,3 +1224,24 @@ Validation: ten targeted command-binding tests and 318/318 full offline tests
 passed. The sample command was also run locally: test_models.py 12/12 passed.
 Runtime/doctor/verifier compilation, offline sample preview and git diff --check
 passed. No new live inference or native command-tool live test was run.
+
+
+### Early /check user feedback and deferred-check fix (2026-11-18)
+
+User supplied a live command-check CLI transcript: /check arrived during RUNNING
+and was rejected; turn later became CHECKING, but /finish was attempted without
+another /check. No command evidence was accepted, and exit paused the workflow.
+The assistant claimed 12 tests/exit 0, which is not sufficient trusted evidence.
+This transcript is partial evidence only, not a completed command-check live test.
+No raw session IDs, tokens or transcript are stored here; hashes were not supplied.
+
+For tool-only steps, an explicit early /check now waits for the same attempt's
+confirmed terminal event, then evaluates once. Duplicate requests do not add work;
+UI text alone never triggers evaluation. Cancel/exit or paused/failed/foreign
+attempt state clears the request. Manual/rubric still require explicit post-turn
+verification. No new model turn or automatic /next is introduced.
+Regression tests cover early/repeated /check, no extra dispatch, queued cancellation,
+manual rejection and unrelated successful commands remaining UNVERIFIED.
+
+Validation: 13 command-binding tests and 321/321 full offline tests passed;
+runtime/doctor/verifier compilation and git diff --check passed. No live rerun.

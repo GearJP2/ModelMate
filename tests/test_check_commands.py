@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from modelmate import (ProbeError, load_check_commands, run_workflow_file,
-                       NativeWorkflowConnection, SessionStore, main)
+                       NativeWorkflowConnection, SessionStore, main, ChatShell)
 from test_routing import PLAN
 from test_native_workflow import SERVER
 
@@ -143,6 +143,47 @@ class CheckCommandTests(unittest.TestCase):
              patch('sys.stderr',new_callable=io.StringIO):
             with self.assertRaises(SystemExit) as exc:main()
             self.assertEqual(exc.exception.code,2)
+
+    def test_early_check_is_deferred_until_real_terminal_without_new_turn(self):
+        def drive(_input,_output,**kwargs):
+            host=kwargs['workflow_action'];c=kwargs['workflow'];backend=kwargs['backend']
+            shell=ChatShell(io.StringIO(),workflow=c,workflow_action=host)
+            shell.line('/next')
+            shell.line('/check');shell.line('/check')
+            self.assertEqual(c.state,'RUNNING')
+            self.assertEqual(c.snapshot()['active_attempt']['checks'],{})
+            backend.drain()
+            self.assertEqual(c.snapshot()['steps'][0]['state'],'DONE')
+            shell.line('/finish 1=1.1')
+            self.assertEqual(c.state,'DONE')
+            return 0
+        self.run_file(drive=drive)
+        self.assertEqual(sum(json.loads(line).get('method')=='turn/start' for line in self.trace.read_text().splitlines()),1)
+
+    def test_cancel_clears_queued_check_and_late_completion_cannot_accept_it(self):
+        def drive(_input,_output,**kwargs):
+            host=kwargs['workflow_action'];c=kwargs['workflow'];backend=kwargs['backend']
+            shell=ChatShell(io.StringIO(),workflow=c,workflow_action=host)
+            shell.line('/next');shell.line('/check');shell.line('/cancel')
+            self.assertIsNone(shell._workflow_check_attempt)
+            backend.drain()
+            self.assertEqual(c.snapshot()['steps'][0]['evidence'],[])
+            self.assertEqual(c.snapshot()['active_attempt']['checks'],{})
+            return 0
+        self.run_file(drive=drive)
+
+    def test_deferred_check_does_not_accept_unrelated_successful_command(self):
+        wrong=COMMAND_SERVER.replace(
+            "'command':json.loads(req['params']['input'][0]['text'])['verification_commands'][0]['command']",
+            "'command':'true'")
+        def drive(_input,_output,**kwargs):
+            host=kwargs['workflow_action'];c=kwargs['workflow'];backend=kwargs['backend']
+            shell=ChatShell(io.StringIO(),workflow=c,workflow_action=host)
+            shell.line('/next');shell.line('/check');backend.drain()
+            self.assertEqual(c.state,'UNVERIFIED')
+            self.assertEqual(c.snapshot()['steps'][0]['evidence'],[])
+            return 0
+        with patch(__name__+'.COMMAND_SERVER',wrong):self.run_file(drive=drive)
 
     def test_duplicate_commands_in_different_steps_are_unambiguous(self):
         self.plan['steps'].append(copy.deepcopy(self.plan['steps'][0]))

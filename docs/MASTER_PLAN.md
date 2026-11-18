@@ -656,3 +656,10 @@ native command/exec bypass, model-based pass claims or manual test/lint override
 Known failures retain correction budget; missing/mismatched results UNVERIFIED.
 No classifier, native recovery or expanded permission gate is enabled. Next live
 check uses the small test_models.py sample, not the full suite inside a model turn.
+
+
+P08/P10 deferred check fix (2026-11-18): user transcript exposed /check timing
+confusion, not proof of accepted command evidence. Tool-only /check can now wait
+for the current attempt terminal event; cancel/exit clears it. Manual checks remain
+post-turn. This offline-tested fix does not change native permission/retry gates or
+establish a new live verification result.

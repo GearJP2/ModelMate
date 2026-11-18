@@ -1416,6 +1416,7 @@ class ChatShell:
         self.exit_code = 0
         self.workflow = workflow
         self.workflow_action = workflow_action
+        self._workflow_check_attempt = None
         if isinstance(workflow_action, WorkflowHost):
             if workflow_action.controller is not workflow or workflow_action.on_change is not None:
                 raise ProbeError('Workflow host is already bound or belongs to another controller.')
@@ -1446,6 +1447,7 @@ class ChatShell:
 
     def cancel(self, exit_after=False):
         if self.workflow is not None:
+            self._workflow_check_attempt = None
             self.exiting = self.exiting or exit_after
             self.show_workflow(render=False)
             if self.active:
@@ -1536,6 +1538,11 @@ class ChatShell:
             self.write('เกณฑ์ ' + str(i + 1) + ': ' + criterion + ' · หลักฐานที่บันทึก ' + str(len(state['criterion_evidence'].get(i, []))))
         if active is not None:
             self.write('โมเดลที่ร้องขอใน attempt นี้: ' + json.dumps(active['selection']))
+        if state['state'] == 'CHECKING':
+            if active is not None:
+                self.write('Backend จบแล้ว; ใช้ /check เพื่อประเมินผล (manual/rubric ต้อง /verify ก่อน)')
+            elif state['step_index'] == len(state['steps']):
+                self.write('ขั้นงานผ่านแล้ว; ยืนยันเกณฑ์ด้วย /finish เช่น /finish 1=1.1 โดยเลือก ref ที่รองรับเกณฑ์จริง')
         if request is not None and self.pending is not None:
             self.write('โมเดลที่เสนอ: ' + json.dumps(request['selection']) + ' · ' + request['reason'])
             self.write('/approve ' + request['token'] + ' · /decline ' + request['token'] + ' · /pause ' + request['token'])
@@ -1558,6 +1565,14 @@ class ChatShell:
             elif cmd in ('/next', '/check'):
                 if values:
                     raise ProbeError('Use ' + cmd + ' without arguments.')
+                if (cmd == '/check' and state['state'] == 'RUNNING'
+                        and state['active_attempt'] is not None
+                        and isinstance(self.workflow_action, WorkflowHost)
+                        and all(check['kind'] in ('test', 'lint') for check in
+                                state['plan']['steps'][state['step_index']]['checks'])):
+                    self._workflow_check_attempt = state['active_attempt']['id']
+                    self.write('รับคำขอ /check แล้ว จะตรวจเมื่อ backend ยืนยันจบ attempt นี้ ไม่เรียกโมเดลเพิ่ม')
+                    return
                 expected = 'READY' if cmd == '/next' else 'CHECKING'
                 if state['state'] != expected:
                     raise ProbeError('Workflow is not ' + expected + '; answer its pending choice or wait for the host.')
@@ -1750,6 +1765,18 @@ class ChatShell:
             if isinstance(self.workflow_action, WorkflowHost):
                 self.catalog = self.workflow_action.catalog
                 self.role_policy = self.workflow_action.role_policy
+            state = self.workflow.snapshot()
+            active = state['active_attempt']
+            if self._workflow_check_attempt is not None:
+                requested = self._workflow_check_attempt
+                if (state['state'] == 'CHECKING' and active is not None
+                        and active['id'] == requested and active['status'] == 'completed'):
+                    self._workflow_check_attempt = None
+                    self.write('Backend จบแล้ว กำลังตรวจตามคำขอ /check ที่รอไว้')
+                    self.workflow_action({'action': 'check', 'task_id': self.workflow.task_id})
+                    return
+                if state['state'] != 'RUNNING' or active is None or active['id'] != requested:
+                    self._workflow_check_attempt = None
             self.show_workflow()
             return
         if kind in ('text', 'progress'):
