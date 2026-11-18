@@ -1736,3 +1736,40 @@ The experimental path is not production-ready. Next is the scoped live verifier.
 Validation: 18 new recheck UI/entry tests passed; full offline suite 431/431 passed;
 all four entry points compile and git diff --check passed. Only fake native servers
 and private temporary metadata were used, with no live model inference.
+
+
+## P12 — opt-in recheck live verifier prepared, 2026-11-19
+
+Added --probe-rechecks MODEL under the existing --run-live opt-in. It sends at most
+two model turns: initial registered synthetic command evidence, then one recheck on
+a separate durable thread after parent reconnect. It does not rerun the previous
+manual-context probe. The harness exercises the real controller/SessionStore and UI
+preview/confirmation commands, using native observed exit status rather than model
+claims; its live scope excludes interactive Terminal timing (tested offline).
+
+All seven report checks must pass for process exit 0: initialToolEvidence,
+durableResume, restoredEvidenceGate, consentGate, nativeRecheck, finalCheckpoint,
+sentinelUnchanged. Errors, absent/mismatched command evidence, expanded permissions
+and declined approval never trigger another model attempt. An unrelated controller
+error cannot be classified as a passed stale-evidence gate. Only one recheck budget
+slot is used, and the parent's work counters/thread/turn bindings remain unchanged.
+
+The report includes source SHA-256 hashes and requested model/low selection;
+reportedModels is null. Commands, nonce, raw model text, native/account IDs and paths
+are absent from JSON. Owned scratch location is printed separately on stderr;
+scratch and native threads are retained, not deleted. This is not no-tools isolation,
+all-permission enforcement, crash/network recovery, scoped deletion or dispatch
+telemetry proof. No live inference was run by the agent.
+
+Ten offline probe tests use three fake App Server processes sharing synthetic
+thread history. They verify the two-turn limit, one reconnect/two separate durable
+threads, initial failure stopping early, false model pass claims, mismatching/failed
+rechecks, denied approval, permission expansion, confirmation refusal and unrelated
+stale-gate errors. Runtime preflight now keeps the host catalog/policy fresh, fixing
+an empty-catalog UI update after a recheck; a subprocess test verifies the next
+explicit preview still works. The CLI flag forwarding path also has a regression.
+
+Validation: 10 recheck-probe tests and 20 recheck UI/entry tests passed; full offline
+suite 443/443 passed; all four entry points compile; git diff --check passed. These
+are fake-server results, not live gate evidence. User-run the single --probe-rechecks
+command to collect scoped evidence; do not repeat the older probes for this change.

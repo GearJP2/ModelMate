@@ -222,6 +222,16 @@ class RecheckUITests(unittest.TestCase):
         events=self.store.read(self.sid)['workflow']['rechecks']
         self.assertEqual(events[-1]['status'],'interrupted',out.decode())
 
+    def test_failed_check_keeps_catalog_available_for_next_explicit_preview(self):
+        process=self.spawn('test_fail');self.read_until(process,b'/recheck STEP.CHECK')
+        self.send(process,'/recheck 1.1');preview=self.read_until(process,b'/cancel')
+        token=re.search(rb'/confirm-recheck ([0-9a-f]{32})',preview)[1].decode()
+        self.send(process,'/confirm-recheck '+token);self.read_until(process,b'Recheck: completed')
+        self.send(process,'/recheck 1.1');next_preview=self.read_until(process,b'/confirm-recheck ')
+        self.assertIn(b'synthetic-standard',next_preview)
+        self.send(process,'/exit');_,err=process.communicate(timeout=5)
+        self.assertEqual(process.returncode,0,err.decode())
+
     def test_eof_during_preview_cannot_approve(self):
         process=self.spawn();self.read_until(process,b'/recheck STEP.CHECK')
         self.send(process,'/recheck 1.1');self.read_until(process,b'/cancel')
@@ -320,6 +330,12 @@ class RecheckUITests(unittest.TestCase):
              patch('sys.stderr',new_callable=io.StringIO):
             with self.assertRaises(SystemExit) as result:main()
         self.assertEqual(result.exception.code,2)
+
+    def test_main_forwards_experimental_flag_to_workflow_entry(self):
+        with patch('sys.argv',['modelmate.py','--resume-workflow',self.sid,'--experimental-rechecks']), \
+             patch('modelmate.run_workflow_file',return_value=0) as entry:
+            self.assertEqual(main(),0)
+        self.assertTrue(entry.call_args.kwargs['experimental_rechecks'])
 
 
 if __name__=='__main__':unittest.main()

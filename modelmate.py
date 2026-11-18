@@ -2997,6 +2997,9 @@ class NativeWorkflowConnection(Connection):
         if decision['state'] != 'allow':
             raise ProbeError('Workflow preflight paused: ' + decision['reason'])
         self.account_id = decision['account_id']
+        if self.host is not None:
+            self.host.catalog = copy.deepcopy(catalog)
+            self.host.role_policy = copy.deepcopy(self.role_policy)
         return dict(quota=quota, checked_at=checked_at, catalog=catalog, role_policy=self.role_policy)
 
     def dispatch(self, descriptor):

@@ -1,7 +1,7 @@
 # Native tool revalidation — implementation contract
 
-Status: ledger, native transport and opt-in CLI implemented/offline-tested;
-scoped live verification pending. User authorized this direction on
+Status: ledger, native transport, opt-in CLI and live verifier implemented/offline-tested;
+user-run live evidence pending. User authorized this direction on
 2026-11-18 after the standalone policy probe produced negative evidence.
 Decision models/classifiers are outside the current scope.
 
@@ -92,7 +92,7 @@ the runtime after creating one. No session files are migrated during plain reads
 
 Implementation order: checkpoint ledger and offline fault-injection tests (done), native
 transport/observation handling (offline-tested), CLI integration (offline-tested),
-then the scoped live verifier. Default tool-check resume stays disabled. Experimental
+then the scoped live verifier (offline-tested). Default tool-check resume stays disabled. Experimental
 resume requires --experimental-rechecks in addition to --execute-workflow and START.
 Do not call the experimental path live-verified or release-ready before its probe.
 
@@ -135,3 +135,20 @@ IDs. Reconciliation without replay and scoped native-thread deletion are not yet
 implemented. Local metadata removal refuses records containing rechecks, preserving
 those native identities for later inspection/cleanup. Threads are retained even
 after successful checks; there is no service-side erasure claim.
+
+## Opt-in live verifier
+
+`python3 verify.py --run-live --probe-rechecks MODEL` requests at most two model
+turns, both with the explicitly selected model at low effort. First it observes a
+registered synthetic printf command and saves the resulting accepted tool evidence.
+It reconnects the parent, checks that stale evidence cannot finish the task, then
+uses the UI preview/confirmation commands to start one separate native recheck.
+Only matching current command evidence can permit the final checkpoint.
+
+The report requires all seven checks passed for exit 0, with source hashes and
+requested selection; reportedModels remains unknown. Partial/failed checks exit 1
+and are never retried. Native threads and private scratch metadata are retained;
+stderr identifies only the owned scratch directory. JSON reports omit command,
+nonce, model prose, native/account IDs and local paths. This is a scoped happy-path
+probe, not interactive Terminal timing, all permissions, unknown recovery or deletion
+proof. Interactive input/event-loop behavior is currently checked offline.

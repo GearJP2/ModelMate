@@ -153,6 +153,18 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 รายงานแยก requested model, observed thread settings และ actual dispatch ที่ยังไม่ทราบ
 ไม่ commit raw account report, credentials, prompts หรือ local session logs
 
+ตรวจ tool recheck ข้าม reconnect แบบสังเคราะห์ **เลือกคำสั่งนี้คำสั่งเดียว**:
+
+```bash
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol
+```
+
+ใช้ไม่เกินสอง model turns: สร้างหลักฐานคำสั่งใน scratch, reconnect, ตรวจ stale/consent
+gate แล้วตรวจซ้ำผ่าน native thread แยก ไม่มี retry อัตโนมัติ รายงาน source hashes
+และผลที่สังเกตได้ โดยไม่ใช้ข้อความโมเดลเป็นหลักฐาน และไม่ยืนยัน actual model dispatch
+Scratch และ native threads ถูกเก็บไว้ ตรวจ directory ที่แสดงบน stderr ได้
+การลบ native threads แบบ scoped และ recovery ของ unknown outcomes ยังไม่รองรับ
+
 ## เอกสารโครงการ
 
 - [Design](docs/DESIGN.md)

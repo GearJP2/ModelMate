@@ -772,6 +772,138 @@ def probe_workflow_resume(model, timeout):
         print('Durable workflow probe scratch retained for inspection (thread not deleted): ' + str(directory), file=sys.stderr)
 
 
+RECHECK_PROBE_KEYS = ('initialToolEvidence', 'durableResume', 'restoredEvidenceGate',
+                      'consentGate', 'nativeRecheck', 'finalCheckpoint', 'sentinelUnchanged')
+
+
+def probe_rechecks(model, timeout):
+    """At most two synthetic model turns; retain native threads and scratch metadata."""
+    directory = Path(tempfile.mkdtemp(prefix='modelmate-recheck-'))
+    project = directory / 'project'; project.mkdir(mode=0o700)
+    sentinel = project / 'sentinel.txt'; sentinel.write_text('synthetic sentinel\n')
+    connection = child = store = None
+    result = dict.fromkeys(RECHECK_PROBE_KEYS, 'unverified')
+    result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None, scratchRetained=True,
+        runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+        verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        scope='At most two synthetic model turns with native command evidence across reconnect. '
+              'Not crash/network recovery, scoped thread deletion, all permission paths, '
+              'a no-tools boundary, interactive Terminal timing or backend dispatch telemetry.')
+    policy = {role: model for role in ('economy', 'standard', 'strong')}
+    catalog = [{'model': model, 'defaultReasoningEffort': 'low',
+                'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}]
+    spec = {'command': 'printf MM-' + secrets.token_hex(16), 'cwd': str(project)}
+    raw = json.dumps({'version': 1, 'goal': 'Synthetic durable tool recheck verification',
+        'clarifications': [], 'success_criteria': ['Registered synthetic command succeeds'],
+        'steps': [{'kind': 'review', 'objective': 'Run the registered verification command once in its exact cwd. '
+                   'Do not change files, use the network or retry. Summarize the observed result briefly.',
+                   'role': 'standard', 'effort': 'low', 'risk': 'normal', 'reason': 'Explicit synthetic probe',
+                   'checks': [{'kind': 'test', 'criterion': 'Native registered command exits with zero'}]}]})
+    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
+    try:
+        result['phase'] = 'initial_tool_turn'
+        store = SessionStore(project, directory / 'state')
+        controller = WorkflowController(raw, catalog, policy)
+        connection = NativeWorkflowConnection(command, timeout)
+        host = connection.connect(controller, project, policy, store=store);host.timeout = timeout
+        host.configure_check(0, **spec)
+        host({'action': 'next', 'task_id': controller.task_id})
+        status = wait_workflow(connection, timeout)
+        result['firstTurn'] = {'terminalStatus': status, 'commandDiagnostics': dict(host._command_diagnostics)}
+        if status != 'completed':
+            result['initialToolEvidence'] = 'failed';return result
+        host.finish_checks()
+        original = controller.snapshot()
+        if original['steps'][0]['state'] != 'DONE':
+            result['initialToolEvidence'] = 'failed';return result
+        first = original['steps'][0]['evidence'][0]
+        if first['origin'] != 'tool' or first['exit_code'] != 0 or first['result'] != 'pass':
+            result['initialToolEvidence'] = 'failed';return result
+        result['initialToolEvidence'] = 'passed'
+        controller.finish_task({0: [first['id']]})
+        sid, tid = connection.session_id, connection.thread_id
+        work_turn = store.read(sid)['turn_id']
+        connection.close();connection = None
+        check_session_sentinel(project, sentinel)
+
+        result['phase'] = 'reconnect'
+        connection = NativeWorkflowConnection(command, timeout)
+        host = connection.resume(store, sid, project, policy, raw)
+        controller = host.controller;state = controller.snapshot()
+        if (connection.thread_id != tid or state['task_id'] != original['task_id']
+                or state['steps'] != original['steps'] or first['id'] not in state['stale_evidence']
+                or controller._approvals._grants):
+            result['durableResume'] = 'failed';return result
+        result['durableResume'] = 'passed'
+        try:controller.finish_task({0: [first['id']]})
+        except ProbeError as exc:
+            if (str(exc) != 'Saved checks require explicit host revalidation before task completion.'
+                    or first['id'] not in controller.snapshot()['stale_evidence']):
+                result['failureReason'] = 'stale_gate_not_confirmed';return result
+            result['restoredEvidenceGate'] = 'passed'
+        else:
+            result['restoredEvidenceGate'] = 'failed';return result
+
+        fresh = connection.preflight()
+        shell = ChatShell(io.StringIO(), catalog=fresh['catalog'], role_policy=policy,
+                          workflow=controller, workflow_action=host)
+        shell.recheck_backend = connection;shell.recheck_commands = {'1.1': spec}
+        result['phase'] = 'consent_preview'
+        shell.line('/recheck 1.1')
+        pending = shell.recheck_pending
+        if pending is None or shell.recheck is not None or controller.recheck_operations():
+            result['consentGate'] = 'failed';return result
+        result['consentGate'] = 'passed'
+        result['phase'] = 'native_recheck'
+        shell.line('/confirm-recheck ' + pending['token'])
+        child = shell.recheck
+        if child is None:
+            result['failureReason'] = 'recheck_start_unverified'
+            operations = controller.recheck_operations()
+            result['recheckReservations'] = len(operations)
+            if operations:result['recheckPhase'] = operations[-1]['phase']
+            return result
+        child.host.timeout = timeout
+        status = wait_workflow(child, timeout)
+        operation = child.operation()
+        result['recheckTurn'] = {'terminalStatus': status, 'commandDiagnostics': dict(child.host._command_diagnostics)}
+        if (status != 'completed' or operation['status'] != 'completed' or operation['exit_code'] != 0
+                or child.thread_id == tid or first['id'] in controller.snapshot()['stale_evidence']):
+            result['nativeRecheck'] = 'failed';return result
+        result['nativeRecheck'] = 'passed'
+        shell.line('/finish 1=1.1')
+        saved = store.read(sid)
+        operations = controller.recheck_operations()
+        if (saved['workflow']['state'] == 'DONE' and saved['workflow']['steps'] == original['steps']
+                and saved['thread_id'] == tid and saved['turn_id'] == work_turn
+                and len(operations) == 1 and operations[0]['number'] == 1):
+            result['finalCheckpoint'] = 'passed'
+        else:result['finalCheckpoint'] = 'failed'
+        result['phase'] = 'finished'
+        return result
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result['diagnostic'] = diagnostic_code(exc)
+        return result
+    finally:
+        for backend in (child, connection):
+            if backend is None:continue
+            try:
+                host = backend.host
+                if host is not None and host._binding is not None and host._terminal is None:
+                    if backend is child:backend.cancel()
+                    else:host({'action': 'cancel', 'task_id': host.controller.task_id})
+                    wait_workflow(backend, 5)
+            except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                result['stopState'] = 'unknown'
+            finally:backend.close()
+        if store is not None:store.close()
+        try:check_session_sentinel(project, sentinel)
+        except (ProbeError, OSError, UnicodeError):result['sentinelUnchanged'] = 'failed'
+        else:result['sentinelUnchanged'] = 'passed'
+        print('Recheck probe scratch retained (native threads not deleted): ' + str(directory), file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
@@ -784,17 +916,23 @@ def main():
                         help='up to four synthetic native workflow turns: answers, denial and cancel; local disconnect guard')
     parser.add_argument('--probe-workflow-resume', metavar='MODEL',
                         help='two synthetic durable workflow turns across reconnect; scratch/thread retained')
+    parser.add_argument('--probe-rechecks', metavar='MODEL',
+                        help='at most two synthetic native tool turns across reconnect; scratch/threads retained')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if not args.run_live:
         parser.print_help()
         return 0
-    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow, args.probe_workflow_resume)) != 1:
-        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL, --probe-workflow-resume MODEL')
+    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks)) != 1:
+        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL, --probe-workflow-resume MODEL, --probe-rechecks MODEL')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_rechecks:
+            result = probe_rechecks(args.probe_rechecks, args.timeout)
+            print(json.dumps(result, indent=2))
+            return 0 if all(result.get(key) == 'passed' for key in RECHECK_PROBE_KEYS) else 1
         if args.probe_workflow_resume:
             result = probe_workflow_resume(args.probe_workflow_resume, args.timeout)
             print(json.dumps(result, indent=2))
