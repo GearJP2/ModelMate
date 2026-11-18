@@ -770,3 +770,11 @@ lookup. Add boolean-only prerequisite diagnostics and a fake-server regression
 that does not supply project layers without the matching request cwd. Existing
 trust/identity/marker checks remain required. Native result after this correction
 is still pending; no permission gate is passed by the regression.
+
+P03 trust encoding correction (2026-11-18): subsequent user boolean diagnostics
+showed the fixture layer was discovered but disabled. Replace quoted dotted CLI
+trust keys with a single projects inline-table value, because CLI override paths
+split on literal dots. A regression covers dotted/space/Thai fixture paths, and
+installed CLI accepts the new TOML value in a no-inference rule check. Do not
+remove disabled-layer rejection or alter persistent/managed trust. Native result
+after this correction remains pending.

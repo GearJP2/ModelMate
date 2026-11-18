@@ -1558,3 +1558,31 @@ still stop before any command; diagnostic output is checked for synthetic privat
 values. Targeted tests 10/10 passed. Native success after this change remains
 unverified; do not interpret this fix as established permission parity.
 Full offline suite 365/365, probe compile and git diff --check also passed.
+
+
+## P03 — trust override encoding correction, 2026-11-18
+
+User report for probe SHA-256
+`62604852662d2a30b59771b6e531c657dd85fad8b6f5cb8cba666038c8a4b63d`
+(04fedbf) and unchanged runtime hash reached project_config. Boolean evidence:
+layersPresent and fixtureLayerPresent true; fixtureLayerEnabled,
+effectiveMarkerMatches and fixtureLayerMarkerMatches false. Thus discovery worked,
+but the layer stayed disabled and no standalone commands were sent. This does not
+identify the precise server-side disabled reason or prove managed-policy denial.
+
+The probe had encoded its CLI trust override as a dotted key containing a quoted
+path. Upstream [override handling](https://github.com/openai/codex/blob/main/codex-rs/config/src/overrides.rs)
+splits key paths literally on dots, without parsing quoted TOML key segments.
+Changed the override to a top-level projects inline-table value with one quoted
+fixture path. This preserves path dots/Unicode/spaces without malformed key
+segments. The change remains process-local and keeps the fixture layer enabled
+check mandatory; it does not edit persistent trust or override managed policy.
+
+Offline policy probe tests 11/11 passed, including dots/spaces/Thai in the actual
+fake-server cwd. An agent-run no-inference check on installed Codex 0.169.0 accepted
+the new override with execpolicy check and returned the expected forbidden rule
+decision. Python 3.12 tomllib also confirmed the exact single project key/value;
+tomllib is used only for this local check, not as a runtime dependency. Neither
+check verifies native App Server project trust. Native result after this encoding
+fix remains pending; permission parity and public tool rechecks remain gated.
+Full offline suite 366/366, probe compile and git diff --check passed.

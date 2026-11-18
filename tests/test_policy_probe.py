@@ -1,6 +1,7 @@
 """Synthetic CLI decisions and native RPC; no installed Codex or model required."""
 import io
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -71,7 +72,11 @@ class PolicyProbeTests(unittest.TestCase):
         original = probe_policy.PolicyProbeConnection
         def factory(command, timeout, *, cwd):
             self.assertEqual(command[0], 'codex')
-            self.assertEqual(command[2], 'projects.' + json.dumps(cwd) + '.trust_level="trusted"')
+            key, value = command[2].split('=', 1)
+            self.assertEqual(key.split('.'), ['projects'])
+            table = re.fullmatch(r'\{("(?:[^"\\]|\\.)*")=\{trust_level="trusted"\}\}', value)
+            self.assertIsNotNone(table, 'Trust must be a single-entry inline TOML table')
+            self.assertEqual(json.loads(table[1]), cwd)
             self.assertEqual(command[3:], ['app-server', '--stdio'])
             self.scratch = Path(cwd)
             return original([sys.executable, '-u', '-c', SERVER, str(self.trace), mode], timeout, cwd=cwd)
@@ -84,6 +89,16 @@ class PolicyProbeTests(unittest.TestCase):
 
     def records(self):
         return [json.loads(line) for line in self.trace.read_text().splitlines()]
+
+    def test_trust_value_preserves_dots_spaces_and_unicode_in_project_path(self):
+        original = tempfile.TemporaryDirectory
+        def directory(**kwargs):
+            return original(dir=self.temp.name, prefix='โปรเจกต์.v1 ')
+        with patch('probe_policy.tempfile.TemporaryDirectory', side_effect=directory):
+            result = self.probe()
+        self.assertIn('โปรเจกต์.v1 ', str(self.scratch))
+        self.assertTrue(result['projectConfigObserved'])
+        self.assertEqual(result['phase'], 'finished')
 
     def test_executed_forbidden_fixture_never_certifies_permission_parity(self):
         result = self.probe()

@@ -63,7 +63,8 @@ def probe_policy(timeout=15):
 
             # Trust only this disposable fixture, through a process-local override.
             # Keep user/managed configuration and credentials in their normal locations.
-            trust = 'projects.' + json.dumps(directory) + '.trust_level="trusted"'
+            # CLI key paths split on dots literally; put the path in the TOML value.
+            trust = 'projects={' + json.dumps(directory, ensure_ascii=False) + '={trust_level="trusted"}}'
             connection = PolicyProbeConnection(['codex', '-c', trust, 'app-server', '--stdio'],
                                                timeout, cwd=directory)
             try:
