@@ -41,7 +41,14 @@ python3 modelmate.py --live --model gpt-6.1-terra --effort low
 Preflight ไม่ใช่การจอง quota หรือ hard spending cap ของบริการ
 
 โปรแกรมใช้ thread เดิมคุยต่อและส่งข้อความเพิ่มระหว่างตอบได้
-รุ่นนี้เลือกโมเดลเอง ไม่มี classifier/auto routing หรือวงจร plan→implement→review
+เลือกโมเดลผ่าน manual selection หรือ explicit workflow role bindings
+ตัด decision model/classifier แยกออกจากขอบเขตตามผู้ใช้ยืนยัน 2026-11-18
+ไม่มีการเรียกโมเดลเพิ่มเพื่อเลือกโมเดลเริ่มต้น; auto routing จาก prompt ยังไม่เปิด
+
+แกนบันทึก native recheck มี offline tests แล้ว: จองรอบแบบ durable แยกจาก work
+attempt, จำกัดรอบและไม่ replay ผลที่ยังไม่ทราบ รองรับ checkpoint เดิม โดยยังไม่เปิด
+`/recheck` หรือ tool-check resume ใน CLI จนกว่าจะเชื่อม native transport และตรวจครบ
+ดู [ข้อกำหนด native recheck](docs/NATIVE_RECHECK.md) สำหรับขอบเขตที่เหลือ
 อัตโนมัติ ไม่เปิด effort ultra ที่มี automatic delegation
 การส่ง model ID เป็นการร้องขอโมเดล ไม่ใช่ execution telemetry ที่ยืนยัน actual dispatch
 

@@ -56,7 +56,7 @@ plugin marketplace, จัดการ billing, streaming reasoning ภายใ
 คำขอที่ไม่รองรับต้องหยุด/ปฏิเสธโดยไม่อนุมัติ
 User ยอมรับ native readable roots; ไม่อ้าง project-only isolation ที่ไม่ได้บังคับ
 Manual live prototype เปิด opt-in ได้ตามนโยบายใหม่ แต่ไม่ถือว่า G2 ทั้งหมดผ่าน
-Auto workflow, no-tools classifier และ private web isolation ยังมี gates แยก
+Auto workflow และ private web isolation ยังมี gates แยก; decision classifier ถูกตัดจาก scope
 
 ### G3 — การค้นเว็บไม่รับข้อมูลส่วนตัวโดยอัตโนมัติ
 
@@ -154,8 +154,8 @@ checks ระบุสิ่งที่ต้องตรวจ ไม่ให
 Controller สร้าง task ID/step ID และ attempt counters เอง
 
 หาก clarifications ไม่ว่าง ให้ถามก่อนเริ่มขั้นที่ขึ้นกับคำตอบ
-ผล classifier ผิดรูปแบบ: แสดงข้อผิดพลาด/พัก ไม่เดาเป็น SIMPLE แล้วลงมือ
-classifier ต้องผ่าน quota/model policy เช่นเดียวกับ execution
+ผลแผนผิดรูปแบบ: แสดงข้อผิดพลาด/พัก ไม่เดาเป็น SIMPLE แล้วลงมือ
+ไม่เรียก decision classifier เพื่อสร้างหรืออนุมัติแผน
 
 ### Task state ที่ controller เป็นเจ้าของ
 
@@ -208,7 +208,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P03 | พิสูจน์ permission boundary | P01 | IN_PROGRESS: user ยอมรับ native policy; live prototype tests | จำเป็น |
 | P04 | Quota policy และ pause | P02 | MOCK_VERIFIED | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
-| P06 | Plan schema / classifier / routing | P04, P05 | IN_PROGRESS: validator/preparation MOCK_VERIFIED; live classifier รอ P03 | จำเป็น |
+| P06 | Plan schema / policy routing | P04, P05 | MOCK_VERIFIED: explicit plan validation; decision classifier removed by user scope | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: explicit-plan CLI/command-check happy path user LIVE_VERIFIED; broader routing/recovery pending | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
@@ -303,7 +303,7 @@ account mismatch, null, error, exhausted window, stale snapshot ต้องไ�
 Catalog เป็นแหล่ง model IDs/efforts ที่รองรับ แต่ไม่ใช่คะแนนคุณภาพหรือราคา
 เก็บ policy mapping รุ่นแรกเป็นข้อมูลชัดเจนสำหรับโมเดลที่ทดสอบแล้ว
 ตัวใหญ่ review mapping; ชื่อไม่รู้จักต้องให้ผู้ใช้เลือกหรือพัก ไม่จัดอันดับจากชื่อ
-ห้ามเรียก API classifier ที่ไม่อยู่ใน subscription catalog
+ไม่เพิ่ม API decision classifier; ใช้ explicit bindings ตาม scope ปัจจุบัน
 role economy/standard/strong เป็น policy ไม่ใช่ข้อเท็จจริงถาวรของ vendor
 
 ผ่านเมื่อ: unsupported model/effort ถูกปฏิเสธ, catalog pagination,
@@ -314,9 +314,9 @@ missing role, hidden model, catalog เปลี่ยนตอน resume แล
 ### P06 — Plan และ routing
 
 ไฟล์: modelmate.py, tests/test_routing.py, synthetic plan fixtures
-Implement validator ตาม section 5 ก่อนต่อ classifier
-Classifier เป็น read-only/no-tools step ผ่าน quota gate และ model policy
-เรียกเมื่อโจทย์ใหม่/ขอบเขตเปลี่ยน ไม่เรียกเพราะ approval reply หรือ status command
+อัปเดตตามผู้ใช้ 2026-11-18: ไม่ทำ decision model/classifier แยก
+ใช้ validator ตาม section 5 กับ explicit plan/role bindings และ controller policy
+ไม่เพิ่ม inference หรือบริการภายนอกเพื่อเลือกโมเดลเริ่มต้น
 แสดง goal, criteria, steps และเหตุผลสั้น ๆ; ห้ามแสดง private reasoning
 
 ผ่านเมื่อ: งานง่ายไม่ถูกบังคับ plan+strong review, งานเสี่ยงมี check,
@@ -378,7 +378,7 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 ใช้ SessionStore.workflow เพื่อ autosave ทุก transition ภายใต้ writer lock และ restore จาก session schema v3
 restore ไม่คืน approval/token/grant; active turn ที่ยังไม่ทราบผลต้อง reconcile ก่อน ไม่ replay
 controller methods รับเฉพาะ trusted host/UI events ไม่ใช่ API ที่เปิดให้โมเดลเรียกโดยตรง
-Controller ถือ state/step IDs/counters; classifier แค่เสนอ
+Controller ถือ state/step IDs/counters; explicit plan ไม่ให้อำนาจขยายสิทธิ์
 initial attempt + correction 1 + correction 2 จากนั้นหยุดถาม
 user เลือกทำต่อแล้วเริ่ม budget ใหม่ได้เฉพาะ explicit choice พร้อมเก็บรอบเก่า
 แก้ permission/model ต้องผ่าน gates ทุกครั้ง
@@ -788,3 +788,28 @@ See VERIFICATION.md for hashes and limits. Next eligible work: design an explici
 native-tool verification turn with model/quota consent, durable no-replay handling
 and preserved correction/evidence gates. That alternative consumes model quota;
 it is not the previously investigated zero-inference path and is not implemented.
+
+
+P06 scope update and P12 durable recheck core (2026-11-18): user removed separate
+decision models/classifiers. Delete unused classifier preparation/instructions,
+keep explicit plan validation/role bindings/model approvals, and replace the offline
+prompt's pending-classifier message with explicit entry-point guidance. Historical
+verification entries above remain historical, not current classifier requirements.
+
+P12 implementation contract: [NATIVE_RECHECK.md](NATIVE_RECHECK.md). Controller-only
+recheck reservations now persist an append-only version-2 checkpoint ledger with
+separate counters, native binding phases and observed terminal results. Existing
+version-1 workflow checkpoints remain readable and unchanged until a reservation
+is made; session metadata stays version 3. Writer lock, immutable ledger prefix and
+poisoning after uncertain saves prevent silent replay/rollback. A known matching
+completion can clear only its source stale tool evidence in the current process;
+reconciliation after an unknown result or another restore cannot do so. Recheck
+budgets survive model/command changes and require recorded continuation after 3
+slots. Work counters/native bindings/criterion coverage are preserved. Metrics
+separate work attempts from recheck reservations.
+
+This is an offline state milestone, not enabled execution. No /recheck CLI, native
+recheck transport or live verifier is connected yet. Test/lint resume remains
+disabled. Next eligible P12 work is native observation/transport integration using
+this ledger, then responsive UI/consent and retained-thread handling, then a scoped
+opt-in live test. No user-run live test is needed for this core milestone.

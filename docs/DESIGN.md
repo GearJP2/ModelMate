@@ -42,9 +42,10 @@ Codex App Server
 
 ## 3. การประเมินและ routing
 
-ประเมินเมื่อเริ่มงานใหม่หรือขอบเขตเปลี่ยนอย่างมีนัยสำคัญ
-ไม่เรียก classifier ทุกข้อความ เช่น คำตอบอนุมัติไม่ต้องจัดประเภทใหม่
-ตัวประเมินเองต้องใช้โมเดลที่ subscription รองรับและถูกนับในการใช้โควตาด้วย
+อัปเดตตามผู้ใช้ 2026-11-18: ตัด decision model/classifier แยกออกจากขอบเขต
+ไม่เรียกโมเดลเพิ่มเพื่อเลือกโมเดลเริ่มต้น และไม่เพิ่มบริการ routing ภายนอก
+ใช้แผนที่ผู้ใช้ระบุ, role bindings และกฎตรวจ model/effort/approval ของ controller
+เมื่อขอบเขตเปลี่ยน ให้ปรับแผนและตรวจ grants ใหม่ตามกฎเดิม
 
 ข้อมูลที่ต้องได้ก่อนเริ่มงาน:
 
@@ -96,7 +97,7 @@ Ask to escalate ต้องถามด้วยหากงานใหม่�
 
 ผล printf ที่รันโดยไม่ถามเป็นพฤติกรรมที่ผู้ใช้ยอมรับภายใต้นโยบายใหม่
 ไม่ได้แปลว่า workspace-write หรือ full-access เปิดได้เอง
-manual live chat เปิดแบบ opt-in เพื่อทดสอบ integration; auto classifier/workflow
+manual live chat เปิดแบบ opt-in เพื่อทดสอบ integration; automated workflow
 และการแยก private web context ยังต้องพิสูจน์ตาม gates ของตัวเอง
 
 ## 6. สถานะงานและการตรวจ

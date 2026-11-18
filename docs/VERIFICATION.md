@@ -1619,3 +1619,41 @@ correction counters and stale-evidence checks. Such a path uses model quota and
 must not be presented as zero-inference revalidation or started automatically.
 This update changes documentation only; git diff --check passed. No repeated
 native probe or additional inference was run by the agent.
+
+
+## P06/P12 — classifier removal and durable recheck core, 2026-11-18
+
+User removed separate decision models/classifiers from scope. Deleted the unused
+CLASSIFIER_INSTRUCTIONS and prepare_classification function and their five
+preparation tests; plan schema/routing/model approval tests remain. Offline prompt
+guidance now names --live/--workflow without promising a future classifier. This
+removes a dormant API, not an existing live classifier call.
+
+Added controller-only reserve/advance/limit-choice APIs and a version-2 workflow
+checkpoint ledger, with version-1 read compatibility. It records command/cwd
+digests, selections, source evidence IDs, budgets and native binding phases without
+raw commands/output. Session schema stays version 3. SessionStore rejects recheck
+ledger rollback/rewrite under the existing writer lock. Persistence failures freeze
+the controller; a saved unresolved reservation survives reopen and blocks dispatch.
+Recheck reservations do not replace work native turn IDs or reset work attempts.
+
+Thirteen offline tests use real private temporary SessionStore files and inject
+save failures before and after atomic replacement, replay attempts, premature
+bindings/results, bad quota/selection, schema mutation and budget extensions. They
+cover changed commands/models across reconnect, unknown outcomes, immutable ledger
+prefixes, backward compatibility, per-process stale-evidence confirmation and
+separate metrics. A matching completion from a newly reserved operation can clear
+its source stale evidence; saved or reconciled historical completion cannot.
+
+Scope: state/persistence only. Native recheck event matching, model consent, UI
+cancellation and retained-thread lifecycle are specified in NATIVE_RECHECK.md but
+not connected. No new /recheck command or public tool-check resume is enabled.
+No command/exec runtime permission or local executor was added. No live inference
+was requested; the prior native happy-path evidence applies only to its recorded
+source hashes, not to this new runtime. The next step is native adapter integration,
+not another user-run live probe of this controller core.
+
+Validation: targeted recheck tests 13/13 passed; full offline unittest suite 375/375
+passed; compile checks for modelmate.py, doctor.py, verify.py and probe_policy.py,
+and git diff --check passed. Five tests were removed with the deleted classifier;
+existing routing/policy tests and the native mock scenarios still pass.
