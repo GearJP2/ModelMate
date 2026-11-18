@@ -28,6 +28,10 @@ for line in sys.stdin:
   result={'config':config,'layers':[{'name':{'type':'project','dotCodexFolder':str(root/'.codex')},'config':config}]}
   if mode=='untrusted':result['layers'][0]['disabledReason']='untrusted'
   if mode=='wrong_config':result['config']={'developer_instructions':'PRIVATE_CONFIG'}
+  if mode=='wrong_layer':result['layers'][0]['name']['dotCodexFolder']='/PRIVATE_PATH'
+  if mode=='missing_marker':result['layers'][0]['config']={}
+  if mode=='layers_not_list':result['layers']={'private':'PRIVATE_CONFIG'}
+  if req.get('params',{}).get('cwd')!=str(root):result={'config':{},'layers':[]}
  elif method=='command/exec':
   text=req['params']['command'][1]
   if mode=='rpc_error' and text.endswith('DENY'):
@@ -94,6 +98,10 @@ class PolicyProbeTests(unittest.TestCase):
         self.assertEqual({r['method'] for r in self.records()},
                          {'initialize', 'initialized', 'config/read', 'command/exec'})
         self.assertEqual(len(self.cli_calls), 3)
+        config_request = next(r for r in self.records() if r['method'] == 'config/read')
+        self.assertEqual(config_request['params'], {'includeLayers': True, 'cwd': str(self.scratch)})
+        self.assertTrue(all(result['configEvidence'].values()))
+        self.assertTrue(all(type(value) is bool for value in result['configEvidence'].values()))
 
     def test_rpc_error_is_unverified_not_successful_denial(self):
         result = self.probe('rpc_error')
@@ -103,11 +111,13 @@ class PolicyProbeTests(unittest.TestCase):
         self.assertEqual(result['phase'], 'forbiddenCommand')
 
     def test_config_must_be_effective_and_enabled_before_commands(self):
-        for mode in ('untrusted', 'wrong_config'):
+        for mode in ('untrusted', 'wrong_config', 'wrong_layer', 'missing_marker', 'layers_not_list'):
             with self.subTest(mode=mode):
+                self.trace.unlink(missing_ok=True)
                 result = self.probe(mode)
                 self.assertFalse(result['projectConfigObserved'])
                 self.assertEqual(result['phase'], 'project_config')
+                self.assertFalse(all(result['configEvidence'].values()))
                 self.assertFalse(any(r['method'] == 'command/exec' for r in self.records()))
 
     def test_bad_result_or_eof_stops_without_retry_or_second_command(self):

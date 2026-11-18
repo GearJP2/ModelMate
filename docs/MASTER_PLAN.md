@@ -762,3 +762,11 @@ a negative diagnostic, not permission parity certification. Local Codex 0.169.0
 matched fixture decisions but stopped at server_initialize, so no native command
 was attempted. Next: run this no-inference probe from a normal user terminal to
 collect version/hash-bound output; even a completed run does not close G2 or P12.
+
+P03 probe correction (2026-11-18): user normal-terminal output reached project_config
+with fixture decisions matched but no commands sent. Fix config/read to include the
+fixture cwd explicitly; process cwd alone is insufficient for its project-layer
+lookup. Add boolean-only prerequisite diagnostics and a fake-server regression
+that does not supply project layers without the matching request cwd. Existing
+trust/identity/marker checks remain required. Native result after this correction
+is still pending; no permission gate is passed by the regression.

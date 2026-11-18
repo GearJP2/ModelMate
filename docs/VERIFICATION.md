@@ -1528,3 +1528,33 @@ execution and command capture from the actual fixture cwd; full suite 365/365
 passed. The shared transport also distinguishes a missing cwd from a missing
 Codex executable. Compile checks for all four entry points and git diff --check
 passed. No new dependency or model invocation was added.
+
+
+## P03 — explicit config-read cwd correction, 2026-11-18
+
+User-supplied normal-terminal report reached project_config on codex-cli 0.169.0:
+fixtureDecisions matched, projectConfigObserved false, both commands unverified,
+permissionParity unverified. Probe SHA-256
+`058359457f1e7bfb6df9912828c770ae9f9e6e58e0bd8dc3e137e6d091a33aaf`
+and runtime SHA-256
+`bbe5871404ab2b4d675ed963a841d0688ca751b3c6acc3b6c81933bdbab4d057`
+match d2d79c8. No native command was sent by that report's code path; no permission
+gate passed and no inference was requested. No exit code was supplied.
+
+The probe omitted cwd from config/read, whose installed schema explicitly supports
+project resolution through that parameter. The upstream
+[configuration reader](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/config_manager_service.rs)
+passes this optional cwd into layer loading independently of server process cwd.
+The diagnostic now sends the exact fixture cwd and retains every existing marker,
+project identity and enabled-layer check. It additionally reports only five boolean
+configEvidence fields: effective marker, layers shape, matching fixture layer,
+enabled fixture layer, and enabled layer marker. No config values, paths, reasons
+or private layer names are printed.
+
+The fake server now withholds project config when cwd is omitted or wrong, so the
+prior probe would fail the execution-path regression. Disabled layers, wrong
+effective marker, foreign project path, missing layer marker and malformed layers
+still stop before any command; diagnostic output is checked for synthetic private
+values. Targeted tests 10/10 passed. Native success after this change remains
+unverified; do not interpret this fix as established permission parity.
+Full offline suite 365/365, probe compile and git diff --check also passed.

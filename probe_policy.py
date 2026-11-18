@@ -70,17 +70,24 @@ def probe_policy(timeout=15):
                 connection.request('initialize', {'clientInfo': {'name': 'modelmate_policy_probe', 'version': '0.1.0'}})
                 connection.send({'method': 'initialized'})
                 result['phase'] = 'project_config'
-                config = connection.request('config/read', {'includeLayers': True})
+                # config/read resolves project layers from its own explicit cwd.
+                config = connection.request('config/read', {'includeLayers': True, 'cwd': directory})
                 layers = config.get('layers')
-                if (not isinstance(config.get('config'), dict)
-                        or config['config'].get('developer_instructions') != marker
-                        or not isinstance(layers, list)
-                        or not any(isinstance(layer, dict) and layer.get('disabledReason') is None
-                            and isinstance(layer.get('name'), dict)
-                            and layer['name'].get('type') == 'project'
-                            and layer['name'].get('dotCodexFolder') == str(config_dir)
-                            and isinstance(layer.get('config'), dict)
-                            and layer['config'].get('developer_instructions') == marker for layer in layers)):
+                fixture_layers = [layer for layer in (layers if isinstance(layers, list) else [])
+                    if isinstance(layer, dict) and isinstance(layer.get('name'), dict)
+                    and layer['name'].get('type') == 'project'
+                    and layer['name'].get('dotCodexFolder') == str(config_dir)]
+                enabled_layers = [layer for layer in fixture_layers if layer.get('disabledReason') is None]
+                result['configEvidence'] = {
+                    'effectiveMarkerMatches': isinstance(config.get('config'), dict)
+                        and config['config'].get('developer_instructions') == marker,
+                    'layersPresent': isinstance(layers, list),
+                    'fixtureLayerPresent': bool(fixture_layers),
+                    'fixtureLayerEnabled': bool(enabled_layers),
+                    'fixtureLayerMarkerMatches': any(isinstance(layer.get('config'), dict)
+                        and layer['config'].get('developer_instructions') == marker for layer in enabled_layers),
+                }
+                if not all(result['configEvidence'].values()):
                     raise ProbeError('Synthetic project config not confirmed; no commands sent.')
                 result['projectConfigObserved'] = True
                 for command, field in zip(commands, ('baseline', 'forbiddenCommand')):
