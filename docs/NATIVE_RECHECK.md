@@ -1,7 +1,7 @@
 # Native tool revalidation — implementation contract
 
-Status: durable controller ledger and native transport implemented/offline-tested;
-CLI not connected, not an enabled end-user feature. User authorized this direction on
+Status: ledger, native transport and opt-in CLI implemented/offline-tested;
+scoped live verification pending. User authorized this direction on
 2026-11-18 after the standalone policy probe produced negative evidence.
 Decision models/classifiers are outside the current scope.
 
@@ -91,8 +91,10 @@ reserved. Older ModelMate builds cannot read version-2 checkpoints; do not downg
 the runtime after creating one. No session files are migrated during plain reads.
 
 Implementation order: checkpoint ledger and offline fault-injection tests (done), native
-transport/observation handling (offline-tested), CLI integration, then the scoped live verifier.
-Keep public tool-check resume disabled until those dependent pieces are complete.
+transport/observation handling (offline-tested), CLI integration (offline-tested),
+then the scoped live verifier. Default tool-check resume stays disabled. Experimental
+resume requires --experimental-rechecks in addition to --execute-workflow and START.
+Do not call the experimental path live-verified or release-ready before its probe.
 
 The internal NativeRecheckConnection starts one separate durable thread/turn after
 the caller supplies an explicitly consented selection and exact check specification.
@@ -107,3 +109,29 @@ interrupt even if persistence has failed. Closing without confirmed termination
 records unknown and retains the thread. A late conflicting terminal event appends
 an unknown outcome, restores the source stale flag and revokes parent DONE if needed.
 These paths have synthetic transport tests, not live permission/recovery proof.
+
+## Experimental CLI, 2026-11-19
+
+Use --resume-workflow with an actual local session ID, explicit --role-model bindings,
+the user-owned --check-commands file, --experimental-rechecks and --execute-workflow.
+Without execute the preview remains offline; CANCEL/EOF do not start a backend.
+START opens the native session but does not approve a verification turn.
+
+- `/recheck 1.1` shows the exact binding and standard/low requested selection.
+- `/confirm-recheck TOKEN` consumes that one-use confirmation and starts one turn.
+  Changed workflow/mode/model bindings or check specification require a new preview.
+- `/status`, `/cancel`, `/exit` and EOF are processed while the child turn waits.
+  Exit waits for a terminal event or the existing bounded interruption deadline;
+  no interrupt acknowledgement alone establishes that the turn stopped.
+- `/recheck-budget 1.1 continue|revise_scope|pause` records a choice after three
+  reservations; it never starts a turn. Model prose cannot invoke these commands.
+- `/continue TOKEN`, `/check` and `/finish` still control the original workflow.
+  Rechecks do not advance steps or mark the task done automatically.
+
+Only known saved test/lint evidence can be rechecked. Completed active work with
+missing/unknown tool checks is refused. Unresolved recheck operations block native
+resume; --show-workflow remains available offline and displays retained thread/turn
+IDs. Reconciliation without replay and scoped native-thread deletion are not yet
+implemented. Local metadata removal refuses records containing rechecks, preserving
+those native identities for later inspection/cleanup. Threads are retained even
+after successful checks; there is no service-side erasure claim.

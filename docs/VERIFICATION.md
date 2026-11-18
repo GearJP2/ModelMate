@@ -1700,3 +1700,39 @@ Validation: full offline unittest suite 413/413 passed, including 38 new native
 recheck transport cases; all four entry points compile; git diff --check passed.
 The tests use synthetic servers and private temporary files, not the installed
 account or live model inference. No user-run live test is required yet.
+
+
+## P12 — experimental recheck CLI integration, 2026-11-19
+
+Opt-in --experimental-rechecks enables known-result test/lint workflow resume;
+default behavior remains blocked. Offline preview/CANCEL do not create a backend.
+START restores the main native session. Recheck preview prints exact command/cwd
+and requested standard/low selection; only its single-use confirmation starts the
+separate native verification turn. Invalid/expired tokens, changed state/mode/spec,
+model text, status queries and EOF never imply execution consent. The three-slot
+recheck budget requires explicit continuation and does not reset work counters.
+
+The Terminal selector registers child stdout/stderr dynamically alongside the work
+backend and input. It processes cancellation/exit/EOF while the model waits, ignores
+stale descriptors after replacement, and cleans up the child before the outer
+workflow attachment is closed. Interrupt confirmation comes from a terminal event,
+not an RPC acknowledgement. Parent completion still needs its normal continuation,
+check and criterion coverage. The shared command-file validator now also validates
+the in-memory bindings passed to the experimental UI.
+
+Synthetic subprocess tests exercise the actual selector with a fake durable native
+backend: preview does not launch a child, explicit confirmation rechecks and permits
+parent completion, status/exit work while a child hangs, and EOF before confirmation
+does not approve while EOF during a turn requests interruption. State/spec changes
+invalidate consent. Known completed active checks can be configured without replay;
+missing/unknown ones refuse experimental execution. Unresolved ledger entries block
+resume, remain inspectable with native IDs, and cannot be erased through metadata
+removal. This is a refusal to perform unscoped cleanup, not implemented deletion.
+
+No live inference was run. Native reconciliation, scoped native-thread deletion,
+full permission coverage and actual model dispatch remain unverified/unsupported.
+The experimental path is not production-ready. Next is the scoped live verifier.
+
+Validation: 18 new recheck UI/entry tests passed; full offline suite 431/431 passed;
+all four entry points compile and git diff --check passed. Only fake native servers
+and private temporary metadata were used, with no live model inference.

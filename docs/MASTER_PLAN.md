@@ -827,3 +827,18 @@ This adapter is internal and offline-tested only. Public /recheck/tool-check res
 remain disabled. Next eligible work is event-loop/consent/CLI integration plus
 retained-thread inspection/reconciliation/deletion handling, then the opt-in live
 verifier. No live inference was run or requested for this increment.
+
+P12 experimental recheck CLI (2026-11-19): explicit resume now offers an opt-in
+--experimental-rechecks flag while default tool-check resume remains blocked.
+START restores native ownership but /recheck only previews exact command/cwd and
+standard/low model; a separate single-use /confirm-recheck token spends quota.
+State/mode/policy/spec changes invalidate the preview. Budget continuation is a
+separate explicit choice and does not dispatch. The existing selector multiplexes
+parent and child native streams; status/cancel/exit/EOF stay responsive during a
+bound turn, and child cleanup occurs while the parent writer attachment is held.
+Known completed active tool evidence can be rebound without replaying old commands.
+Missing/unknown active checks or unresolved rechecks refuse execution/resume.
+Offline inspection displays retained native IDs; SessionStore.remove refuses to
+discard recheck metadata. Native reconciliation/deletion remain unsupported.
+Next: opt-in synthetic live verifier for this scoped experimental happy path;
+not a no-tools boundary, production recovery or all-permission certification.

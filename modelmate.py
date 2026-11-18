@@ -1072,7 +1072,8 @@ class WorkflowHost:
     def configure_check(self, check_index, *, command, cwd, step_index=None):
         """Register a host-approved check specification; this never authorizes or executes it."""
         state = self.controller.snapshot()
-        if state['active_attempt'] is not None or state['step_index'] >= len(state['steps']):
+        if ((state['active_attempt'] is not None and state['active_attempt']['status'] != 'completed')
+                or state['step_index'] >= len(state['steps'])):
             raise ProbeError('Configure checks before an attempt.')
         target = state['step_index'] if step_index is None else step_index
         if type(target) is not int or not state['step_index'] <= target < len(state['steps']):
@@ -1617,6 +1618,8 @@ class ChatShell:
         self.workflow = workflow
         self.workflow_action = workflow_action
         self._workflow_check_attempt = None
+        self.recheck_backend = self.recheck = self.recheck_pending = None
+        self.recheck_commands = {}
         if isinstance(workflow_action, WorkflowHost):
             if workflow_action.controller is not workflow or workflow_action.on_change is not None:
                 raise ProbeError('Workflow host is already bound or belongs to another controller.')
@@ -1647,6 +1650,7 @@ class ChatShell:
 
     def cancel(self, exit_after=False):
         if self.workflow is not None:
+            self.recheck_pending = None
             self._workflow_check_attempt = None
             self.exiting = self.exiting or exit_after
             self.show_workflow(render=False)
@@ -1656,7 +1660,9 @@ class ChatShell:
                     self.stop_deadline = time.monotonic() + 5
                     self.write('กำลังขอหยุด workflow — ยังไม่ยืนยันว่าหยุดแล้ว')
                     try:
-                        if self.workflow_action is not None:
+                        if self.recheck_active():
+                            self.recheck.cancel()
+                        elif self.workflow_action is not None:
                             self.workflow_action({'action': 'cancel', 'task_id': self.workflow.task_id})
                     finally:
                         current = self.workflow.snapshot()['active_attempt']
@@ -1695,7 +1701,7 @@ class ChatShell:
     def show_workflow(self, render=True):
         state = self.workflow.snapshot()
         active, request = state['active_attempt'], state['model_request']
-        self.active = active is not None and active['status'] == 'running'
+        self.active = (active is not None and active['status'] == 'running') or self.recheck_active()
         self.mode = state['mode']
         self.pending = None
         if state['state'] == 'AWAITING_MODEL_APPROVAL' and request is not None:
@@ -1740,6 +1746,16 @@ class ChatShell:
             self.write('โมเดลที่ร้องขอใน attempt นี้: ' + json.dumps(active['selection']))
         if state['stale_evidence']:
             self.write('หลักฐานที่ restore เป็น stale: ตรวจผลปัจจุบันแล้ว /revalidate STEP.CHECK pass|fail|unknown สำหรับ manual/rubric; tool checks ต้องตรวจด้วยเครื่องมือใหม่')
+            if self.recheck_backend is not None:
+                self.write('/recheck STEP.CHECK แสดงคำสั่ง/model ก่อนยืนยัน · ใช้โควตา subscription')
+        operations = self.workflow.recheck_operations()
+        if operations:
+            operation = operations[-1]
+            status = 'unknown' if self.workflow._recheck_fault else operation['status']
+            code = None if self.workflow._recheck_fault else operation['exit_code']
+            self.write('Recheck: ' + status + ' · รอบ ' + str(operation['cycle'] + 1)
+                       + ' · reservation ' + str(operation['number']) + '/3'
+                       + ' · exit code ' + str(code))
         if state['state'] == 'CHECKING':
             if active is not None:
                 self.write('Backend จบแล้ว; ใช้ /check เพื่อประเมินผล (manual/rubric ต้อง /verify ก่อน)')
@@ -1758,9 +1774,96 @@ class ChatShell:
             self.write('ผลขั้นงานยังไม่ทราบ ต้องรอ host ยืนยัน terminal event ก่อนทำต่อ')
         return state
 
+    def recheck_active(self):
+        return (self.recheck is not None and not self.recheck._closed and self.recheck.host is not None
+                and self.recheck.host._binding is not None and self.recheck.host._terminal is None)
+
+    def _recheck_evidence(self, reference):
+        import re
+        if not isinstance(reference, str) or re.fullmatch(r'[1-9][0-9]{0,3}\.[1-9][0-9]{0,3}', reference) is None:
+            raise ProbeError('Use a step.check reference, for example 1.1.')
+        step, check = [int(number) - 1 for number in reference.split('.')]
+        state = self.workflow.snapshot()
+        if step >= len(state['steps']):
+            raise ProbeError('Unknown step/check reference.')
+        target = state['steps'][step]
+        active = state['active_attempt']
+        candidates = list(active['checks'].values()) if active is not None and active['step_id'] == target['id'] else target['evidence']
+        evidence = next((item for item in candidates if item['check_index'] == check), None)
+        if evidence is None:
+            raise ProbeError('Reference has no saved evidence to recheck.')
+        return evidence
+
+    def _recheck_fingerprint(self):
+        import hashlib
+        return hashlib.sha256(json.dumps({'checkpoint': self.workflow.export_checkpoint(),
+            'stale': self.workflow.snapshot()['stale_evidence'], 'policy': self.role_policy},
+            sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+
+    def recheck_command(self, cmd, values):
+        import uuid
+        if self.recheck_backend is None:
+            raise ProbeError('Recheck CLI is not enabled for this session.')
+        if self.active:
+            raise ProbeError('Wait for the active turn or use /cancel before rechecking.')
+        if cmd == '/recheck-budget':
+            if len(values) != 2:
+                raise ProbeError('Use /recheck-budget STEP.CHECK continue|revise_scope|pause.')
+            evidence = self._recheck_evidence(values[0])
+            self.recheck_pending = None
+            self.workflow.answer_recheck_limit(evidence['id'], values[1])
+            self.write('บันทึกตัวเลือกงบแล้ว ยังไม่เริ่ม model turn; ใช้ /recheck เพื่อแสดงแผนใหม่')
+            return
+        if cmd == '/recheck':
+            self.recheck_pending = None
+            if len(values) != 1:
+                raise ProbeError('Use /recheck STEP.CHECK.')
+            evidence = self._recheck_evidence(values[0])
+            if (evidence['kind'] not in ('test', 'lint') or evidence['origin'] != 'tool'
+                    or evidence['result'] not in ('pass', 'fail')
+                    or evidence['id'] not in self.workflow.snapshot()['stale_evidence']):
+                raise ProbeError('Recheck requires stale saved test/lint evidence with a known result.')
+            operations = self.workflow.recheck_operations()
+            if any(op['status'] in ('pending', 'unknown') for op in operations):
+                raise ProbeError('Recheck outcome unresolved; inspect retained metadata before further work.')
+            events = self.workflow.export_checkpoint().get('rechecks', [])
+            cycle = sum(event['kind'] == 'choice' and event['evidence_id'] == evidence['id']
+                        and event['choice'] == 'continue' for event in events)
+            if sum(op['evidence_id'] == evidence['id'] and op['cycle'] == cycle for op in operations) >= 3:
+                raise ProbeError('Recheck limit reached; use /recheck-budget STEP.CHECK continue|revise_scope|pause.')
+            spec = self.recheck_commands.get(values[0])
+            if spec is None:
+                raise ProbeError('This check has no explicit user-owned command/cwd binding.')
+            selection = select_role(self.catalog, 'standard', self.role_policy, 'low')
+            token = uuid.uuid4().hex
+            self.recheck_pending = {'token': token, 'reference': values[0], 'evidence_id': evidence['id'],
+                'spec': copy.deepcopy(spec), 'selection': selection, 'fingerprint': self._recheck_fingerprint()}
+            self.write('ตรวจซ้ำ ' + values[0] + ' · ใช้โควตา subscription หนึ่ง verification turn · read-only/on-request')
+            self.write('คำสั่ง/cwd: ' + json.dumps(spec, ensure_ascii=True))
+            self.write('โมเดลที่ร้องขอ: ' + json.dumps(selection, ensure_ascii=True))
+            self.write('/confirm-recheck ' + token + ' เพื่อยืนยันครั้งเดียว · /cancel เพื่อยกเลิก')
+            return
+        pending = self.recheck_pending
+        if len(values) != 1 or pending is None or values[0] != pending['token']:
+            raise ProbeError('Invalid or expired recheck confirmation token.')
+        self.recheck_pending = None
+        if (pending['fingerprint'] != self._recheck_fingerprint()
+                or self.recheck_commands.get(pending['reference']) != pending['spec']):
+            raise ProbeError('Recheck plan/model/state changed; use /recheck for a new preview.')
+        if self.recheck is not None:
+            self.recheck.close()
+        self.recheck = self.recheck_backend.open_recheck(pending['evidence_id'], pending['spec'],
+                                                       pending['selection'], self.event)
+        self.show_workflow()
+
     def workflow_command(self, cmd, values):
         state = self.show_workflow(render=False)
         try:
+            if cmd in ('/recheck', '/confirm-recheck', '/recheck-budget'):
+                self.recheck_command(cmd, values)
+                return
+            if self.recheck_active() and cmd not in ('/workflow', '/status'):
+                raise ProbeError('A recheck is active; use /status or /cancel before changing work.')
             if cmd in ('/workflow', '/status'):
                 if values:
                     raise ProbeError('Use /workflow or /status without arguments.')
@@ -1869,6 +1972,7 @@ class ChatShell:
                 return
             cmd, *values = args
             if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/revalidate', '/finish', '/status', '/mode',
+                                                      '/recheck', '/confirm-recheck', '/recheck-budget',
                                                       '/approve', '/decline', '/pause', '/continue', '/revise'):
                 self.workflow_command(cmd, values)
             elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
@@ -1880,6 +1984,8 @@ class ChatShell:
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
                 if self.workflow is not None:
                     self.write('/workflow /next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
+                    if self.recheck_backend is not None:
+                        self.write('/recheck STEP.CHECK /confirm-recheck TOKEN /recheck-budget STEP.CHECK continue|revise_scope|pause')
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
@@ -2041,7 +2147,8 @@ class ChatShell:
 
 
 def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
-             role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None, executor_stream=None):
+             role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None, executor_stream=None,
+             recheck_commands=None):
     """Multiplex Linux input and controller events in one owning thread."""
     native_workflow = isinstance(backend, NativeWorkflowConnection)
     if workflow is not None and backend is not None:
@@ -2055,6 +2162,14 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
     if backend is not None and not native_workflow:
         send, catalog = backend.action, backend.catalog
     shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action)
+    if recheck_commands is not None:
+        if not native_workflow or backend.store is None or workflow is None:
+            raise ProbeError('Recheck UI requires an attached durable native workflow.')
+        specs = validate_check_commands({'version': 1, 'checks': recheck_commands},
+                                        workflow.snapshot()['plan'], backend.cwd)
+        shell.recheck_backend = backend
+        shell.recheck_commands = {str(spec['step']) + '.' + str(spec['check']):
+            {'command': spec['command'], 'cwd': spec['cwd']} for spec in specs}
     if backend is not None and not native_workflow:
         backend.shell = shell
         shell.live = True
@@ -2069,6 +2184,24 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                             + backend.recovery_token + ' ก่อนส่งข้อความใหม่')
     selector = selectors.SelectSelector()
     buffers = {}
+    registered_recheck, recheck_fds = None, []
+
+    def sync_recheck_streams():
+        nonlocal registered_recheck, recheck_fds
+        child = shell.recheck if shell.recheck is not None and not shell.recheck._closed else None
+        if child is registered_recheck:
+            return
+        for fd in recheck_fds:
+            try:
+                selector.unregister(fd)
+            except KeyError:
+                pass
+        registered_recheck, recheck_fds = child, []
+        if child is not None:
+            for stream in (child.process.stdout, child.process.stderr):
+                selector.register(stream, selectors.EVENT_READ, ('recheck', child))
+                recheck_fds.append(stream.fileno())
+
     try:
         for stream, kind in ((input_stream, 'input'), (event_stream, 'events'), (executor_stream, 'executor')):
             if stream is not None:
@@ -2080,9 +2213,18 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
         shell.start(prompt)
         while not shell.closed:
             try:
+                sync_recheck_streams()
                 ready = selector.select(.1)
                 for key, _ in ready:
                     kind = key.data
+                    if isinstance(kind, tuple) and kind[0] == 'recheck':
+                        child = kind[1]
+                        if child is not shell.recheck or child._closed:
+                            continue
+                        if not child.read_ready(key.fileobj):
+                            selector.unregister(key.fd)
+                        child.drain()
+                        continue
                     if kind == 'codex':
                         if not backend.read_ready(key.fileobj):
                             selector.unregister(key.fileobj)
@@ -2119,6 +2261,9 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                 if backend is not None:
                     backend.drain()
                     backend.tick()
+                if shell.recheck is not None and not shell.recheck._closed:
+                    shell.recheck.drain()
+                    shell.recheck.tick()
                 if isinstance(workflow_action, WorkflowHost):
                     workflow_action.tick()
                 shell.tick()
@@ -2146,6 +2291,14 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
         return 1
     finally:
         selector.close()
+        if shell.recheck is not None:
+            try:
+                if shell.recheck_active():
+                    shell.recheck.cancel()
+            except (ProbeError, OSError):
+                pass
+            finally:
+                shell.recheck.close()
         if isinstance(workflow_action, WorkflowHost):
             workflow_action.on_change = None
     return shell.exit_code
@@ -2764,6 +2917,8 @@ class NativeWorkflowConnection(Connection):
         fresh = self.preflight()
         self.store, self.session_id = store, session_id
         controller = self._attach(None, fresh)
+        if any(op['status'] in ('pending', 'unknown') for op in controller.recheck_operations()):
+            raise ProbeError('Unresolved recheck retained; inspect --show-workflow before native recovery. No replay.')
         record = store.read(session_id)
         if (record['workflow']['plan'] != expected_plan or record['deletion_state'] != 'none'
                 or not record['thread_id']):
@@ -2796,6 +2951,23 @@ class NativeWorkflowConnection(Connection):
         if active is not None:
             self.host.reconcile({'thread_id': tid, 'turn_id': latest['id']}, latest['status'])
         return self.host
+
+    def open_recheck(self, evidence_id, spec, selection, on_change):
+        if (self._closed or self.store is None or self._attachment is None or self.host is None
+                or self.controller is not self.host.controller
+                or not isinstance(spec, dict) or set(spec) != {'command', 'cwd'}):
+            raise ProbeError('Recheck requires the attached durable native workflow host.')
+        record = self.store.read(self.session_id)
+        if record['thread_id'] != self.thread_id or record['deletion_state'] != 'none':
+            raise ProbeError('Parent native identity changed; no recheck started.')
+        child = NativeRecheckConnection(self.process.args, self.timeout)
+        try:
+            child.start_recheck(self.controller, evidence_id, spec['command'], spec['cwd'], self.cwd,
+                self.role_policy, selection, work_thread_id=self.thread_id, on_change=on_change)
+            return child
+        except BaseException:
+            child.close()
+            raise
 
     def close(self):
         if self._closed:
@@ -3394,7 +3566,9 @@ class SessionStore:
         name = self._name(session_id)
         if session_id not in self._locked_ids:
             raise ProbeError('Deleting metadata requires the session lock.')
-        self.read(session_id)
+        record = self.read(session_id)
+        if record.get('workflow', {}).get('rechecks'):
+            raise ProbeError('Retained native recheck threads require scoped cleanup; metadata was not removed.')
         os.unlink(name, dir_fd=self._fd)
         os.fsync(self._fd)
 
@@ -3454,6 +3628,9 @@ def inspect_local_sessions(project, output, session_id=None):
             rechecks = validate_recheck_ledger(checkpoint['rechecks'], workflow_saved_evidence(checkpoint))
             write('Recheck reservations: ' + str(len(rechecks)) + ' · unresolved: '
                   + str(sum(op['status'] in ('pending', 'unknown') for op in rechecks)))
+            for index, operation in enumerate(rechecks):
+                write('Recheck ' + str(index + 1) + ': ' + operation['status'] + ' · retained native IDs '
+                      + json.dumps({'thread': operation['thread_id'], 'turn': operation['turn_id']}, ensure_ascii=True))
         for index, (step, proposal) in enumerate(zip(checkpoint['steps'], plan['steps'])):
             write(str(index + 1) + '. ' + proposal['objective'] + ' · ' + step['state']
                   + ' · รอบ ' + str(step['cycle'] + 1) + ' · attempt ' + str(step['attempts']) + '/3')
@@ -3507,6 +3684,11 @@ def load_check_commands(path, plan, project):
         data = json.loads(payload, object_pairs_hook=_unique_json_object, parse_constant=_invalid_plan_constant)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise ProbeError('Invalid check command JSON.') from exc
+    return validate_check_commands(data, plan, project)
+
+
+def validate_check_commands(data, plan, project):
+    """Use the same binding validation for files and explicitly enabled CLI rechecks."""
     if (not isinstance(data, dict) or set(data) != {'version', 'checks'}
             or type(data['version']) is not int or data['version'] != 1
             or not isinstance(data['checks'], list) or len(data['checks']) > 384):
@@ -3578,9 +3760,12 @@ def read_workflow_confirmation(input_stream, write):
         return False
 
 
-def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None):
+def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
+                      experimental_rechecks=False):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
+    if experimental_rechecks and resume_id is None:
+        raise ProbeError('--experimental-rechecks requires --resume-workflow.')
     if resume_id is not None:
         with SessionStore(os.getcwd(), read_only=True) as reader:
             saved = reader.read(resume_id)
@@ -3623,6 +3808,9 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         preview.write('คำสั่งตรวจ ' + str(spec['step']) + '.' + str(spec['check']) + ': '
                       + json.dumps({'command': spec['command'], 'cwd': spec['cwd']}, ensure_ascii=True))
     preview.write('โมเดลข้างต้นเป็นค่าที่ร้องขอ; ยังไม่ได้ตรวจ catalog/quota จริง')
+    if experimental_rechecks:
+        preview.write('Experimental recheck · standard=' + policy['standard'] + '/low · native threads retained')
+        preview.write('/recheck แสดงแผน; /confirm-recheck TOKEN ใช้โควตาเพิ่มหนึ่ง verification turn')
     if not execute:
         preview.write('Preview เท่านั้น ไม่เปิด Codex ไม่ใช้โควตา; --execute-workflow เพื่อเริ่มแบบ opt-in')
         return 0
@@ -3631,14 +3819,25 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     if controller.state != 'READY' or any(check['kind'] == 'source'
             for step in plan['steps'] for check in step['checks']):
         raise ProbeError('Live explicit plans require no clarifications; source checks are not supported.')
-    if resume_id is not None and required:
+    if resume_id is not None and required and not experimental_rechecks:
         raise ProbeError('Native CLI resume currently supports manual/rubric workflows only; saved tool checks require fresh trusted rechecks.')
+    if resume_id is not None and experimental_rechecks:
+        if any(op['status'] in ('pending', 'unknown') for op in validate_recheck_ledger(
+                saved['workflow'].get('rechecks', []), workflow_saved_evidence(saved['workflow']))):
+            raise ProbeError('Recheck outcome unresolved; use --show-workflow to inspect retained native IDs. No replay.')
+        active = saved['workflow']['active_attempt']
+        if active is not None:
+            known = {e['check_index']: e for e in active['checks']}
+            index = saved['workflow']['step_index']
+            if active['status'] != 'completed' or any(known.get(j, {}).get('result') not in ('pass', 'fail')
+                    for j, check in enumerate(plan['steps'][index]['checks']) if check['kind'] in ('test', 'lint')):
+                raise ProbeError('Experimental resume needs a completed work turn and known saved tool results; missing/unknown checks are unsupported.')
     if required != {(spec['step'], spec['check']) for spec in commands}:
         raise ProbeError('Every test/lint check needs an explicit --check-commands binding before execution.')
     if any(step['effort'] == 'ultra' for step in plan['steps']):
         raise ProbeError('Automatic delegation effort is not enabled.')
     preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · resume ต้องตรวจ native state ใหม่')
-    preview.write('ใช้โควตา subscription เมื่อกด /next; พิมพ์ START แล้ว Enter เพื่อยืนยันแผน หรือ CANCEL เพื่อยกเลิก:')
+    preview.write('ใช้โควตา subscription เมื่อกด /next หรือยืนยัน recheck; พิมพ์ START แล้ว Enter เพื่อยืนยันแผน หรือ CANCEL เพื่อยกเลิก:')
     output.flush()
     if not read_workflow_confirmation(input_stream, preview.write):
         preview.write('ยกเลิกแล้ว ยังไม่เปิด backend')
@@ -3663,7 +3862,8 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         snapshot = backend.preflight()
         preview.write('Session: ' + backend.session_id + ' · durable checkpoint; ไม่ replay turn อัตโนมัติ')
         return run_chat(input_stream, output, backend=backend, workflow=controller,
-                        workflow_action=host, catalog=snapshot['catalog'], role_policy=policy)
+                        workflow_action=host, catalog=snapshot['catalog'], role_policy=policy,
+                        recheck_commands=commands if experimental_rechecks else None)
     finally:
         try:
             if backend is not None:
@@ -3687,6 +3887,8 @@ def main():
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
     parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
     parser.add_argument('--execute-workflow', action='store_true', help='opt-in native workflow; requires START confirmation')
+    parser.add_argument('--experimental-rechecks', action='store_true',
+                        help='experimental tool-check resume; /confirm-recheck consumes an extra model turn; native threads retained')
     modes.add_argument('--sessions', action='store_true', help='list local sessions without connecting to Codex')
     modes.add_argument('--show-workflow', metavar='SESSION_ID', help='inspect a cached workflow without resuming it')
     modes.add_argument('--live', action='store_true', help='manual-model live chat using ChatGPT subscription quota')
@@ -3695,6 +3897,8 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.experimental_rechecks and not args.resume_workflow:
+        parser.error('--experimental-rechecks requires --resume-workflow')
     if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
     if args.workflow or args.resume_workflow:
@@ -3702,7 +3906,8 @@ def main():
             parser.error('Workflow uses plan efforts and explicit role bindings; no prompt/model/resume overrides')
         try:
             return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
-                                     args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow)
+                                     args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
+                                     experimental_rechecks=args.experimental_rechecks)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

@@ -60,6 +60,8 @@ for line in sys.stdin:
   result={'thread':thread(params['threadId'])}
   if mode=='work_project':result['thread']['cwd']='/foreign'
   if mode=='work_busy':result['thread']['status']={'type':'active'}
+ elif method=='thread/turns/list':result={'data':[{'id':'work-turn','status':'completed'}]}
+ elif method=='thread/resume':result={'thread':thread(params['threadId']),'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'readOnly'}}
  elif method=='thread/start':
   if mode=='thread_error':emit({'id':req['id'],'error':{'code':-32000,'message':'PRIVATE_ERROR'}});continue
   result={'thread':thread('work-thread' if mode=='reused_work' else tid),'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'readOnly'}}

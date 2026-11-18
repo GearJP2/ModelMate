@@ -45,9 +45,13 @@ Preflight ไม่ใช่การจอง quota หรือ hard spending 
 ตัด decision model/classifier แยกออกจากขอบเขตตามผู้ใช้ยืนยัน 2026-11-18
 ไม่มีการเรียกโมเดลเพิ่มเพื่อเลือกโมเดลเริ่มต้น; auto routing จาก prompt ยังไม่เปิด
 
-แกนบันทึกและ native transport ของ recheck มี offline tests แล้ว: จองรอบแบบ durable
-แยกจาก work attempt, จำกัดรอบและไม่ replay ผลที่ยังไม่ทราบ รองรับ checkpoint เดิม โดยยังไม่เปิด
-`/recheck` หรือ tool-check resume ใน CLI จนกว่าจะเชื่อม native transport และตรวจครบ
+แกนบันทึก, native transport และ CLI ทดลองของ recheck มี offline tests แล้ว:
+จองรอบแบบ durable แยกจาก work attempt, จำกัดรอบและไม่ replay ผลที่ยังไม่ทราบ
+ค่าเริ่มต้นยังไม่เปิด tool-check resume; รุ่นทดลองต้องระบุ `--experimental-rechecks`
+กับ `--resume-workflow`, command bindings และ `--execute-workflow`
+`/recheck STEP.CHECK` แสดงคำสั่ง/โมเดล แล้ว `/confirm-recheck TOKEN` ใช้โควตาเพิ่ม
+หนึ่ง verification turn Native threads ถูกเก็บไว้; unknown outcomes ยังต้องหยุด
+และการลบ metadata ที่มี recheck ถูกปิดจนกว่าจะมี scoped cleanup
 ดู [ข้อกำหนด native recheck](docs/NATIVE_RECHECK.md) สำหรับขอบเขตที่เหลือ
 อัตโนมัติ ไม่เปิด effort ultra ที่มี automatic delegation
 การส่ง model ID เป็นการร้องขอโมเดล ไม่ใช่ execution telemetry ที่ยืนยัน actual dispatch
