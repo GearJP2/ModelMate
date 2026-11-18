@@ -214,7 +214,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; durable manual/rubric workflow resume MOCK_VERIFIED; fresh tool rechecks/live recovery pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | TODO | ตรวจคำกล่าวอ้าง |
@@ -694,3 +694,22 @@ with one requested gpt-6.1-sol/low attempt and no manual test override. See
 VERIFICATION.md for provenance/version limitations. No further repeat is required
 for this happy path. This does not close native recovery, all permission paths,
 classifier/no-tools or private-web gates; no general production-ready claim.
+
+
+### P12 durable native workflow resume increment (2026-11-18)
+
+MOCK_VERIFIED: new explicit CLI workflows use durable threads and writer-locked
+schema-v3 attachment. Local checkpoint exists before thread/start; each attempt
+atomically clears the old native turn binding when reserved, and stores the new
+turn ID only after a valid start response. Unknown response/save failure cannot
+reassociate an old native turn with a new attempt.
+Resume checks fresh account/catalog/quota, project/provider/thread identity,
+non-ephemeral idle state, latest terminal/native binding and effective permissions.
+It preserves IDs/counters, resets grants and requires explicit continuation.
+Public --resume-workflow currently supports manual/rubric only; /revalidate cannot
+accept tool checks. Previous accepted results remain stale until trusted rechecks.
+Old ephemeral sessions and unknown/active/mismatched native state do not get a new
+thread/turn fallback. --probe-workflow-resume is opt-in, two turns, retaining scratch
+and durable thread for inspection. No live gate is passed by these offline tests.
+Next: user-run synthetic resume probe before claiming the native happy path live;
+then add trusted tool recheck recovery under separately verified permissions.

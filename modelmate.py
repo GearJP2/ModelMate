@@ -1466,7 +1466,7 @@ class ChatShell:
     def start(self, prompt=None):
         if self.workflow is not None:
             self.write('ModelMate · Workflow UI prototype · execution ต้องผ่าน host ที่รองรับ')
-            self.write('/workflow /next /verify /check /finish /status /mode · /cancel /exit')
+            self.write('/workflow /next /verify /revalidate /check /finish /status /mode · /cancel /exit')
             self.show_workflow()
         elif getattr(self, 'live', False):
             self.write('ModelMate · live ChatGPT/Codex · read-only + on-request')
@@ -1575,6 +1575,8 @@ class ChatShell:
             self.write('เกณฑ์ ' + str(i + 1) + ': ' + criterion + ' · หลักฐานที่บันทึก ' + str(len(state['criterion_evidence'].get(i, []))))
         if active is not None:
             self.write('โมเดลที่ร้องขอใน attempt นี้: ' + json.dumps(active['selection']))
+        if state['stale_evidence']:
+            self.write('หลักฐานที่ restore เป็น stale: ตรวจผลปัจจุบันแล้ว /revalidate STEP.CHECK pass|fail|unknown สำหรับ manual/rubric; tool checks ต้องตรวจด้วยเครื่องมือใหม่')
         if state['state'] == 'CHECKING':
             if active is not None:
                 self.write('Backend จบแล้ว; ใช้ /check เพื่อประเมินผล (manual/rubric ต้อง /verify ก่อน)')
@@ -1618,6 +1620,22 @@ class ChatShell:
                 self.workflow_action({'action': cmd[1:], 'task_id': self.workflow.task_id})
                 if isinstance(self.workflow_action, WorkflowHost):
                     return  # Host already emitted workflow_changed and rendered the authoritative state.
+            elif cmd == '/revalidate':
+                if len(values) != 2 or values[1] not in ('pass', 'fail', 'unknown'):
+                    raise ProbeError('Use /revalidate STEP.CHECK pass|fail|unknown for saved manual/rubric evidence.')
+                step_number, check_number = (int(part) for part in values[0].split('.'))
+                if not 1 <= step_number <= len(state['steps']) or check_number < 1:
+                    raise ProbeError('Invalid evidence reference.')
+                step = state['steps'][step_number - 1]
+                candidates = step['evidence']
+                active = state['active_attempt']
+                if active is not None and active['step_id'] == step['id']:
+                    candidates = list(active['checks'].values())
+                evidence = next((item for item in candidates if item['check_index'] == check_number - 1), None)
+                if evidence is None or evidence['kind'] not in ('manual', 'rubric'):
+                    raise ProbeError('Only saved manual/rubric evidence can be revalidated by the user; tool checks need fresh tool observations.')
+                self.workflow.revalidate_check(evidence['id'], origin='manual', result=values[1],
+                    reference='Explicit user revalidation after native resume', finding='User checked current result: ' + values[1])
             elif cmd == '/verify':
                 if len(values) != 2 or values[1] not in ('pass', 'fail', 'unknown'):
                     raise ProbeError('Use /verify CHECK_NUMBER pass|fail|unknown (numbers start at 1).')
@@ -1687,7 +1705,7 @@ class ChatShell:
                 self.write('รูปแบบคำสั่งไม่ถูกต้อง')
                 return
             cmd, *values = args
-            if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/finish', '/status', '/mode',
+            if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/revalidate', '/finish', '/status', '/mode',
                                                       '/approve', '/decline', '/pause', '/continue', '/revise'):
                 self.workflow_command(cmd, values)
             elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
@@ -1698,7 +1716,7 @@ class ChatShell:
                            '/confirm-delete TOKEN /acknowledge TOKEN /cancel /exit\n'
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
                 if self.workflow is not None:
-                    self.write('/workflow /next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
+                    self.write('/workflow /next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
@@ -1985,6 +2003,12 @@ def native_thread_options(selection, cwd):
                    'features.multi_agent_v2': False},
     }
 
+def native_permissions_confirmed(result):
+    sandbox = result.get('sandbox')
+    return (result.get('approvalPolicy') == 'on-request' and result.get('approvalsReviewer') == 'user'
+            and isinstance(sandbox, dict) and sandbox.get('type') == 'readOnly')
+
+
 class LiveChatConnection(Connection):
     """Manual-model chat using native Codex read-only/on-request permissions."""
     allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume',
@@ -2075,7 +2099,8 @@ class LiveChatConnection(Connection):
         if (not isinstance(thread, dict) or thread.get('id') != thread_id
                 or thread.get('cwd') != self.cwd or thread.get('ephemeral') is not False
                 or thread.get('modelProvider') != 'openai'
-                or thread.get('status', {}).get('type') not in ('idle', 'notLoaded')):
+                or not isinstance(thread.get('status'), dict)
+                or thread['status'].get('type') not in ('idle', 'notLoaded')):
             raise ProbeError('Thread identity/project/state is unsafe or unknown; no turn started.')
 
     def open_session(self, session_id):
@@ -2109,8 +2134,7 @@ class LiveChatConnection(Connection):
                     raise ProbeError('Previous turn is active or unknown; inspect Codex before resuming.')
             result = self.request('thread/resume', dict(self._thread_options(), threadId=tid, excludeTurns=True))
             self._check_thread(result.get('thread'), tid)
-            if (result.get('approvalPolicy') != 'on-request' or result.get('approvalsReviewer') != 'user'
-                    or result.get('sandbox', {}).get('type') != 'readOnly'):
+            if not native_permissions_confirmed(result):
                 raise ProbeError('Resumed permissions were not confirmed; no turn started.')
         except BaseException:
             lock.__exit__(None, None, None)
@@ -2501,7 +2525,7 @@ class LiveChatConnection(Connection):
 
 class NativeWorkflowConnection(Connection):
     """Opt-in transport for an explicit host plan; no classifier or native approval acceptance."""
-    allowed_methods = Connection.allowed_methods | {'thread/start', 'turn/start', 'turn/interrupt'}
+    allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume', 'thread/turns/list', 'turn/start', 'turn/interrupt'}
 
     def __init__(self, command, timeout=15):
         super().__init__(command, timeout)
@@ -2512,8 +2536,10 @@ class NativeWorkflowConnection(Connection):
         self._event_bytes = 0
         self._sent_attempts = set()
         self._displayed = set()
+        self.store = self.session_id = self._attachment = self.controller = None
+        self._closed = False
 
-    def connect(self, controller, cwd, role_policy=None):
+    def connect(self, controller, cwd, role_policy=None, *, store=None):
         if self.host is not None or self.thread_id is not None:
             raise ProbeError('Workflow transport is already connected.')
         if not isinstance(controller, WorkflowController):
@@ -2527,18 +2553,103 @@ class NativeWorkflowConnection(Connection):
         self.cwd = os.path.realpath(cwd)
         self.role_policy = copy.deepcopy(role_policy)
         self.account_id = controller._account_id
-        self.preflight()
-        result = self.request('thread/start', dict(native_thread_options(baseline, self.cwd), ephemeral=True))
+        fresh = self.preflight()
+        if store is not None:
+            if store.project != self.cwd:
+                raise ProbeError('Workflow project mismatch.')
+            import hashlib
+            self.store = store
+            self.session_id = store.create(controller.snapshot()['plan']['goal'],
+                account_hash=hashlib.sha256(self.account_id.encode()).hexdigest())['id']
+            self._attach(controller, fresh)
+            record = store.read(self.session_id)
+            record['summary'] = 'Native thread start pending; no inference attempted.'
+            store.save(record)
+        result = self.request('thread/start', dict(native_thread_options(baseline, self.cwd), ephemeral=store is None))
         thread = result.get('thread')
         if (not isinstance(thread, dict) or not isinstance(thread.get('id'), str) or not thread['id']
                 or thread.get('cwd') != self.cwd or thread.get('modelProvider') != 'openai'
-                or thread.get('ephemeral') is not True
-                or result.get('approvalPolicy') != 'on-request' or result.get('approvalsReviewer') != 'user'
-                or result.get('sandbox', {}).get('type') != 'readOnly'):
+                or thread.get('ephemeral') is not (store is None)
+                or not native_permissions_confirmed(result)):
             raise ProbeError('Workflow thread permissions/identity were not confirmed; no turn started.')
         self.thread_id = thread['id']
+        if store is not None:
+            record = store.read(self.session_id)
+            record['thread_id'] = self.thread_id
+            record['summary'] = 'Durable native workflow thread confirmed.'
+            store.save(record)
+        self.controller = controller
         self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
         return self.host
+
+    def _attach(self, controller, fresh):
+        attachment = self.store.workflow(self.session_id, fresh['quota'], fresh['checked_at'],
+                                         fresh['catalog'], self.role_policy, controller=controller)
+        restored = attachment.__enter__()
+        self.controller = restored
+        self._attachment = attachment
+        return restored
+
+    def resume(self, store, session_id, cwd, role_policy, expected_plan):
+        if self.host is not None or self.thread_id is not None or self._attachment is not None:
+            raise ProbeError('Workflow transport is already connected.')
+        inspect(self)
+        self.cwd = os.path.realpath(cwd)
+        if store.project != self.cwd:
+            raise ProbeError('Workflow project mismatch.')
+        self.role_policy = copy.deepcopy(role_policy)
+        fresh = self.preflight()
+        self.store, self.session_id = store, session_id
+        controller = self._attach(None, fresh)
+        record = store.read(session_id)
+        if (record['workflow']['plan'] != expected_plan or record['deletion_state'] != 'none'
+                or not record['thread_id']):
+            raise ProbeError('Workflow changed, is deleting or has unknown thread identity; nothing replayed.')
+        self.account_id = controller._account_id
+        tid = record['thread_id']
+        LiveChatConnection._check_thread(self, self.request('thread/read',
+            {'threadId': tid, 'includeTurns': False}).get('thread'), tid)
+        history = self.request('thread/turns/list', {'threadId': tid, 'limit': 1,
+            'sortDirection': 'desc', 'itemsView': 'summary'}).get('data')
+        if not isinstance(history, list) or len(history) > 1:
+            raise ProbeError('Cannot reconcile native workflow history.')
+        latest = history[0] if history else None
+        active = controller.snapshot()['active_attempt']
+        if latest is not None:
+            if (not isinstance(latest, dict) or latest.get('id') != record['turn_id']
+                    or latest.get('status') not in ('completed', 'failed', 'interrupted')):
+                raise ProbeError('Native turn is active or does not match checkpoint; no replay.')
+        elif record['turn_id'] is not None or active is not None:
+            raise ProbeError('Native turn identity is unknown; no replay.')
+        result = self.request('thread/resume', dict(native_thread_options(controller._approvals.baseline, self.cwd),
+                                                   threadId=tid, excludeTurns=True))
+        LiveChatConnection._check_thread(self, result.get('thread'), tid)
+        if not native_permissions_confirmed(result):
+            raise ProbeError('Resumed workflow permissions were not confirmed.')
+        self.thread_id = tid
+        self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
+        if latest is not None:
+            self.host._seen.add((tid, latest['id']))
+        if active is not None:
+            self.host.reconcile({'thread_id': tid, 'turn_id': latest['id']}, latest['status'])
+        return self.host
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self.host is not None:
+                active = self.host.controller.snapshot()['active_attempt']
+                if active is not None and active['status'] == 'running':
+                    self.host.controller.pause('connection_lost')
+        finally:
+            try:
+                super().close()
+            finally:
+                if self._attachment is not None:
+                    self._attachment.__exit__(None, None, None)
+                    self._attachment = None
 
     def preflight(self):
         checked_at = time.monotonic()
@@ -2575,6 +2686,12 @@ class NativeWorkflowConnection(Connection):
         turn = result.get('turn')
         if not isinstance(turn, dict) or not isinstance(turn.get('id'), str) or not turn['id']:
             raise ProbeError('Missing workflow turn identity; outcome unknown.')
+        if (self.thread_id, turn['id']) in self.host._seen:
+            raise ProbeError('Native workflow reused a prior turn ID; outcome unknown, no replay.')
+        if self.store is not None:
+            record = self.store.read(self.session_id)
+            record['turn_id'] = turn['id']
+            self.store.save(record)
         return {'thread_id': self.thread_id, 'turn_id': turn['id']}
 
     def interrupt(self, binding):
@@ -2914,6 +3031,10 @@ class SessionStore:
                     raise ProbeError('Cannot discard an active attempt or its existing evidence.')
         plan = validate_plan(data['plan'])
         step = data['steps'][data['step_index']] if data['step_index'] < len(data['steps']) else None
+        active = data['active_attempt']
+        previous_active = previous.get('active_attempt') if previous is not None else None
+        if active is not None and (previous_active is None or previous_active['id'] != active['id']):
+            record['turn_id'] = None  # Reserve attempt and clear old native binding in the same write.
         record.update(version=3, workflow=data, goal=plan['goal'], criteria=plan['success_criteria'],
             step_id=step['id'] if step else None, correction_count=max(0, step['attempts'] - 1) if step else 0,
             mode=data['mode'], permission_profile='read_only', state=data['state'],
@@ -3041,7 +3162,8 @@ def workflow_statistics(controller, started_at, *, now=None):
         if attempt['selection'] not in selections:
             selections.append(attempt['selection'])
     return {'state': state['state'], 'elapsedSeconds': round(now - started_at, 3),
-            'includesUserWait': True, 'attempts': len(attempts), 'requestedSelections': selections,
+            'includesUserWait': True, 'attempts': len(attempts), 'attemptsScope': 'workflow_total',
+            'elapsedScope': 'current_cli_session', 'requestedSelections': selections,
             'reportedModels': None, 'tokenUsage': None}
 
 
@@ -3128,11 +3250,20 @@ def read_workflow_confirmation(input_stream, write):
         return False
 
 
-def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None):
+def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
-    with open(path, 'rb') as source:
-        raw = source.read(65537).decode('utf-8')
+    if resume_id is not None:
+        with SessionStore(os.getcwd(), read_only=True) as reader:
+            saved = reader.read(resume_id)
+        if saved.get('workflow') is None:
+            raise ProbeError('Session has no workflow checkpoint.')
+        raw = saved['workflow']['plan']
+        mode = mode or saved['workflow']['mode']
+    else:
+        with open(path, 'rb') as source:
+            raw = source.read(65537).decode('utf-8')
+    mode = mode or 'ask_to_escalate'
     plan = validate_plan(raw)
     commands = load_check_commands(checks_path, plan, os.getcwd())
     policy = {}
@@ -3153,7 +3284,13 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
                for model in sorted(set(policy.values()))]
     controller = WorkflowController(raw, catalog, policy, mode)
     preview = ChatShell(output, catalog=catalog, role_policy=policy, workflow=controller)
-    preview.show_workflow()
+    if resume_id is not None:
+        inspect_local_sessions(os.getcwd(), output, resume_id)
+        preview.write('Resume preview; จะตรวจบัญชี/project/thread/permissions หลัง START · mode ' + mode)
+        for i, step in enumerate(plan['steps']):
+            preview.write('Requested step ' + str(i + 1) + ': ' + policy[step['role']] + '/' + step['effort'])
+    else:
+        preview.show_workflow()
     for spec in commands:
         preview.write('คำสั่งตรวจ ' + str(spec['step']) + '.' + str(spec['check']) + ': '
                       + json.dumps({'command': spec['command'], 'cwd': spec['cwd']}, ensure_ascii=True))
@@ -3166,39 +3303,48 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     if controller.state != 'READY' or any(check['kind'] == 'source'
             for step in plan['steps'] for check in step['checks']):
         raise ProbeError('Live explicit plans require no clarifications; source checks are not supported.')
+    if resume_id is not None and required:
+        raise ProbeError('Native CLI resume currently supports manual/rubric workflows only; saved tool checks require fresh trusted rechecks.')
     if required != {(spec['step'], spec['check']) for spec in commands}:
         raise ProbeError('Every test/lint check needs an explicit --check-commands binding before execution.')
     if any(step['effort'] == 'ultra' for step in plan['steps']):
         raise ProbeError('Automatic delegation effort is not enabled.')
-    preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · ยัง resume native ไม่ได้')
+    preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · resume ต้องตรวจ native state ใหม่')
     preview.write('ใช้โควตา subscription เมื่อกด /next; พิมพ์ START แล้ว Enter เพื่อยืนยันแผน หรือ CANCEL เพื่อยกเลิก:')
     output.flush()
     if not read_workflow_confirmation(input_stream, preview.write):
         preview.write('ยกเลิกแล้ว ยังไม่เปิด backend')
         return 0
-    backend = None
+    backend = store = None
     try:
+        store = SessionStore(os.getcwd())
         backend = NativeWorkflowConnection(['codex', 'app-server', '--stdio',
             '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
             '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
-        host = backend.connect(controller, os.getcwd(), policy)
+        if resume_id is None:
+            host = backend.connect(controller, os.getcwd(), policy, store=store)
+        else:
+            host = backend.resume(store, resume_id, os.getcwd(), policy, raw)
+            controller = host.controller
+            if controller.mode != mode:
+                controller.change_mode(mode)
         for spec in commands:
-            host.configure_check(spec['check'] - 1, step_index=spec['step'] - 1,
-                                 command=spec['command'], cwd=spec['cwd'])
+            if spec['step'] - 1 >= controller.snapshot()['step_index']:
+                host.configure_check(spec['check'] - 1, step_index=spec['step'] - 1,
+                                     command=spec['command'], cwd=spec['cwd'])
         snapshot = backend.preflight()
-        import hashlib
-        with SessionStore(os.getcwd()) as store:
-            record = store.create(plan['goal'], thread_id=backend.thread_id,
-                account_hash=hashlib.sha256(backend.account_id.encode()).hexdigest())
-            preview.write('Session: ' + record['id'] + ' · checkpoint ใช้ตรวจย้อนหลัง; native resume ยังไม่เปิด')
-            with store.workflow(record['id'], snapshot['quota'], snapshot['checked_at'],
-                                snapshot['catalog'], policy, controller=controller):
-                return run_chat(input_stream, output, backend=backend, workflow=controller,
-                                workflow_action=host, catalog=snapshot['catalog'], role_policy=policy)
+        preview.write('Session: ' + backend.session_id + ' · durable checkpoint; ไม่ replay turn อัตโนมัติ')
+        return run_chat(input_stream, output, backend=backend, workflow=controller,
+                        workflow_action=host, catalog=snapshot['catalog'], role_policy=policy)
     finally:
-        if backend is not None:
-            backend.close()
-        preview.write('สถิติ workflow: ' + json.dumps(workflow_statistics(controller, started_at), ensure_ascii=False))
+        try:
+            if backend is not None:
+                backend.close()
+        finally:
+            if store is not None:
+                store.close()
+        observed = backend.controller if backend is not None and backend.controller is not None else controller
+        preview.write('สถิติ workflow: ' + json.dumps(workflow_statistics(observed, started_at), ensure_ascii=False))
 
 
 def main():
@@ -3207,6 +3353,7 @@ def main():
     parser = argparse.ArgumentParser(description='ModelMate Terminal chat: offline by default; --live uses ChatGPT subscription quota.')
     parser.add_argument('prompt', nargs='?', help='initial task text')
     modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
@@ -3220,14 +3367,14 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
-    if not args.workflow and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
-        parser.error('Workflow options require --workflow PLAN_JSON')
-    if args.workflow:
+    if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
+        parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
+    if args.workflow or args.resume_workflow:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Workflow uses plan efforts and explicit role bindings; no prompt/model/resume overrides')
         try:
-            return run_workflow_file(args.workflow, args.role_model, args.workflow_mode or 'ask_to_escalate',
-                                     args.execute_workflow, sys.stdin, sys.stdout, args.check_commands)
+            return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
+                                     args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

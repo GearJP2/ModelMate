@@ -256,11 +256,11 @@ state directory หรือ lock เพิ่ม สถานะ `DONE` เป�
 `NativeWorkflowConnection` เชื่อม explicit `WorkflowController` กับ Codex App Server
 และ `run_chat(..., workflow=controller, workflow_action=host, backend=connection)`
 โดย `connection.connect(controller, cwd, role_policy)` คืน host สำหรับลงทะเบียน checks
-ใช้ native read-only/on-request, ephemeral thread เดียว และ model/effort override ราย turn
+ใช้ native read-only/on-request และ model/effort override ราย turn; host API ที่ไม่ส่ง store ยังเป็น ephemeral แต่ explicit CLI ใหม่ใช้ durable thread
 ตัว transport ตรวจ subscription/catalog/quota ก่อนส่งงาน และยืนยัน sandbox จาก thread/start
 คำขอ tool approval จะถูก decline และพัก; ไม่ยกระดับสิทธิ์ ไม่เปิด classifier/auto routing
 
-มี explicit-plan CLI แบบ opt-in ตามหัวข้อด้านล่าง แต่ไม่รองรับ native workflow resume
+มี explicit-plan CLI แบบ opt-in และ experimental durable resume สำหรับ manual/rubric ตามหัวข้อด้านล่าง
 caller ต้องปิด connection ใน `finally` และถือ timeout/start failure ว่า outcome unknown
 ไม่เรียก dispatch ซ้ำเอง การเรียก native host API จริงใช้โควตา; tests ใช้ fake server เท่านั้น
 การตั้ง model/effort เป็นเพียงค่าที่ร้องขอ ไม่ใช่หลักฐาน backend dispatch
@@ -340,8 +340,8 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 รุ่นนี้รับแผนที่ไม่มี clarifications, manual/rubric checks และ test/lint ที่ผูก
 คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ยังไม่เปิด
 checkpoint บันทึกอัตโนมัติแยกโปรเจกต์ ดูด้วย `--sessions`/`--show-workflow ID`
-แต่ native workflow ยังเป็น ephemeral thread และยัง resume ไม่ได้ ห้ามใช้
-manual chat เพื่อข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
+session ใหม่เป็น durable; experimental resume รองรับ manual/rubric ตามหัวข้อด้านล่าง
+ห้ามใช้ manual chat ข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
 
 The explicit command-check happy path has user-supplied live evidence recorded in
 docs/VERIFICATION.md, including its version limitations. Classifier/auto routing,
@@ -392,7 +392,7 @@ missing/declined/unknown หรือคำสั่งเปลี่ยนร�
 check failure ใช้ initial attempt + corrections 2 รอบเหมือนเดิม แล้วต้องหยุดถาม
 
 นี่คือการผูกผลคำสั่งใน turn นั้น ไม่ใช่การรับประกันไฟล์ทั้งหมดไม่เปลี่ยนภายหลัง
-bindings ไม่ถูก persist สำหรับ native resume ซึ่งยังไม่เปิด; metadata เก็บผล/IDs
+bindings ไม่ถูก persist และ public resume ของ test/lint ยังไม่เปิด; metadata เก็บผล/IDs
 ตามเดิมโดยไม่คัดลอก stdout/stderr ตัวอย่าง test_models.py มีผล user-run live ถึง DONE แล้ว
 ดูขอบเขตและข้อจำกัดของหลักฐานใน docs/VERIFICATION.md
 
@@ -429,3 +429,55 @@ Interactive TTY confirmation ใช้ Python input/readline เพื่อร�
 reader เดิมเพื่อไม่กินคำสั่งถัดไป หากยืนยันไม่ตรง จะแสดง input diagnostics
 เฉพาะ byte count/ascii/control count/paste-marker flag ไม่คัดลอกข้อความดิบ
 EOF, CANCEL และข้อความอื่นยังไม่เปิด backend; ไม่มีการยืนยันโดยอัตโนมัติ
+
+
+### Durable workflow resume (experimental, manual/rubric)
+
+explicit CLI session ใหม่บันทึก durable native thread; host API/verifier ที่ไม่ส่ง
+SessionStore ยังใช้ ephemeral ตามเดิม session เก่าที่เป็น ephemeral จะไม่ถูกแปลง
+หรือสร้าง thread ใหม่แทนโดยอัตโนมัติ หาก native thread หาย/ยัง active/identity
+หรือ permissions ไม่ตรง จะหยุดโดยไม่ replay งาน
+
+ใช้ `--sessions` เพื่อเลือก ID จริงในโปรเจกต์ แล้วแทน `SESSION_ID` ด้านล่าง:
+
+```bash
+python3 modelmate.py --resume-workflow SESSION_ID --role-model standard=gpt-6.1-sol
+python3 modelmate.py --resume-workflow SESSION_ID --role-model standard=gpt-6.1-sol --execute-workflow
+```
+
+คำสั่งแรกเป็น preview แบบ offline คำสั่งที่สองต้องยืนยัน START เช่นเดิม
+ตรวจบัญชี/project/catalog/quota/native thread/ล่าสุด turn และ read-only/on-request
+ใหม่ทั้งหมด writer lock ถือจน connection ปิด; ไม่มีการคืน model/tool grants เดิม
+ต้อง `/continue TOKEN` ที่แสดงใหม่ก่อน `/next` ไม่เริ่มงานเองหลัง reconnect
+step IDs/attempts/correction budget เดิมยังอยู่ ถ้า native start outcome ไม่ทราบ
+หรือ turn ID ไม่ตรง checkpoint จะไม่เดา ไม่ใช้ turn เก่าแทน และไม่เริ่ม turn ใหม่
+
+ผลตรวจที่ restore มาเป็น stale ตรวจผลปัจจุบันก่อนยืนยัน เช่น:
+
+```text
+/revalidate 1.1 pass
+```
+
+รับเฉพาะ manual/rubric และผลที่ตรงกับหลักฐานเดิม ยืนยันนี้ไม่ข้าม restore รอบใหม่
+`/finish` ยังต้องมี accepted evidence ครบและไม่มี stale checks
+ผล test/lint เก่าต้องตรวจด้วย trusted tool ใหม่ จึงยังไม่เปิด public CLI resume
+สำหรับแผนที่มี test/lint แทนที่จะให้มือยืนยัน exit code ข้าม gate
+Native recovery ที่ active turn จบแล้วอาจเปิดเป็น CHECKING/PAUSED; terminal status
+ไม่เท่ากับ tests ผ่าน หาก cached/native state ขัดกันจะไม่ทำงานต่อ
+
+ตรวจ happy path แบบ opt-in ด้วยคำสั่งเดียว (สูงสุด 2 turns, ไม่มี retry):
+
+```bash
+python3 verify.py --run-live --probe-workflow-resume gpt-6.1-sol
+```
+
+ตรวจ context หลัง process restart, IDs/counters, stale-evidence gate และ DONE
+รายงาน hashes โดยไม่พิมพ์ nonce/account/thread IDs ตัว probe จะ **เก็บ scratch
+และ durable thread ไว้** พร้อมตำแหน่งทาง stderr เพื่อให้ตรวจย้อนหลัง ไม่ลบ thread
+หรืออ้าง complete erasure หากมี failed/unverified ให้หยุด ไม่รันซ้ำอัตโนมัติ
+ผลนี้ไม่ใช่ proof ของ no-tools security boundary, network/crash recovery ทุกกรณี
+หรือ backend dispatch telemetry; ยังต้องรอ user-run live evidence สำหรับรุ่นนี้
+
+สถิติ `attemptsScope=workflow_total` รวมประวัติเดิม ส่วน `elapsedScope=current_cli_session`
+วัด session CLI ปัจจุบันรวมเวลารอผู้ใช้ requestedSelections รวมค่าที่ร้องขอในประวัติ
+ไม่ใช่จำนวน model calls ใหม่ในรอบ reconnect และ reportedModels/tokenUsage ยังเป็น null

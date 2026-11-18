@@ -31,7 +31,7 @@ for line in sys.stdin:
  elif method=='account/rateLimits/read':result={'accountId':'synthetic','ordinaryUsageAllowed':mode!='quota',
   'rateLimits':{'primary':{'usedPercent':10}}}
  elif method=='thread/start':result={'thread':{'id':'thread','cwd':req['params']['cwd'],
-  'ephemeral':True,'modelProvider':'openai'},'approvalPolicy':'on-request','approvalsReviewer':'user',
+  'ephemeral':req['params'].get('ephemeral',True),'modelProvider':'openai'},'approvalPolicy':'on-request','approvalsReviewer':'user',
   'sandbox':{'type':'workspaceWrite' if mode=='permissions' else 'readOnly'}}
  elif method=='turn/start':
   turn+=1

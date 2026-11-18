@@ -212,7 +212,7 @@ sys.exit(modelmate.main())
                 master, slave = pty.openpty()
                 process = subprocess.Popen([sys.executable,'-u','-c',source,'--workflow',str(self.path),
                     '--role-model','standard=synthetic-standard','--execute-workflow'],
-                    cwd=self.root,env=dict(os.environ,TERM='xterm-256color'),stdin=slave,stdout=slave,stderr=slave)
+                    cwd=self.root,env=dict(os.environ,TERM='xterm-256color',XDG_STATE_HOME=str(self.root/'state')),stdin=slave,stdout=slave,stderr=slave)
                 buffer = b''
                 try:
                     with selectors.DefaultSelector() as selector:

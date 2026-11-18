@@ -1336,3 +1336,39 @@ The earlier zero-attempt startup/exit report also supports the TTY confirmation 
 path, without establishing the raw cause of past rejected input. No additional live
 inference or rerun was performed by the agent. Documentation-only update; diff check
 passed. Prior offline suite at this runtime: 330/330 passed.
+
+
+### Durable workflow/recovery offline increment (2026-11-18)
+
+New explicit CLI workflows use ephemeral=false; bare native host API calls and the
+older workflow probe keep ephemeral=true. A schema-v3 checkpoint and writer lock
+exist before thread/start; no implicit user-choice event is fabricated to bind a
+thread. Attempt reservation clears the prior native turn ID atomically. Native ID
+binding is saved only after a valid, non-reused turn/start response. Durable resume
+reuses thread/read, thread/turns/list and thread/resume under existing native policy.
+
+Eleven new native recovery tests run separate fake server processes with synthetic
+persisted native state. They cover context through actual display writes, task/step
+identity and counters, stale manual evidence requiring revalidation, missing model
+grants, writer locks, active/interrupted turns, wrong account/project/provider,
+old ephemeral threads, changed permission/history/preview data, unknown start and
+native binding-save failure with no replay. CLI preview is read-only; execution
+uses the saved plan. Earlier TTY tests now use an isolated state home before their
+stub backend, since metadata setup precedes process startup.
+
+Six new resume-probe tests cover two-turn reconnect/DONE, redacted retained scratch,
+recall mismatch with no retry, dropped UI text, detecting a bypassed stale-evidence
+gate, rejecting ephemeral recovery, and explicit live opt-in/exit status. The shared
+answer-capture helper observes UI writes, preserving the existing verifier's checks.
+The two-turn probe uses synthetic manual facts; it is not a no-tools security gate.
+
+Public resume is limited to manual/rubric plans; no manual tool-result override.
+Tool checks require new trusted observations and are not resumed through the CLI.
+Durable scratch/native threads are retained by the new probe (no deletion claim).
+No new live inference has been run; previous live reports apply only to their
+recorded versions and scopes. New native resume is not yet LIVE_VERIFIED.
+
+Validation: 11 targeted native-resume tests, 6 targeted resume-probe tests and
+347/347 full offline tests passed. Runtime/doctor/verifier compilation, both CLI
+help paths and git diff --check passed. No live inference or real native reconnect
+was run by the agent. Resume command-check revalidation remains unsupported.

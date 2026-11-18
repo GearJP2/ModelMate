@@ -152,7 +152,7 @@ class CheckCommandTests(unittest.TestCase):
                               '--check-commands',str(self.config)]), \
              patch('modelmate.run_workflow_file',return_value=0) as run:
             self.assertEqual(main(),0)
-            self.assertEqual(run.call_args.args[-1],str(self.config))
+            self.assertEqual(run.call_args.args[-2],str(self.config))
         with patch('sys.argv',['modelmate.py','--check-commands',str(self.config)]), \
              patch('sys.stderr',new_callable=io.StringIO):
             with self.assertRaises(SystemExit) as exc:main()
