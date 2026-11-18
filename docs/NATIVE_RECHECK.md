@@ -1,7 +1,9 @@
 # Native tool revalidation — implementation contract
 
-Status: ledger, native transport, opt-in CLI and live verifier implemented/offline-tested;
-user-run live evidence pending. User authorized this direction on
+Status: ledger, native transport, opt-in CLI and verifier implemented/offline-tested;
+synthetic native recheck happy path user LIVE_VERIFIED on 2026-11-19 at 732ac47.
+Interactive Terminal timing, unknown recovery and scoped deletion remain pending.
+User authorized this direction on
 2026-11-18 after the standalone policy probe produced negative evidence.
 Decision models/classifiers are outside the current scope.
 

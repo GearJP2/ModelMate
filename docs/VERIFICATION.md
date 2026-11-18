@@ -1773,3 +1773,29 @@ Validation: 10 recheck-probe tests and 20 recheck UI/entry tests passed; full of
 suite 443/443 passed; all four entry points compile; git diff --check passed. These
 are fake-server results, not live gate evidence. User-run the single --probe-rechecks
 command to collect scoped evidence; do not repeat the older probes for this change.
+
+
+## P12 — user-supplied native recheck happy path, 2026-11-19
+
+Scoped LIVE_VERIFIED: user ran
+`python3 verify.py --run-live --probe-rechecks gpt-6.1-sol` from a normal Terminal.
+All seven checks passed: initialToolEvidence, durableResume, restoredEvidenceGate,
+consentGate, nativeRecheck, finalCheckpoint and sentinelUnchanged; phase finished.
+Both turns reported completed with started=1, completed=1, command_mismatches=0,
+cwd_mismatches=0. Requested gpt-6.1-sol/low; reportedModels null; scratchRetained
+true. No process exit code was supplied. This is user-provided evidence, not an
+independent agent-run live test. The actual scratch path is not copied here.
+
+Runtime SHA-256: `cbaa64bd7dec205848f92a05be4db68f35f826383fab577e177b701b8de58f3b`
+Verifier SHA-256: `394cd606715796cc8c1833d1c9cba1040d03bcf86a4f3bdea992c02e20112064`
+Both match local files at 732ac47. This verifies the bounded synthetic path through
+initial native command evidence, durable reconnect, stale-evidence/consent gates,
+a separate native recheck and final checkpoint with unchanged sentinel/work state.
+
+It does not verify interactive Terminal timing, crash/network or unknown-outcome
+recovery, scoped native-thread deletion, all permission paths, a no-tools boundary
+or backend dispatch telemetry. Native threads and scratch remain retained. Default
+tool-check resume remains disabled; the experimental opt-in is not production-ready.
+No further run of this happy-path probe is needed. Next: explicit known-binding
+reconciliation without replay; historical terminal observations must not clear
+stale evidence. Documentation-only update, git diff --check passed; no new inference.

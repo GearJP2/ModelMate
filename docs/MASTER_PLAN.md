@@ -214,7 +214,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual resume scoped LIVE_VERIFIED; experimental tool recheck CLI/probe MOCK_VERIFIED; live proof/unknown recovery/scoped cleanup pending | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual resume and synthetic tool recheck happy paths scoped LIVE_VERIFIED; interactive timing/unknown recovery/scoped cleanup pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
@@ -855,3 +855,12 @@ passed stale gate. The real account has not been exercised by the agent. Next:
 user-run this one probe before claiming the experimental native happy path live.
 Also fix native preflight to retain fresh catalog/policy in the parent host, so a
 completed/failed recheck callback does not empty the UI catalog for the next preview.
+
+P12 scoped live evidence update (2026-11-19): user ran --probe-rechecks gpt-6.1-sol
+at version/hash-matched 732ac47. All seven checks passed; both completed turns had
+one command start/completion and zero command/cwd mismatches. Mark only the
+synthetic native recheck happy path LIVE_VERIFIED, not interactive Terminal timing,
+unknown/crash/network recovery, scoped deletion, all permissions or actual dispatch.
+See VERIFICATION.md for sanitized hashes/scope. No repeat of this probe is needed.
+Next eligible P12 work is explicit reconciliation of known native recheck bindings
+without replay or reusing historical evidence as current; scoped cleanup follows.
