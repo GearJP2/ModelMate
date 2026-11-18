@@ -875,3 +875,13 @@ local copy. Offline verification is complete; live metadata recovery remains
 unverified because the agent environment did not complete App Server initialize.
 Missing native bindings, scoped cleanup and broader crash/network recovery remain
 open. No new model inference was requested for this increment.
+
+
+P12 scoped recovery evidence update (2026-11-19): user-run metadata-only recovery
+at 65d15f2 passed nativeTerminalObserved, metadataReconciled, historicalResultOnly
+and sourceUnchanged with completed status, zero requested model turns, no native
+deletion and no retained successful copy. Source hashes match; see VERIFICATION.md.
+Known-binding terminal reconciliation is scoped LIVE_VERIFIED. Active interruption,
+missing-binding discovery and broader crash/network recovery remain open. Next
+eligible increment is scoped native-thread cleanup with preview and explicit
+confirmation; no cleanup was performed by this documentation update.

@@ -1825,3 +1825,29 @@ copy. It does not test actual crash/network failure, active-turn interruption,
 missing native-ID discovery, current command evidence or scoped deletion. Existing
 live recheck evidence remains historical and version-bound; it does not certify
 this new recovery path.
+
+
+### Known-binding terminal recovery — scoped LIVE_VERIFIED (2026-11-19)
+
+User-supplied Terminal output from `verify.py --probe-recheck-recovery SCRATCH`
+at source commit `65d15f2` finished with all four checks passed:
+`nativeTerminalObserved`, `metadataReconciled`, `historicalResultOnly`, and
+`sourceUnchanged`. Observed terminal status was `completed`.
+
+- modelTurnsRequested: 0
+- nativeThreadsDeleted: false
+- copyRetained: false (the owned successful metadata copy was removed)
+- Runtime SHA-256: `6b3bd6a3a55536c620bedf3324e491930fed16152f7f8b7b971f2509b9ee24fc`
+- Verifier SHA-256: `c08d71248c372f0b9b475b67d6c0681c36c7ca15e2e0316593328c1cff9051f3`
+
+Both hashes match local source files at 65d15f2. This supersedes the pending
+user-run metadata check above, without changing the earlier agent initialize
+failure. Evidence covers terminal reconciliation on an isolated copy of a
+successful synthetic recheck checkpoint: original metadata remained unchanged,
+historical status did not become current test evidence, and no native start,
+interrupt or delete request was made. No additional inference was requested.
+
+It does not verify active interruption, missing-binding discovery, crash/network
+recovery, current command evidence or scoped deletion. Recovery is not thereby
+release-ready. Next eligible task: scoped native-thread cleanup with preview and
+explicit confirmation. Documentation-only update; git diff --check passed.

@@ -2,7 +2,7 @@
 
 Status: ledger, native transport, opt-in CLI and verifier implemented/offline-tested;
 synthetic native recheck happy path user LIVE_VERIFIED on 2026-11-19 at 732ac47.
-Known-binding recovery is offline verified; live recovery, interactive Terminal timing and scoped deletion remain pending.
+Known-binding terminal recovery is scoped live verified; active interruption, interactive Terminal timing and scoped deletion remain pending.
 User authorized this direction on
 2026-11-18 after the standalone policy probe produced negative evidence.
 Decision models/classifiers are outside the current scope.
@@ -176,3 +176,10 @@ allowlist also removes turn/interrupt. No model turn, source mutation or native
 thread deletion occurs. Success removes only the owned copy; failure retains it.
 This does not prove active-stop behavior, crash/network recovery, missing-binding
 discovery, current command results or scoped native cleanup.
+
+
+User Terminal evidence at source 65d15f2 passed all four metadata recovery checks
+with completed native status and zero requested model turns. The source remained
+unchanged and only the owned successful metadata copy was removed. See
+[VERIFICATION.md](VERIFICATION.md) for exact hashes and limits. Active-stop recovery
+and missing-binding discovery remain unverified; scoped deletion remains pending.
