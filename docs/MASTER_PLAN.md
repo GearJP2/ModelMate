@@ -210,9 +210,9 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
 | P06 | Plan schema / classifier / routing | P04, P05 | IN_PROGRESS: validator/preparation MOCK_VERIFIED; live classifier รอ P03 | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
-| P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell/workflow host UI MOCK_VERIFIED; native workflow entry point ยังไม่เปิด | ไม่จำเป็นถ้าไม่แตะ policy |
+| P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: explicit-plan CLI/command-check happy path user LIVE_VERIFIED; broader routing/recovery pending | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
-| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller/checkpoints/UI/native transport MOCK_VERIFIED; public entry point pending live permission gates | จำเป็น |
+| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
@@ -686,3 +686,11 @@ paste rejection. Interactive input now uses stdlib readline; pipe handling remai
 bounded and preserves subsequent commands. Cancellation remains fail-closed. User's
 exact raw input and command-evidence live integration remain unverified; no new
 inference is needed to check confirmation/exit without /next.
+
+
+P08/P10 scoped live completion (2026-11-18): user-supplied explicit command-check
+transcript reached DONE through observed tool pass and explicit 1=1.1 coverage,
+with one requested gpt-6.1-sol/low attempt and no manual test override. See
+VERIFICATION.md for provenance/version limitations. No further repeat is required
+for this happy path. This does not close native recovery, all permission paths,
+classifier/no-tools or private-web gates; no general production-ready claim.

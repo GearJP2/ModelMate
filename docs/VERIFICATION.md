@@ -1310,3 +1310,29 @@ Existing piped full CLI/fake App Server and EOF/invalid input tests remain in pl
 Validation: 15 targeted workflow-entry tests and 330/330 full offline tests
 passed; runtime/doctor/verifier compilation and git diff --check passed.
 No new live inference was run.
+
+
+### User-supplied successful command-check CLI run (2026-11-18)
+
+Scoped LIVE_VERIFIED for the single-step test_models.py happy path. The user ran
+the explicit-plan CLI with examples/check-model-policy.json, its separate command
+bindings and requested gpt-6.1-sol/low. Transcript shows START accepted, one attempt,
+backend terminal completion, /check accepting a pass test with tool evidence,
+/finish mapping criterion 1 to ref 1.1, DONE and clean /exit retaining DONE.
+The user did not use /verify to override the tool check. Reported models and token
+usage remained null. Total session time includes user wait, not model-only latency.
+
+This is user-supplied transcript evidence, not an independent agent-run live test.
+No runtime hash, raw native events, disk checkpoint inspection or process exit code
+was supplied. Local documentation baseline is fca9151 with runtime SHA-256
+`7c3988d5dca5c52a30f65c58da7b67acbfee6baa0e91369008f20cbc2d7a22ae`;
+these identify the local candidate, not an independently established hash of the
+user's execution. Session IDs, evidence UUIDs, tokens and raw transcript are omitted.
+The transcript does not establish whether shell wrapping caused earlier mismatches.
+
+Scope excludes native recovery, all tools/permission paths, forced retry scenarios,
+backend model dispatch telemetry and private-web isolation. These gates remain open.
+The earlier zero-attempt startup/exit report also supports the TTY confirmation happy
+path, without establishing the raw cause of past rejected input. No additional live
+inference or rerun was performed by the agent. Documentation-only update; diff check
+passed. Prior offline suite at this runtime: 330/330 passed.

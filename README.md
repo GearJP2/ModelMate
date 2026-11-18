@@ -343,9 +343,9 @@ checkpoint บันทึกอัตโนมัติแยกโปรเจ
 แต่ native workflow ยังเป็น ephemeral thread และยัง resume ไม่ได้ ห้ามใช้
 manual chat เพื่อข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
 
-This increment is offline-tested only. Earlier live probe evidence applies to its
-recorded hashes, not this CLI build. Classifier/auto routing, stronger permission
-paths, private-web isolation and native recovery remain gated.
+The explicit command-check happy path has user-supplied live evidence recorded in
+docs/VERIFICATION.md, including its version limitations. Classifier/auto routing,
+broader permission paths, private-web isolation and native recovery remain gated.
 
 
 ตอนจบ explicit workflow session จะแสดง `สถิติ workflow` เป็น JSON: elapsedSeconds
@@ -393,7 +393,8 @@ check failure ใช้ initial attempt + corrections 2 รอบเหมือ
 
 นี่คือการผูกผลคำสั่งใน turn นั้น ไม่ใช่การรับประกันไฟล์ทั้งหมดไม่เปลี่ยนภายหลัง
 bindings ไม่ถูก persist สำหรับ native resume ซึ่งยังไม่เปิด; metadata เก็บผล/IDs
-ตามเดิมโดยไม่คัดลอก stdout/stderr การเชื่อมคำสั่งรุ่นนี้ยังรอ user-run live test
+ตามเดิมโดยไม่คัดลอก stdout/stderr ตัวอย่าง test_models.py มีผล user-run live ถึง DONE แล้ว
+ดูขอบเขตและข้อจำกัดของหลักฐานใน docs/VERIFICATION.md
 
 
 สำหรับขั้นที่มีเฉพาะ test/lint: หากสั่ง `/check` ระหว่าง RUNNING ระบบจะรอ
