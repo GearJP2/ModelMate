@@ -760,10 +760,10 @@ class WorkflowController:
 
     def advance_recheck(self, operation_id, kind, **values):
         """Trusted native adapter supplies bindings/results; model text is never an event source."""
-        if kind not in ('thread', 'turn_reserved', 'turn', 'finish'):
+        if kind not in ('thread', 'turn_reserved', 'turn', 'finish', 'reconcile'):
             raise ProbeError('Unsupported recheck event.')
         previous = next((op for op in self.recheck_operations() if op['id'] == operation_id), None)
-        if kind == 'finish' and values.get('status') == 'unknown' and previous is not None:
+        if previous is not None and (kind == 'reconcile' or (kind == 'finish' and values.get('status') == 'unknown')):
             self._stale_evidence.add(previous['evidence_id'])
             if self.state == 'DONE':
                 self.state, self.reason = 'UNVERIFIED', 'recheck_observation_conflict'
@@ -1371,6 +1371,12 @@ def validate_recheck_ledger(events, evidence):
         invalidating = kind == 'finish' and event.get('status') == 'unknown'
         if operation is None or (operation['status'] not in ('pending', 'unknown') and not invalidating):
             raise ProbeError('Recheck event has no unresolved reservation.')
+        if kind == 'reconcile':
+            if (set(event) != {'kind', 'id', 'status', 'timestamp'} or operation['phase'] != 'turn_bound'
+                    or event['status'] not in ('completed', 'failed', 'interrupted')):
+                raise ProbeError('Reconciliation requires a known native binding and terminal status.')
+            operation.update(status=event['status'], exit_code=None, item_id=None)
+            continue
         if kind == 'finish':
             if set(event) != {'kind', 'id', 'status', 'exit_code', 'item_id', 'timestamp'}:
                 raise ProbeError('Invalid recheck terminal fields.')
@@ -3246,6 +3252,120 @@ class NativeRecheckConnection(NativeWorkflowConnection):
             super().close()
 
 
+def unresolved_recheck(record):
+    checkpoint = record.get('workflow')
+    if not isinstance(checkpoint, dict):
+        raise ProbeError('Session has no workflow checkpoint.')
+    operations = validate_recheck_ledger(checkpoint.get('rechecks', []), workflow_saved_evidence(checkpoint))
+    pending = [op for op in operations if op['status'] in ('pending', 'unknown')]
+    if len(pending) > 1:
+        raise ProbeError('Multiple unresolved rechecks; no native action attempted.')
+    return pending[0] if pending else None
+
+
+class RecheckRecoveryConnection(Connection):
+    """Metadata-only recovery; native interruption is the only permitted mutation."""
+    allowed_methods = {'initialize', 'account/read', 'account/rateLimits/read',
+                       'thread/read', 'thread/turns/list', 'turn/interrupt'}
+
+    def __init__(self, command, timeout=15):
+        super().__init__(command, timeout)
+        self._initialized = False
+        self._account_hash = self._poll_deadline = None
+
+    def request(self, method, params=None):
+        if method not in self.allowed_methods:
+            return super().request(method, params)
+        self.last_method = method
+        previous = self.timeout
+        try:
+            if self._poll_deadline is not None:
+                remaining = self._poll_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ProbeError('Recovery observation timed out; interruption is unconfirmed.')
+                self.timeout = min(previous, remaining)
+            return super().request(method, params)
+        finally:
+            self.timeout = previous
+
+    def _account(self, record):
+        import hashlib
+        if not self._initialized:
+            self.request('initialize', {'clientInfo': {'name': 'modelmate_recheck_recovery', 'version': '0.1.0'}})
+            self.send({'method': 'initialized'})
+            self._initialized = True
+        account = self.request('account/read', {'refreshToken': False}).get('account')
+        if not isinstance(account, dict) or account.get('type') != 'chatgpt':
+            raise ProbeError('Recovery requires ChatGPT login.')
+        checked_at = time.monotonic()
+        quota = self.request('account/rateLimits/read')
+        decision = quota_decision(quota, checked_at)
+        if decision['state'] != 'allow' and not (decision['reason'] == 'quota_exhausted' and decision['account_id']):
+            raise ProbeError('Recovery account/quota state unknown; no action attempted.')
+        fingerprint = hashlib.sha256(decision['account_id'].encode()).hexdigest()
+        if record.get('account_hash') != fingerprint or self._account_hash not in (None, fingerprint):
+            raise ProbeError('Recovery account mismatch; no action attempted.')
+        self._account_hash = fingerprint
+
+    def inspect_recheck(self, store, session_id):
+        if session_id not in store._locked_ids:
+            raise ProbeError('Recovery requires the session writer lock.')
+        record = store.read(session_id)
+        operation = unresolved_recheck(record)
+        if operation is None:
+            return {'state': 'none'}
+        report = {'state': 'unverified', 'operation_id': operation['id'],
+                  'thread_id': operation['thread_id'], 'turn_id': operation['turn_id']}
+        if operation['phase'] != 'turn_bound' or not operation['thread_id'] or not operation['turn_id']:
+            return dict(report, reason='missing_native_binding')
+        if operation['thread_id'] == record['thread_id']:
+            raise ProbeError('Recheck points at the work thread; no native action attempted.')
+        self._account(record)
+        thread = self.request('thread/read', {'threadId': operation['thread_id'], 'includeTurns': False}).get('thread')
+        if (not isinstance(thread, dict) or thread.get('id') != operation['thread_id']
+                or thread.get('cwd') != store.project or thread.get('modelProvider') != 'openai'
+                or thread.get('ephemeral') is not False or not isinstance(thread.get('status'), dict)
+                or thread['status'].get('type') not in ('idle', 'notLoaded', 'active')):
+            raise ProbeError('Recovery thread identity/project/provider/state is unsafe or unknown.')
+        history = self.request('thread/turns/list', {'threadId': operation['thread_id'], 'limit': 1,
+            'sortDirection': 'desc', 'itemsView': 'summary'})
+        turns = history.get('data')
+        if (not isinstance(turns, list) or len(turns) != 1 or history.get('nextCursor') is not None
+                or not isinstance(turns[0], dict) or turns[0].get('id') != operation['turn_id']):
+            return dict(report, reason='native_history_mismatch')
+        status, thread_status = turns[0].get('status'), thread['status']['type']
+        if status in ('completed', 'failed', 'interrupted') and thread_status in ('idle', 'notLoaded'):
+            return dict(report, state='terminal', status=status)
+        if status == 'inProgress' and thread_status == 'active':
+            return dict(report, state='active')
+        return dict(report, reason='native_status_unconfirmed')
+
+    def interrupt_recheck(self, store, session_id, expected, timeout=5):
+        if (not isinstance(expected, dict) or expected.get('state') != 'active'
+                or type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0):
+            raise ProbeError('Interruption requires an explicitly selected active recovery binding.')
+        current = self.inspect_recheck(store, session_id)
+        if any(current.get(key) != expected.get(key) for key in ('operation_id', 'thread_id', 'turn_id')):
+            raise ProbeError('Recovery target changed; inspect again before interruption.')
+        if current['state'] != 'active':
+            return current
+        self.request('turn/interrupt', {'threadId': current['thread_id'], 'turnId': current['turn_id']})
+        self._poll_deadline = time.monotonic() + timeout
+        try:
+            while time.monotonic() < self._poll_deadline:
+                report = self.inspect_recheck(store, session_id)
+                if any(report.get(key) != expected.get(key) for key in ('operation_id', 'thread_id', 'turn_id')):
+                    return dict(current, state='unverified', reason='recovery_target_changed')
+                if report['state'] != 'active':
+                    return report
+                time.sleep(min(.1, max(0, self._poll_deadline - time.monotonic())))
+        except (ProbeError, OSError):
+            pass
+        finally:
+            self._poll_deadline = None
+        return dict(current, state='unverified', reason='interruption_unconfirmed')
+
+
 SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'criteria',
                   'step_id', 'correction_count', 'mode', 'permission_profile', 'state',
                   'pause_reason', 'summary', 'updated_at'}
@@ -3535,6 +3655,23 @@ class SessionStore:
             pause_reason=data['reason'] if data['state'] == 'PAUSED' else None)
         self.save(record)
 
+    def record_recheck_recovery(self, session_id, report):
+        """Append inspected terminal state only; never create current tool evidence."""
+        if session_id not in self._locked_ids:
+            raise ProbeError('Recovery requires the session writer lock.')
+        record = self.read(session_id)
+        operation = unresolved_recheck(record)
+        if (operation is None or not isinstance(report, dict) or report.get('state') != 'terminal'
+                or any(report.get(key) != operation[key] for key in ('thread_id', 'turn_id'))
+                or report.get('operation_id') != operation['id'] or record['deletion_state'] != 'none'):
+            raise ProbeError('Recovery target changed or has no confirmed terminal state.')
+        checkpoint = copy.deepcopy(record['workflow'])
+        checkpoint['rechecks'].append({'kind': 'reconcile', 'id': operation['id'],
+            'status': report.get('status'), 'timestamp': datetime.now(timezone.utc).isoformat()})
+        record['workflow'] = validate_workflow_checkpoint(checkpoint)
+        record['summary'] = 'Native recheck terminal state reconciled; saved evidence still requires a fresh check.'
+        self.save(record)
+
     @contextmanager
     def workflow(self, session_id, quota, checked_at, catalog, role_policy=None, *, controller=None):
         """Hold one writer lock and persist every controller transition before returning to its caller."""
@@ -3719,7 +3856,7 @@ def validate_check_commands(data, plan, project):
     return result
 
 
-def read_workflow_confirmation(input_stream, write):
+def read_workflow_confirmation(input_stream, write, *, confirmation='START', cancellation='CANCEL'):
     """Read one explicit confirmation without consuming buffered workflow commands."""
     import sys
     interactive = input_stream is sys.stdin and input_stream.isatty() and sys.stdout.isatty()
@@ -3745,21 +3882,21 @@ def read_workflow_confirmation(input_stream, write):
                     break
                 line += chunk
         if len(line) > 256:
-            write('ข้อมูลยืนยันยาวเกินกำหนด; ไม่เปิด backend')
+            write('ข้อมูลยืนยันยาวเกินกำหนด; ไม่อนุมัติ')
             return False
         value = line.strip()
         if not value and ended:
-            write('ยังไม่ได้ยืนยัน: พิมพ์ START แล้ว Enter หรือ CANCEL เพื่อยกเลิก')
+            write('ยังไม่ได้ยืนยัน: พิมพ์ ' + confirmation + ' แล้ว Enter หรือ ' + cancellation + ' เพื่อยกเลิก')
             continue
         if value.startswith(b'\x1b[200~') and value.endswith(b'\x1b[201~'):
             value = value[6:-6].strip()
-        if value == b'START':
+        if value == confirmation.encode('ascii'):
             return True
-        if value and value != b'CANCEL':
+        if value and value != cancellation.encode('ascii'):
             details = {'bytes': len(line), 'ascii': line.isascii(),
                        'control_bytes': sum(byte < 32 or byte == 127 for byte in line),
                        'paste_marker': b'\x1b[200~' in line or b'\x1b[201~' in line}
-            write('ข้อมูลยืนยันไม่ตรง START; ไม่เปิด backend · input diagnostics ' + json.dumps(details))
+            write('ข้อมูลยืนยันไม่ตรง ' + confirmation + '; ไม่อนุมัติ · input diagnostics ' + json.dumps(details))
         return False
 
 
@@ -3878,12 +4015,48 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         preview.write('สถิติ workflow: ' + json.dumps(workflow_statistics(observed, started_at), ensure_ascii=False))
 
 
+def run_recheck_recovery(session_id, input_stream, output):
+    """Inspect/reconcile retained bindings without model dispatch or restored grants."""
+    def write(text):
+        output.write(terminal_text(text) + '\n');output.flush()
+
+    # Require existing metadata before opening a writable store or native process.
+    with SessionStore(os.getcwd(), read_only=True) as reader:
+        reader.read(session_id)
+    with SessionStore(os.getcwd()) as store, store._lock(session_id):
+        operation = unresolved_recheck(store.read(session_id))
+        if operation is None:
+            write('ไม่มี recheck ที่ค้างอยู่ · ไม่เรียกโมเดล');return 0
+        if operation['phase'] != 'turn_bound':
+            write('Native binding ไม่ครบ; ผลยังไม่ทราบ ไม่เดา ID หรือ replay · ใช้ --show-workflow ตรวจ metadata');return 2
+        connection = RecheckRecoveryConnection(['codex', 'app-server', '--stdio',
+            '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
+        try:
+            report = connection.inspect_recheck(store, session_id)
+            write('Recovery · ไม่เริ่ม model turn · ' + json.dumps(report, ensure_ascii=True))
+            if report['state'] == 'active':
+                write('พิมพ์ STOP เพื่อขอหยุด turn นี้ หรือ PAUSE เพื่อพักการ recovery; EOF ไม่อนุมัติ')
+                if not read_workflow_confirmation(input_stream, write, confirmation='STOP', cancellation='PAUSE'):
+                    write('พักการ recovery แล้ว; native turn อาจยังทำงานอยู่');return 2
+                report = connection.interrupt_recheck(store, session_id, report)
+                write('ผล native: ' + json.dumps(report, ensure_ascii=True))
+            if report['state'] != 'terminal':
+                write('ยังยืนยัน terminal state ไม่ได้ เก็บ metadata เดิมไว้ ไม่ replay');return 2
+            store.record_recheck_recovery(session_id, report)
+            write('บันทึกสถานะ native แล้ว หลักฐานเก่ายัง stale; resume แล้วใช้ /recheck และยืนยันรอบใหม่ได้')
+            return 0
+        finally:
+            connection.close()
+
+
 def main():
     import argparse
     import sys
     parser = argparse.ArgumentParser(description='ModelMate Terminal chat: offline by default; --live uses ChatGPT subscription quota.')
     parser.add_argument('prompt', nargs='?', help='initial task text')
     modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--recover-recheck', metavar='SESSION_ID',
+                       help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
@@ -3904,6 +4077,17 @@ def main():
         parser.error('--experimental-rechecks requires --resume-workflow')
     if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
+    if args.recover_recheck:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Recheck recovery does not accept prompt/model/effort overrides')
+        try:
+            return run_recheck_recovery(args.recover_recheck, sys.stdin, sys.stdout)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+            print('ModelMate recovery: ' + terminal_text(message), file=sys.stderr)
+            return 1
     if args.workflow or args.resume_workflow:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Workflow uses plan efforts and explicit role bindings; no prompt/model/resume overrides')

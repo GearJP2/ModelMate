@@ -2,7 +2,7 @@
 
 Status: ledger, native transport, opt-in CLI and verifier implemented/offline-tested;
 synthetic native recheck happy path user LIVE_VERIFIED on 2026-11-19 at 732ac47.
-Interactive Terminal timing, unknown recovery and scoped deletion remain pending.
+Known-binding recovery is offline verified; live recovery, interactive Terminal timing and scoped deletion remain pending.
 User authorized this direction on
 2026-11-18 after the standalone policy probe produced negative evidence.
 Decision models/classifiers are outside the current scope.
@@ -133,8 +133,7 @@ START opens the native session but does not approve a verification turn.
 Only known saved test/lint evidence can be rechecked. Completed active work with
 missing/unknown tool checks is refused. Unresolved recheck operations block native
 resume; --show-workflow remains available offline and displays retained thread/turn
-IDs. Reconciliation without replay and scoped native-thread deletion are not yet
-implemented. Local metadata removal refuses records containing rechecks, preserving
+IDs. Known-binding reconciliation without replay is available below; scoped native-thread deletion is not yet implemented. Local metadata removal refuses records containing rechecks, preserving
 those native identities for later inspection/cleanup. Threads are retained even
 after successful checks; there is no service-side erasure claim.
 
@@ -154,3 +153,26 @@ stderr identifies only the owned scratch directory. JSON reports omit command,
 nonce, model prose, native/account IDs and local paths. This is a scoped happy-path
 probe, not interactive Terminal timing, all permissions, unknown recovery or deletion
 proof. Interactive input/event-loop behavior is currently checked offline.
+
+## Known-binding recovery (offline verified)
+
+`modelmate.py --recover-recheck SESSION_ID` holds the session writer lock and uses
+only initialize/account/quota reads, thread/read, thread/turns/list and, following
+explicit STOP, turn/interrupt. It never starts/resumes a thread or starts a model
+turn. Account, project, provider, durable identity and latest single-turn history
+must match the retained binding. Known exhausted quota permits metadata recovery;
+unknown account/quota does not. Missing IDs remain unresolved without discovery.
+
+An active turn offers STOP/PAUSE; EOF is not consent. STOP rechecks the displayed
+binding and waits for an observed terminal status. An acknowledgement alone cannot
+resolve the ledger. Terminal metadata appends a reconcile event with no command
+exit code/item evidence; historical checks stay stale and counters/history remain
+unchanged. Fresh rechecks still require their normal explicit consent. Older builds
+that do not recognize reconcile reject that checkpoint rather than misread it.
+
+`verify.py --probe-recheck-recovery SCRATCH` reads an existing successful synthetic
+recheck probe and stages a lost terminal event in a private metadata copy. Its RPC
+allowlist also removes turn/interrupt. No model turn, source mutation or native
+thread deletion occurs. Success removes only the owned copy; failure retains it.
+This does not prove active-stop behavior, crash/network recovery, missing-binding
+discovery, current command results or scoped native cleanup.

@@ -864,3 +864,14 @@ unknown/crash/network recovery, scoped deletion, all permissions or actual dispa
 See VERIFICATION.md for sanitized hashes/scope. No repeat of this probe is needed.
 Next eligible P12 work is explicit reconciliation of known native recheck bindings
 without replay or reusing historical evidence as current; scoped cleanup follows.
+
+
+P12 known-binding recovery increment (2026-11-19): metadata-only recovery now
+reconciles saved native recheck thread/turn identities under the session lock.
+Active turns require explicit STOP and observed terminal status; historical
+completion never restores current evidence or resets correction/recheck counters.
+A metadata-only verifier reuses retained synthetic native threads on an isolated
+local copy. Offline verification is complete; live metadata recovery remains
+unverified because the agent environment did not complete App Server initialize.
+Missing native bindings, scoped cleanup and broader crash/network recovery remain
+open. No new model inference was requested for this increment.

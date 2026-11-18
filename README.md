@@ -163,7 +163,7 @@ python3 verify.py --run-live --probe-rechecks gpt-6.1-sol
 gate แล้วตรวจซ้ำผ่าน native thread แยก ไม่มี retry อัตโนมัติ รายงาน source hashes
 และผลที่สังเกตได้ โดยไม่ใช้ข้อความโมเดลเป็นหลักฐาน และไม่ยืนยัน actual model dispatch
 Scratch และ native threads ถูกเก็บไว้ ตรวจ directory ที่แสดงบน stderr ได้
-การลบ native threads แบบ scoped และ recovery ของ unknown outcomes ยังไม่รองรับ
+Recovery รองรับเฉพาะ recheck ที่บันทึก native thread/turn ID ครบ; การลบ native threads แบบ scoped ยังไม่รองรับ
 
 ## เอกสารโครงการ
 
@@ -526,3 +526,28 @@ Resume verifier แยก userMessage/metadata ออกจาก tool items ต
 ไม่แสดงคำตอบ/nonce; `failureReason` แยกคำตอบไม่ตรง, turn ไม่จบ, tool activity
 และชนิด item ไม่รู้จัก ถ้าหยุดก่อน reconnect ค่า durableResume เป็น unverified
 ผล sentinel ที่ตรวจได้ยังรายงานแยกตามจริง โดยไม่ต้องรันโมเดลซ้ำเพื่อเช็กไฟล์
+
+## กู้สถานะ recheck โดยไม่เรียกโมเดลซ้ำ
+
+ดู local session ID ด้วย `python3 modelmate.py --sessions` ในโปรเจกต์เดิม แล้วรัน:
+
+```bash
+python3 modelmate.py --recover-recheck SESSION_ID
+```
+
+อ่านสถานะ native thread/turn เดิมเท่านั้น หากยังทำงานอยู่จะให้เลือก `STOP` หรือ
+`PAUSE` และตรวจสถานะจริงหลังขอหยุด การตอบรับคำขอหยุดอย่างเดียวไม่ถือว่าหยุดสำเร็จ
+สถานะที่จบแล้วบันทึกเป็นประวัติ; หลักฐานเดิมยัง stale และ counter ไม่ถูกรีเซ็ต
+ต้องอนุมัติ `/recheck` ใหม่เพื่อรับหลักฐานปัจจุบัน หาก ID ไม่ครบหรือสถานะไม่ตรงจะไม่เดา
+คำสั่งนี้ไม่เริ่ม model turn และใช้ได้เมื่อโควตาหมดแต่ยังยืนยันบัญชีเดิมได้
+
+ตรวจ recovery แบบอ่าน metadata จาก scratch ของ probe rechecks ที่เคยผ่าน:
+
+```bash
+python3 verify.py --probe-recheck-recovery SCRATCH
+```
+
+แทน `SCRATCH` ด้วย directory ที่ probe เดิมแสดงบน stderr ไม่ต้องใส่ `--run-live`
+ตัวตรวจจำลอง checkpoint ที่ขาด terminal event ในสำเนาแยก อ่าน native metadata เดิม
+ไม่ขอหยุด ไม่เรียกโมเดล และไม่แก้ต้นฉบับ สำเนาจะถูกลบเฉพาะเมื่อผ่านทั้งหมด
+หากไม่ผ่านจะเก็บสำเนาไว้พร้อมแสดง path; native threads เดิมยังอยู่

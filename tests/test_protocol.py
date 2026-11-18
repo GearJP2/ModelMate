@@ -5,13 +5,13 @@ import time
 import unittest
 from unittest.mock import Mock
 
-from modelmate import Connection, NativeWorkflowConnection, NativeRecheckConnection, ProbeError
+from modelmate import Connection, NativeWorkflowConnection, NativeRecheckConnection, RecheckRecoveryConnection, ProbeError
 
 
 class ProtocolTests(unittest.TestCase):
     def test_standalone_commands_cannot_bypass_workflow_permission_gate(self):
         # No server is needed: unsupported requests must fail before any RPC send.
-        for connection_type in (Connection, NativeWorkflowConnection, NativeRecheckConnection):
+        for connection_type in (Connection, NativeWorkflowConnection, NativeRecheckConnection, RecheckRecoveryConnection):
             connection = object.__new__(connection_type)
             connection.send = Mock()
             for method in ('command/exec', 'command/exec/write',

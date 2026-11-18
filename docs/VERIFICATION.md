@@ -1799,3 +1799,29 @@ tool-check resume remains disabled; the experimental opt-in is not production-re
 No further run of this happy-path probe is needed. Next: explicit known-binding
 reconciliation without replay; historical terminal observations must not clear
 stale evidence. Documentation-only update, git diff --check passed; no new inference.
+
+
+## P12 known-binding recheck recovery — MOCK_VERIFIED (2026-11-19)
+
+Offline suite: `python3 -m unittest discover -s tests`: 469 passed.
+`python3 -m py_compile modelmate.py doctor.py verify.py probe_policy.py` and
+`git diff --check` passed. Coverage includes terminal reconciliation, stale evidence,
+unchanged budgets/history, account/project/binding mismatches, exhausted quota,
+STOP/PAUSE/EOF, acknowledgement without terminal confirmation, bounded polling,
+atomic-save uncertainty, CLI dispatch and metadata-copy probe isolation. Recovery
+RPC tests reject thread/model starts, resume, model listing and command/exec.
+
+The agent attempted the metadata-only verifier against the retained successful
+synthetic recheck scratch. Source unchanged passed; native terminal observation,
+reconciliation and historical-result checks remain unverified: App Server did not
+complete initialize in this environment (ProbeError, nativeRpc initialize). No new
+model turn was requested and no native thread deleted; the isolated failure copy
+was retained. No underlying network/authentication cause is established.
+
+The user's ordinary Terminal should run `python3 verify.py
+--probe-recheck-recovery SCRATCH` using the original successful probe directory,
+without --run-live. This reads retained native metadata on a private checkpoint
+copy. It does not test actual crash/network failure, active-turn interruption,
+missing native-ID discovery, current command evidence or scoped deletion. Existing
+live recheck evidence remains historical and version-bound; it does not certify
+this new recovery path.
