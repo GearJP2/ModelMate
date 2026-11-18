@@ -1586,3 +1586,36 @@ tomllib is used only for this local check, not as a runtime dependency. Neither
 check verifies native App Server project trust. Native result after this encoding
 fix remains pending; permission parity and public tool rechecks remain gated.
 Full offline suite 366/366, probe compile and git diff --check passed.
+
+
+## P03 — completed standalone policy probe: negative evidence, 2026-11-18
+
+User-supplied normal-terminal output for Codex 0.169.0 reached finished:
+fixtureDecisions matched, projectConfigObserved true, baseline executed,
+forbiddenCommand executed, permissionParity not_established_for_fixture. All five
+configEvidence booleans were true. No process exit code was supplied; this code
+path returns 1 deliberately, not a successful permission certification.
+
+Probe SHA-256: `c4ec4ea5058c82bbe3d614b4337b3e1f24e1071f5a91fe6bba41acbf16e60dcb`
+Runtime SHA-256: `bbe5871404ab2b4d675ed963a841d0688ca751b3c6acc3b6c81933bdbab4d057`
+Rules SHA-256: `f5281513af1ea09f02da12d00caaa55d05ea59a1da5d8173d7f126df1e502c17`
+Source hashes match local 630cc24. The synthetic rule hash matches prior runs.
+
+This establishes that both fixed printf commands executed through command/exec
+in this fixture, despite the separate CLI rule evaluation returning forbidden for
+one of them and the project config layer being enabled. It does not establish
+whether the standalone server loaded that rule, why it executed, or whether native
+model tools/managed policies behave the same way. No model turn was requested.
+Do not describe this as a universal Codex policy bypass or repeat the same probe
+to seek a passing result. No private config, paths or raw traces were collected.
+
+Decision: reject standalone command/exec as the current tool-revalidation backend.
+Runtime allowlists and public test/lint resume restrictions remain unchanged.
+The completed diagnostic is useful negative evidence, not a passed G2/P12 gate.
+Next eligible work is a separately scoped native-tool verification-turn design:
+explicit model/quota consent, existing native permissions, fresh observed command
+evidence, durable reservation and unknown-outcome/no-replay handling, preserving
+correction counters and stale-evidence checks. Such a path uses model quota and
+must not be presented as zero-inference revalidation or started automatically.
+This update changes documentation only; git diff --check passed. No repeated
+native probe or additional inference was run by the agent.

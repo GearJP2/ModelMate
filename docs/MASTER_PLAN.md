@@ -778,3 +778,13 @@ split on literal dots. A regression covers dotted/space/Thai fixture paths, and
 installed CLI accepts the new TOML value in a no-inference rule check. Do not
 remove disabled-layer rejection or alter persistent/managed trust. Native result
 after this correction remains pending.
+
+P03 standalone probe completed (2026-11-18): version/hash-matched user report for
+630cc24 reaches finished with all config booleans true; both baseline and forbidden
+fixture printf commands execute. This is scoped negative evidence: standalone
+permission parity is not established. Reject command/exec for current P12 tool
+revalidation; do not repeat the probe seeking a pass or open the runtime allowlist.
+See VERIFICATION.md for hashes and limits. Next eligible work: design an explicit
+native-tool verification turn with model/quota consent, durable no-replay handling
+and preserved correction/evidence gates. That alternative consumes model quota;
+it is not the previously investigated zero-inference path and is not implemented.
