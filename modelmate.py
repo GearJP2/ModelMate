@@ -3086,15 +3086,29 @@ def load_check_commands(path, plan, project):
 
 def read_workflow_confirmation(input_stream, write):
     """Read one explicit confirmation without consuming buffered workflow commands."""
+    import sys
+    interactive = input_stream is sys.stdin and input_stream.isatty() and sys.stdout.isatty()
+    if interactive:
+        try:
+            import readline  # Let the Terminal editor handle paste boundaries and editing keys.
+        except ImportError:
+            interactive = False
     while True:
         line = b''
         ended = False
-        while len(line) <= 256:
-            chunk = os.read(input_stream.fileno(), 1)
-            if not chunk or chunk == b'\n':
-                ended = chunk == b'\n'
-                break
-            line += chunk
+        if interactive:
+            try:
+                line = input().encode('utf-8')
+                ended = True
+            except EOFError:
+                return False
+        else:
+            while len(line) <= 256:
+                chunk = os.read(input_stream.fileno(), 1)
+                if not chunk or chunk == b'\n':
+                    ended = chunk == b'\n'
+                    break
+                line += chunk
         if len(line) > 256:
             write('ข้อมูลยืนยันยาวเกินกำหนด; ไม่เปิด backend')
             return False
@@ -3107,7 +3121,10 @@ def read_workflow_confirmation(input_stream, write):
         if value == b'START':
             return True
         if value and value != b'CANCEL':
-            write('ข้อมูลยืนยันไม่ตรง START; ไม่เปิด backend กรุณาพิมพ์คำนี้โดยตรงแทนการ paste')
+            details = {'bytes': len(line), 'ascii': line.isascii(),
+                       'control_bytes': sum(byte < 32 or byte == 127 for byte in line),
+                       'paste_marker': b'\x1b[200~' in line or b'\x1b[201~' in line}
+            write('ข้อมูลยืนยันไม่ตรง START; ไม่เปิด backend · input diagnostics ' + json.dumps(details))
         return False
 
 

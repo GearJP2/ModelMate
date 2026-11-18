@@ -678,3 +678,11 @@ observations/diagnostics; do not claim a successful command-check live gate.
 Offline-tested constrained shell-wrapper matching and persisted count-only unknown
 evidence diagnostics now help future verification. No generic shell normalization,
 permission expansion or acceptance of model assertions was introduced.
+
+
+P08 full TTY confirmation fix (2026-11-18): input-only success did not prove full CLI
+paste handling. A full pseudo-terminal regression reproduces multiline bracketed
+paste rejection. Interactive input now uses stdlib readline; pipe handling remains
+bounded and preserves subsequent commands. Cancellation remains fail-closed. User's
+exact raw input and command-evidence live integration remain unverified; no new
+inference is needed to check confirmation/exit without /next.

@@ -1290,3 +1290,23 @@ Full offline suite 328/328 passed; runtime/doctor/verifier compilation and
 `git diff --check` passed. No new live inference was run. Native command integration
 remains not live-verified; a future single-turn run can distinguish missing events
 from command/cwd mismatch without repeatedly guessing.
+
+
+### Full-TTY confirmation regression (2026-11-18)
+
+User's input-only check accepted typed START, but a later full CLI run again rejected
+visible START before backend startup. Its raw bytes are unknown. An added full CLI
+pseudo-terminal test reproduced rejection for bracketed paste containing START plus
+an embedded newline; typed START passed. This demonstrates a receiver defect, not
+proof that the user's exact input had those bytes.
+
+Interactive sys.stdin/sys.stdout TTYs now activate standard-library readline and
+use input(); non-TTY streams retain the bounded byte reader and no-read-ahead
+behavior. Full CLI TTY tests stop at a stub backend constructor (no Codex process or
+inference) and verify typed START and multiline paste reach that boundary, while
+CANCEL never does. Invalid confirmation shows counts/flags only, never raw input.
+Existing piped full CLI/fake App Server and EOF/invalid input tests remain in place.
+
+Validation: 15 targeted workflow-entry tests and 330/330 full offline tests
+passed; runtime/doctor/verifier compilation and git diff --check passed.
+No new live inference was run.

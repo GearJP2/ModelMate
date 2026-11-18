@@ -421,3 +421,10 @@ command code เพื่อให้ผ่าน Wrapper support เป็น�
 `diagnostics` เฉพาะจำนวน started/completed/command_mismatches/cwd_mismatches
 ไม่มี raw command, path, stdout/stderr ใน diagnostics; เก็บ counts ใน finding
 ของ unknown evidence เพื่อย้อนตรวจได้ ไม่ยอมรับคำว่า tests passed จากโมเดลแทน
+
+
+Interactive TTY confirmation ใช้ Python input/readline เพื่อรองรับการแก้ข้อความ
+และ paste ที่มี newline ภายใน wrapper; stdin/stdout ที่เป็น pipe ยังคงใช้ byte
+reader เดิมเพื่อไม่กินคำสั่งถัดไป หากยืนยันไม่ตรง จะแสดง input diagnostics
+เฉพาะ byte count/ascii/control count/paste-marker flag ไม่คัดลอกข้อความดิบ
+EOF, CANCEL และข้อความอื่นยังไม่เปิด backend; ไม่มีการยืนยันโดยอัตโนมัติ

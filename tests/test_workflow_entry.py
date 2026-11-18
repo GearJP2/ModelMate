@@ -69,6 +69,16 @@ class WorkflowEntryTests(unittest.TestCase):
                 source.write(payload);source.seek(0)
                 self.assertFalse(read_workflow_confirmation(source, lambda _: None))
 
+    def test_confirmation_diagnostics_do_not_echo_invalid_raw_input(self):
+        messages=[]
+        with tempfile.TemporaryFile('w+b') as source:
+            source.write(b'PRIVATE_CONFIRM\x1b[201~\n');source.seek(0)
+            self.assertFalse(read_workflow_confirmation(source,messages.append))
+        text=' '.join(messages)
+        self.assertIn('input diagnostics',text)
+        self.assertIn('"paste_marker": true',text)
+        self.assertNotIn('PRIVATE_CONFIRM',text)
+
     def test_preview_and_declined_confirmation_never_start_process(self):
         with patch('modelmate.subprocess.Popen',side_effect=AssertionError('backend forbidden')):
             self.assertEqual(self.run_file(),0)
@@ -184,6 +194,48 @@ class WorkflowEntryTests(unittest.TestCase):
         self.assertIsNone(stats['tokenUsage'])
         for start, now in ((True, 12), (10, 9), (10, float('nan'))):
             with self.assertRaises(ProbeError):workflow_statistics(c, start, now=now)
+
+    def test_full_cli_tty_accepts_typed_and_multiline_pasted_confirmation(self):
+        import pty
+        source = 'import sys;sys.path.insert(0,'+repr(str(ROOT))+');import modelmate\n'
+        source += """
+def stop_before_backend(self,*args,**kwargs):
+ print('CONFIRMED_BACKEND',flush=True)
+ raise modelmate.ProbeError('Offline test stopped before opening backend')
+modelmate.NativeWorkflowConnection.__init__=stop_before_backend
+sys.exit(modelmate.main())
+"""
+        for payload, confirmed in ((b'START\n', True),
+                                   (b'\x1b[200~START\n\x1b[201~\n', True),
+                                   (b'CANCEL\n', False)):
+            with self.subTest(payload=payload):
+                master, slave = pty.openpty()
+                process = subprocess.Popen([sys.executable,'-u','-c',source,'--workflow',str(self.path),
+                    '--role-model','standard=synthetic-standard','--execute-workflow'],
+                    cwd=self.root,env=dict(os.environ,TERM='xterm-256color'),stdin=slave,stdout=slave,stderr=slave)
+                buffer = b''
+                try:
+                    with selectors.DefaultSelector() as selector:
+                        selector.register(master,selectors.EVENT_READ)
+                        def until(marker):
+                            nonlocal buffer
+                            deadline=time.monotonic()+4
+                            while marker not in buffer and time.monotonic()<deadline:
+                                if selector.select(max(0,deadline-time.monotonic())):
+                                    try:chunk=os.read(master,65536)
+                                    except OSError:break
+                                    if not chunk:break
+                                    buffer += chunk
+                            self.assertIn(marker,buffer,repr(buffer))
+                        until(b'START')
+                        os.write(master,payload)
+                        until(b'CONFIRMED_BACKEND' if confirmed else 'ยกเลิกแล้ว'.encode())
+                    process.wait(timeout=3)
+                    self.assertEqual(process.returncode,1 if confirmed else 0)
+                    if not confirmed:self.assertNotIn(b'CONFIRMED_BACKEND',buffer)
+                finally:
+                    if process.poll() is None:process.kill();process.wait(timeout=3)
+                    os.close(master);os.close(slave)
 
     def test_real_cli_loop_preserves_confirmation_input_and_autosaves_done(self):
         trace=self.root/'trace'
