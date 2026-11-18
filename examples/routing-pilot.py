@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare, preview, and score one paired synthetic routing evaluation."""
+"""Prepare, preview, and score paired synthetic routing evaluations."""
 
 import argparse
 import hashlib
@@ -21,7 +21,7 @@ CHOICES = {
 CRITERION = 'The chosen loop expression returns the first matching index, including the last element, or -1.'
 
 
-def prepare():
+def prepare(case):
     scratch = Path(tempfile.mkdtemp(prefix='modelmate-routing-pilot-'))
     runtime = scratch / 'modelmate.py'
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'modelmate.py', runtime)
@@ -46,20 +46,68 @@ def prepare():
                     'risk': 'normal', 'reason': 'A deterministic checker grades the choice after the turn.',
                     'checks': [{'kind': 'rubric', 'criterion': CRITERION}],
                 }]}
+        if case == 'economy':
+            plan = prepare_economy(project, role)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
 
-def run(scratch, arm, standard, strong, execute):
+def prepare_economy(project, role):
+    (project / 'search.py').write_text(
+        'def first_index(values, target):\n'
+        '    for index, value in enumerate(values):\n'
+        '        if value == target:\n'
+        '            return index\n'
+        '    return -1\n', encoding='utf-8')
+    (project / 'test_search.py').write_text(
+        'import unittest\n'
+        'from search import first_index\n\n'
+        'class SearchTests(unittest.TestCase):\n'
+        '    def test_empty(self):\n'
+        '        self.assertEqual(first_index([], 4), -1)\n'
+        '    def test_first(self):\n'
+        '        self.assertEqual(first_index([4, 1], 4), 0)\n'
+        '    def test_missing(self):\n'
+        '        self.assertEqual(first_index([1, 2], 4), -1)\n', encoding='utf-8')
+    step_one = 'The registered first_index regression suite exits successfully.'
+    step_two = 'Give a valid new test with expected result that distinguishes the correct loop from one skipping the last element.'
+    checks = {'version': 1, 'checks': [{'step': 1, 'check': 1, 'cwd': '.',
+                                      'command': 'python3 -B -m unittest test_search'}]}
+    (project / 'checks.json').write_text(json.dumps(checks, indent=2) + '\n', encoding='utf-8')
+    return {'version': 1, 'goal': 'Verify the first_index repair and identify a gap in the regression suite',
+            'clarifications': [], 'success_criteria': [step_one, step_two], 'steps': [
+                {'kind': 'implement', 'objective': 'Validate the supplied first_index implementation. '
+                 'Run the registered test exactly as given and summarize the outcome. Read only search.py '
+                 'and test_search.py if needed. Do not edit files or run other commands.',
+                 'role': role, 'effort': 'low', 'risk': 'normal',
+                 'reason': 'The repair is already staged and a local test checks the result.',
+                 'checks': [{'kind': 'test', 'criterion': step_one}]},
+                {'kind': 'review', 'objective': 'Review coverage of search.py in test_search.py. '
+                 'Propose one missing test that would fail if the loop skipped the last element. '
+                 'Give the concrete input, target, expected index and why the current tests miss it. '
+                 'Read only those two files, and do not edit files or run tests.',
+                 'role': 'strong', 'effort': 'low', 'risk': 'normal',
+                 'reason': 'This step deliberately uses strong review to exercise escalation consent.',
+                 'checks': [{'kind': 'rubric', 'criterion': step_two}]},
+            ]}
+
+
+def run(scratch, arm, standard, strong, execute, economy=None):
     if standard == strong or not standard.strip() or not strong.strip():
         raise ValueError('Choose two distinct model IDs that support low effort.')
     scratch = scratch.resolve(strict=True)
     project = scratch / arm / 'project'
     runtime = scratch / 'modelmate.py'
     state = scratch / arm / 'state'
+    checks = project / 'checks.json'
+    mode = 'ask_to_escalate' if checks.is_file() else 'approve_plan'
     args = [sys.executable, str(runtime), '--workflow', str(project / 'plan.json'),
-            '--workflow-mode', 'approve_plan', '--role-model', 'standard=' + standard,
+            '--workflow-mode', mode, '--role-model', 'standard=' + standard,
             '--role-model', 'strong=' + strong]
+    if checks.is_file():
+        if not economy or economy in (standard, strong) or not economy.strip():
+            raise ValueError('The economy pilot requires a third distinct model ID supporting low effort.')
+        args.extend(['--check-commands', str(checks), '--role-model', 'economy=' + economy])
     if arm == 'routed':
         args.append('--suggest-models')
     if execute:
@@ -95,22 +143,24 @@ def score(answer):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
-    actions.add_parser('prepare', help='make a fresh pair and print its path')
+    setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
+    setup.add_argument('--case', choices=('c1', 'economy'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
     launch.add_argument('--standard', required=True)
     launch.add_argument('--strong', required=True)
+    launch.add_argument('--economy')
     launch.add_argument('--execute', action='store_true', help='enable START and turn approval, which can use quota')
     grade = actions.add_parser('score', help='score the letter from the turn with trusted local cases')
     grade.add_argument('answer')
     args = parser.parse_args()
     try:
         if args.action == 'prepare':
-            prepare()
+            prepare(args.case)
             return 0
         if args.action == 'run':
-            return run(args.scratch, args.arm, args.standard, args.strong, args.execute)
+            return run(args.scratch, args.arm, args.standard, args.strong, args.execute, args.economy)
         return score(args.answer)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

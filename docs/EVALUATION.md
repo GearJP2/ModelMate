@@ -88,3 +88,26 @@ in each completed run. The initial baseline exits are recorded separately
 in [VERIFICATION.md](VERIFICATION.md). The independent score was calculated
 from the displayed answers. Both local workflows were paused after exit
 before rubric entry. The comparison covers one synthetic repair-choice task.
+
+## Two-step economy pilot
+
+Prepare with `examples/routing-pilot.py prepare --case economy`. Run each arm
+with the same three distinct low-effort bindings via `--economy`,
+`--standard` and `--strong`. The supplied read-only fixture already contains
+the patch. Both arms validate it with the same registered unittest command,
+then propose a missing regression test. The routed arm requests economy/low
+then strong/low. The baseline requests strong/low twice. Both use Ask to
+escalate. Check that the routed first step starts directly and each strong
+step waits for an explicit approval and another `/next`.
+
+Use `/check` after the first step reaches CHECKING to capture actual native
+command evidence. For step two, score the answer independently. A valid
+example gives input with the target first appearing at the final index,
+the correct expected index and why existing tests miss the boundary.
+After that turn reaches CHECKING, record the verdict using `/verify 1 pass`
+or `/verify 1 fail`, then `/check`. If both steps pass, use
+`/finish 1=1.1 2=2.1` and `/exit`. An uninterrupted pair takes four requested
+turns. Record failures as observed without automatically retrying.
+
+This case exercises native test evidence and model switching on a staged
+fixture. It measures neither patch authorship nor attributable quota usage.

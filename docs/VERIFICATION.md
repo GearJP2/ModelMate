@@ -1964,3 +1964,13 @@ separately. Both reports used the same runtime SHA-256, which matches the
 checkout. `reportedModels` and `tokenUsage` were null. Recorded wall times
 were 75.337 seconds (routed) and 43.694 seconds (baseline), including user
 wait. The pair provides no attributable inference-time or quota comparison.
+
+### Two-step economy pilot — MOCK_VERIFIED
+
+Both offline previews and both copies of the supplied unittest fixture passed.
+A fake App Server exercised the actual Terminal workflow and recorded
+economy/low then strong/low for the routed arm, and strong/low twice for the
+baseline. Both reached DONE with observed first-step test evidence and
+separate consent for each strong step. The full existing offline suite passed
+479 tests. An agent-side `--doctor` attempt exited before the App Server
+initialized; no live turn was requested. The paired live result remains open.
