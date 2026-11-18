@@ -1404,3 +1404,19 @@ durableResume unverified rather than claiming reconnect failed. Sentinel status 
 set to passed when the finally check succeeds, including an early return.
 Eight targeted resume-probe tests and 349/349 full offline tests passed; compilation
 and git diff --check passed. No live rerun; native resume remains not live-verified.
+
+
+### Standalone runtime installation (2026-11-18)
+
+Four new offline tests install only modelmate.py as executable sr in a path with
+Thai/space characters, then run from a separate scratch project with isolated
+Python-only PATH, no Codex and no repo imports. Help/preview succeed without state
+creation. Quoted Bash alias preserves executable path and arguments. Missing Codex
+produces actionable CLI/PATH guidance in doctor, manual live and workflow startup,
+without a traceback or inference. Fake/real executable names other than codex retain
+their existing FileNotFoundError behavior; missing plan errors are not reclassified.
+Agent versions inspected locally: Python 3.12.0; Codex CLI 0.169.0 (version only).
+No live inference, installed user binary or .bashrc mutation was performed.
+
+Validation: four standalone artifact tests and 353/353 full offline tests passed;
+runtime/doctor/verifier compilation and git diff --check passed. No live inference.

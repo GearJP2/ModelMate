@@ -19,8 +19,13 @@ class Connection:
     allowed_methods = {"initialize", "account/read", "model/list", "account/rateLimits/read"}
 
     def __init__(self, command, timeout):
-        self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except FileNotFoundError as exc:
+            if command and command[0] == 'codex':
+                raise ProbeError('Codex CLI ไม่พบใน PATH; ตรวจ command -v codex แล้วติดตั้ง/เพิ่ม Codex ใน PATH ก่อนเรียกใหม่') from exc
+            raise
         os.set_blocking(self.process.stdout.fileno(), False)
         os.set_blocking(self.process.stderr.fileno(), False)
         self.timeout = timeout

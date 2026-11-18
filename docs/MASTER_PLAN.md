@@ -217,7 +217,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; durable manual/rubric workflow resume MOCK_VERIFIED; fresh tool rechecks/live recovery pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
-| P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | TODO | ตรวจคำกล่าวอ้าง |
+| P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
 | P16 | End-to-end / evaluation / release | P01–P15 | TODO | จำเป็น |
 
 Dependency ไม่ได้อนุญาตทำงานขนานโดยอัตโนมัติ
@@ -721,3 +721,11 @@ sentinel; schema-based regression shows userMessage metadata was miscounted as a
 tool. Explicit metadata/tool classification and redacted prerequisite diagnostics
 are offline verified; tool/unknown activity still stops. No new inference was run,
 no test state was advanced, and native resume's live gate remains open.
+
+
+P15 standalone installation increment (2026-11-18): documented user-local sr copy,
+chmod, quoted Bash alias, update/hash comparison, uninstall and retained session/
+native data. Four offline tests run only a copied executable from Thai/space paths
+with no repo imports or Codex in PATH. Missing Codex is handled at shared process
+startup with actionable guidance; missing plan files are not mislabeled as Codex
+failures. No dependency, package registry, auto-update or user .bashrc edit added.

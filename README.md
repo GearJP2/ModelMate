@@ -7,6 +7,8 @@
 
 ## เริ่มใช้งาน
 
+ติดตั้ง runtime ไฟล์เดียวเป็นคำสั่ง `sr`: [คู่มือติดตั้ง/อัปเดต/ถอนติดตั้ง](docs/INSTALL.md)
+
 ต้องมี Python 3.9+ และ Codex CLI (ตรวจ protocol กับ 0.169.0)
 ใช้ Python standard library ไม่ต้องติดตั้ง `openai` หรือ Python dependency เพิ่ม
 เข้าสู่ระบบด้วย ChatGPT ผ่าน `codex login` หากยังไม่ได้ล็อกอิน
