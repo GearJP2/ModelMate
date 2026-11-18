@@ -670,3 +670,11 @@ startup on user's Terminal; exact raw input/cause unknown. Hardened blank-line a
 complete single-line paste handling, with pseudo-terminal and offline regression
 coverage. EOF and invalid/oversized input remain non-approval. An input-only check
 can be run without Codex/inference before any further paid-quota live test.
+
+
+P10 native evidence mismatch (2026-11-18): user's correctly timed /check returned
+UNVERIFIED. Source of mismatch is unknown because old runtime omitted command
+observations/diagnostics; do not claim a successful command-check live gate.
+Offline-tested constrained shell-wrapper matching and persisted count-only unknown
+evidence diagnostics now help future verification. No generic shell normalization,
+permission expansion or acceptance of model assertions was introduced.

@@ -106,6 +106,20 @@ class CheckCommandTests(unittest.TestCase):
         requested=json.loads(turns[0]['params']['input'][0]['text'])['verification_commands']
         self.assertEqual(requested,[{'check':1,'command':self.binding['command'],'cwd':str(self.root)}])
 
+    def test_wrapped_native_command_is_accepted_only_with_same_inner_command(self):
+        direct="'command':json.loads(req['params']['input'][0]['text'])['verification_commands'][0]['command']"
+        wrapped=COMMAND_SERVER.replace(direct,
+            "'command':'/bin/bash -lc '+__import__('shlex').quote(json.loads(req['params']['input'][0]['text'])['verification_commands'][0]['command'])")
+        def drive(_input,_output,**kwargs):
+            host=kwargs['workflow_action'];c=kwargs['workflow'];backend=kwargs['backend']
+            shell=ChatShell(io.StringIO(),workflow=c,workflow_action=host)
+            shell.line('/next');shell.line('/check');backend.drain()
+            self.assertEqual(c.snapshot()['steps'][0]['evidence'][0]['exit_code'],0)
+            shell.line('/finish 1=1.1')
+            self.assertEqual(c.state,'DONE')
+            return 0
+        with patch(__name__+'.COMMAND_SERVER',wrapped):self.run_file(drive=drive)
+
     def test_native_failures_stop_after_initial_plus_two_corrections(self):
         def drive(_input,_output,**kwargs):
             host=kwargs['workflow_action'];c=kwargs['workflow'];backend=kwargs['backend']

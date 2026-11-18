@@ -408,3 +408,16 @@ START confirmation ข้ามบรรทัดว่างที่อาจ�
 รองรับ bracketed-paste wrapper ที่ครบในบรรทัดเดียว ข้อมูลอื่น/EOF/ข้อความยาว
 เกิน 256 bytes ไม่เปิด backend wrapper ที่ไม่ครบจะถูกปฏิเสธ ให้พิมพ์ START เอง
 การอ่านยังไม่กินคำสั่ง /next ที่อยู่ถัดไป และการยืนยันไม่ใช้ TextIO read-ahead
+
+
+Command matching รับ literal command หรือ shell argv wrapper หนึ่งชั้นจาก
+`/bin/bash`, `/usr/bin/bash`, `/bin/sh`, `/usr/bin/sh` พร้อม `-c`/`-lc` เท่านั้น
+inner command ต้องตรงทุกตัวอักษร, ไม่มี argv เพิ่ม และ cwd ต้องตรงเดิม
+ไม่ทำ generic token normalization, ไม่ตัด `cd`/`&&`/`;` หรือเปลี่ยน quoting ภายใน
+command code เพื่อให้ผ่าน Wrapper support เป็นขอบเขต matcher ที่ทดสอบ offline;
+ไม่ได้พิสูจน์ว่า wrapper คือต้นเหตุของ live UNVERIFIED ที่ผู้ใช้ส่งมา
+
+เมื่อไม่มี matching command completion จะเก็บ check เป็น unknown และแสดง
+`diagnostics` เฉพาะจำนวน started/completed/command_mismatches/cwd_mismatches
+ไม่มี raw command, path, stdout/stderr ใน diagnostics; เก็บ counts ใน finding
+ของ unknown evidence เพื่อย้อนตรวจได้ ไม่ยอมรับคำว่า tests passed จากโมเดลแทน

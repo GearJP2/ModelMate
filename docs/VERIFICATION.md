@@ -1262,3 +1262,31 @@ No claim is made that the user's Terminal cause has been conclusively reproduced
 Validation: 13 targeted workflow-entry tests and 324/324 full offline tests
 passed; runtime/doctor/verifier compilation and git diff --check passed.
 No live inference or new backend startup was required for the input tests.
+
+
+### Live command-check UNVERIFIED and diagnostic/matcher increment (2026-11-18)
+
+User supplied a later live transcript: backend completed and /check ran at CHECKING,
+but the controller reported checks_unavailable/UNVERIFIED. Assistant text claimed
+12 tests and exit 0, which is not trusted tool evidence. Final task remained paused;
+no DONE or actual-dispatch claim is recorded. Raw command observations were not
+retained in that build, so exact mismatch cause cannot be recovered from the pasted
+transcript. The locally generated item schema has string command/cwd and integer
+or null exitCode, but does not identify this run's actual values. No user IDs/tokens
+or raw transcript are copied into this evidence record.
+
+Matcher now supports a single explicit absolute bash/sh -c/-lc argv wrapper only
+when its inner command equals the registered code literally, with identical cwd.
+Extra argv, changed flags, different paths, chained/changed inner commands and
+shell-token normalization are rejected. This does not prove the wrapper caused the
+user's failure. Missing matches now record unknown tool evidence with bounded-field
+counts (starts/completions/command mismatches/cwd mismatches) and show diagnostics
+without raw commands/paths/output. No model text is interpreted as command evidence.
+
+New tests cover accepted literal-inner wrappers, rejected extra commands/argv and
+quoting changes, redacted unknown diagnostics persisted in checkpoints, and a
+wrapped-command fake App Server through deferred /check to explicit final coverage.
+Full offline suite 328/328 passed; runtime/doctor/verifier compilation and
+`git diff --check` passed. No new live inference was run. Native command integration
+remains not live-verified; a future single-turn run can distinguish missing events
+from command/cwd mismatch without repeatedly guessing.

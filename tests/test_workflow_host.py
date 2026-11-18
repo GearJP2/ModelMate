@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from modelmate import ChatShell, ProbeError, SessionStore, WorkflowController, WorkflowHost
+from modelmate import ChatShell, ProbeError, SessionStore, WorkflowController, WorkflowHost, observed_command_matches
 from test_routing import CATALOG, PLAN, POLICY, QUOTA
 
 
@@ -62,6 +62,47 @@ class WorkflowHostTests(unittest.TestCase):
         self.assertNotIn('PRIVATE', json.dumps(self.c.export_checkpoint()))
         self.c.finish_task({0: [evidence['id']]})
         self.assertEqual(self.c.state, 'DONE')
+
+    def test_explicit_shell_wrapper_preserves_exact_inner_command_and_cwd(self):
+        import shlex
+        command='python3 -m unittest'
+        wrapped='/bin/bash -lc ' + shlex.quote(command)
+        self.action()
+        self.item('item/started',command=wrapped)
+        self.item('item/completed',0,command=wrapped)
+        self.terminal();self.action('check')
+        self.assertEqual(self.c.snapshot()['steps'][0]['evidence'][0]['result'],'pass')
+
+    def test_command_matching_never_normalizes_shell_code_or_accepts_extra_argv(self):
+        import shlex
+        expected='python3 -m unittest'
+        for shell in ('/bin/bash','/usr/bin/bash','/bin/sh','/usr/bin/sh'):
+            self.assertTrue(observed_command_matches(shell+' -c '+shlex.quote(expected),expected))
+        for observed in ('/bin/bash -lc '+shlex.quote(expected+'; true'),
+                         '/bin/bash -lc '+shlex.quote(expected)+' extra',
+                         '/bin/bash -lic '+shlex.quote(expected),
+                         '/tmp/bash -lc '+shlex.quote(expected),
+                         '/bin/bash -lc '+shlex.quote('cd /other && '+expected),
+                         '/bin/bash -lc "unterminated', 'python3  -m unittest', None):
+            self.assertFalse(observed_command_matches(observed,expected), observed)
+        self.assertFalse(observed_command_matches("/bin/bash -lc 'echo $HOME'", "echo '$HOME'"))
+
+    def test_missing_command_diagnostics_contain_counts_not_raw_command_output(self):
+        output=io.StringIO()
+        ChatShell(output,workflow=self.c,workflow_action=self.host)
+        self.action()
+        self.item('item/started',command='PRIVATE-COMMAND')
+        self.item('item/completed',0,command='PRIVATE-COMMAND')
+        self.terminal();self.action('check')
+        text=output.getvalue()
+        self.assertIn('diagnostics',text)
+        self.assertIn('"command_mismatches": 2',text)
+        self.assertNotIn('PRIVATE-COMMAND',text)
+        self.assertNotIn('PRIVATE stdout',text)
+        self.assertEqual(self.c.state,'UNVERIFIED')
+        saved=self.c.export_checkpoint()['history'][-1]['checks'][0]
+        self.assertEqual(saved['result'],'unknown')
+        self.assertEqual(json.loads(saved['finding'])['command_mismatches'],2)
 
     def test_unrelated_successful_command_cannot_satisfy_test(self):
         self.action()

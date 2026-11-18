@@ -956,6 +956,21 @@ class WorkflowController:
         return self._updated()
 
 
+def observed_command_matches(observed, expected):
+    """Accept literal commands or one explicit shell argv wrapper, never rewrite shell code."""
+    if observed == expected:
+        return True
+    if not isinstance(observed, str):
+        return False
+    import shlex
+    try:
+        argv = shlex.split(observed)
+    except ValueError:
+        return False
+    return (len(argv) == 3 and argv[0] in ('/bin/bash', '/usr/bin/bash', '/bin/sh', '/usr/bin/sh')
+            and argv[1] in ('-c', '-lc') and argv[2] == expected)
+
+
 class WorkflowHost:
     """Trusted executor adapter. No built-in native transport, tool approval or process runner."""
 
@@ -972,6 +987,7 @@ class WorkflowHost:
         self._binding = None
         self._seen = set()
         self._specs, self._items, self._observations = {}, {}, {}
+        self._command_diagnostics = dict.fromkeys(('started', 'completed', 'command_mismatches', 'cwd_mismatches'), 0)
         self._terminal = None
         self._deadline = None
         self._starting = self._interrupted = False
@@ -1064,6 +1080,7 @@ class WorkflowHost:
             self._signal()
             return
         self._items, self._observations = {}, {}
+        self._command_diagnostics = dict.fromkeys(('started', 'completed', 'command_mismatches', 'cwd_mismatches'), 0)
         self._terminal, self._deadline = None, None
         self._interrupted = False
         self._starting = True
@@ -1104,6 +1121,7 @@ class WorkflowHost:
         self._binding = dict(binding, attempt_id=active['id'])
         self._seen.add((binding['thread_id'], binding['turn_id']))
         self._items, self._observations = {}, {}
+        self._command_diagnostics = dict.fromkeys(('started', 'completed', 'command_mismatches', 'cwd_mismatches'), 0)
         self._terminal = status
         if active['status'] == 'running':
             self.controller.finish_attempt(active['id'], status)
@@ -1160,8 +1178,16 @@ class WorkflowHost:
             active = state['active_attempt']
             if active is None or active['id'] != self._binding['attempt_id']:
                 raise ProbeError('Executor/controller attempt identity mismatch.')
-            matching = [index for (sid, index), spec in self._specs.items()
-                        if sid == active['step_id'] and spec == {'command': item.get('command'), 'cwd': item.get('cwd')}]
+            specs = {index: spec for (sid, index), spec in self._specs.items() if sid == active['step_id']}
+            matches_command = {index for index, spec in specs.items()
+                               if observed_command_matches(item.get('command'), spec['command'])}
+            matches_cwd = {index for index, spec in specs.items() if item.get('cwd') == spec['cwd']}
+            self._command_diagnostics['started' if method == 'item/started' else 'completed'] += 1
+            if specs and not matches_command:
+                self._command_diagnostics['command_mismatches'] += 1
+            if specs and not matches_cwd:
+                self._command_diagnostics['cwd_mismatches'] += 1
+            matching = sorted(matches_command & matches_cwd)
             known = {index for index, identity in self._items.items() if identity == item.get('id')}
             if known and known != set(matching):
                 raise ProbeError('Observed command/cwd changed for a bound check item.')
@@ -1200,7 +1226,18 @@ class WorkflowHost:
             if index not in active['checks']:
                 self.controller.record_check(active['id'], index, origin='tool', exit_code=observed['exit_code'],
                     reference='executor command item ' + observed['item_id'],
-                    finding='Observed exact host-bound command completion; no stdout/stderr retained.')
+                    finding='Observed host-bound native command completion; no stdout/stderr retained.')
+        checks = state['plan']['steps'][state['step_index']]['checks']
+        missing = [i + 1 for i, check in enumerate(checks)
+                   if check['kind'] in ('test', 'lint') and i not in self._observations and i not in active['checks']]
+        for number in missing:
+            self.controller.record_check(active['id'], number - 1, origin='tool', exit_code=None,
+                reference='No matching native command completion',
+                finding=json.dumps(self._command_diagnostics))
+        if missing and self.on_change is not None:
+            self.on_change({'type': 'progress', 'text': 'ยังไม่มี command evidence สำหรับ checks '
+                + ', '.join(map(str, missing)) + ' · diagnostics '
+                + json.dumps(self._command_diagnostics) + ' · ไม่ใช้ข้อความโมเดลแทนผลตรวจ'})
         self.controller.evaluate_attempt(active['id'])
         self._binding, self._deadline = None, None
         self._signal()
