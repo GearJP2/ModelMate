@@ -1657,3 +1657,197 @@ Validation: targeted recheck tests 13/13 passed; full offline unittest suite 375
 passed; compile checks for modelmate.py, doctor.py, verify.py and probe_policy.py,
 and git diff --check passed. Five tests were removed with the deleted classifier;
 existing routing/policy tests and the native mock scenarios still pass.
+
+
+## P12 — native recheck transport, offline evidence, 2026-11-18
+
+Added internal NativeRecheckConnection, using fresh account/catalog/quota and an
+idle durable work-thread identity check before reserving a recheck. It starts a
+different durable native thread with shared read-only/on-request options and checks
+the returned permissions/project/provider. Only the parent ledger is persisted;
+a transient one-check controller reuses WorkflowHost command/cwd/start/completion
+matching. No classifier or model-based routing is involved. The caller must obtain
+explicit consent for the supplied standard/low model and exact check specification.
+
+The reservation, thread binding and turn reservation are on disk before the next
+native RPC. The returned turn ID is saved before queued events are processed.
+Parent work bindings/history/counters remain unchanged. A completed matching native
+observation can revalidate its source evidence; missing/foreign/wrong-cwd/failed
+checks and model pass claims cannot. Cancellation racing success, EOF, unknown
+responses, timeout and failed saves do not create automatic retries. Unsupported
+command/patch approvals are declined; unknown requests are not accepted. Closing
+without confirmed termination leaves the recheck unresolved and the thread retained.
+
+A late conflicting terminal observation can append unknown after a terminal ledger
+record, restore the source stale flag and change DONE to UNVERIFIED. This preserves
+the original terminal history instead of overwriting it. Cancel still sends the
+known native interrupt after parent persistence failure. Thread/turn failures do
+not borrow the work attempt's native binding. The RPC allowlist regression now also
+covers this adapter: standalone command/exec remains unavailable.
+
+Synthetic JSONL tests inspect the real SessionStore file when fake thread/start and
+turn/start RPCs arrive, exercise exact/shell-wrapped commands, failed prerequisites,
+changed quota/catalog/specification, approvals, repeats, late conflicts, cancellation,
+disconnects and injected save failures. Filtered child events cannot finish the
+parent workflow. These tests do not prove live enforcement, all tool paths,
+service-side erasure or actual backend model dispatch. No live inference was run.
+
+Public CLI recheck, terminal event-loop multiplexing, consent UX, retained-thread
+reconciliation/deletion and a scoped live verifier are still pending. Do not open
+public test/lint resume or advertise this as a completed native recovery feature.
+
+Validation: full offline unittest suite 413/413 passed, including 38 new native
+recheck transport cases; all four entry points compile; git diff --check passed.
+The tests use synthetic servers and private temporary files, not the installed
+account or live model inference. No user-run live test is required yet.
+
+
+## P12 — experimental recheck CLI integration, 2026-11-19
+
+Opt-in --experimental-rechecks enables known-result test/lint workflow resume;
+default behavior remains blocked. Offline preview/CANCEL do not create a backend.
+START restores the main native session. Recheck preview prints exact command/cwd
+and requested standard/low selection; only its single-use confirmation starts the
+separate native verification turn. Invalid/expired tokens, changed state/mode/spec,
+model text, status queries and EOF never imply execution consent. The three-slot
+recheck budget requires explicit continuation and does not reset work counters.
+
+The Terminal selector registers child stdout/stderr dynamically alongside the work
+backend and input. It processes cancellation/exit/EOF while the model waits, ignores
+stale descriptors after replacement, and cleans up the child before the outer
+workflow attachment is closed. Interrupt confirmation comes from a terminal event,
+not an RPC acknowledgement. Parent completion still needs its normal continuation,
+check and criterion coverage. The shared command-file validator now also validates
+the in-memory bindings passed to the experimental UI.
+
+Synthetic subprocess tests exercise the actual selector with a fake durable native
+backend: preview does not launch a child, explicit confirmation rechecks and permits
+parent completion, status/exit work while a child hangs, and EOF before confirmation
+does not approve while EOF during a turn requests interruption. State/spec changes
+invalidate consent. Known completed active checks can be configured without replay;
+missing/unknown ones refuse experimental execution. Unresolved ledger entries block
+resume, remain inspectable with native IDs, and cannot be erased through metadata
+removal. This is a refusal to perform unscoped cleanup, not implemented deletion.
+
+No live inference was run. Native reconciliation, scoped native-thread deletion,
+full permission coverage and actual model dispatch remain unverified/unsupported.
+The experimental path is not production-ready. Next is the scoped live verifier.
+
+Validation: 18 new recheck UI/entry tests passed; full offline suite 431/431 passed;
+all four entry points compile and git diff --check passed. Only fake native servers
+and private temporary metadata were used, with no live model inference.
+
+
+## P12 — opt-in recheck live verifier prepared, 2026-11-19
+
+Added --probe-rechecks MODEL under the existing --run-live opt-in. It sends at most
+two model turns: initial registered synthetic command evidence, then one recheck on
+a separate durable thread after parent reconnect. It does not rerun the previous
+manual-context probe. The harness exercises the real controller/SessionStore and UI
+preview/confirmation commands, using native observed exit status rather than model
+claims; its live scope excludes interactive Terminal timing (tested offline).
+
+All seven report checks must pass for process exit 0: initialToolEvidence,
+durableResume, restoredEvidenceGate, consentGate, nativeRecheck, finalCheckpoint,
+sentinelUnchanged. Errors, absent/mismatched command evidence, expanded permissions
+and declined approval never trigger another model attempt. An unrelated controller
+error cannot be classified as a passed stale-evidence gate. Only one recheck budget
+slot is used, and the parent's work counters/thread/turn bindings remain unchanged.
+
+The report includes source SHA-256 hashes and requested model/low selection;
+reportedModels is null. Commands, nonce, raw model text, native/account IDs and paths
+are absent from JSON. Owned scratch location is printed separately on stderr;
+scratch and native threads are retained, not deleted. This is not no-tools isolation,
+all-permission enforcement, crash/network recovery, scoped deletion or dispatch
+telemetry proof. No live inference was run by the agent.
+
+Ten offline probe tests use three fake App Server processes sharing synthetic
+thread history. They verify the two-turn limit, one reconnect/two separate durable
+threads, initial failure stopping early, false model pass claims, mismatching/failed
+rechecks, denied approval, permission expansion, confirmation refusal and unrelated
+stale-gate errors. Runtime preflight now keeps the host catalog/policy fresh, fixing
+an empty-catalog UI update after a recheck; a subprocess test verifies the next
+explicit preview still works. The CLI flag forwarding path also has a regression.
+
+Validation: 10 recheck-probe tests and 20 recheck UI/entry tests passed; full offline
+suite 443/443 passed; all four entry points compile; git diff --check passed. These
+are fake-server results, not live gate evidence. User-run the single --probe-rechecks
+command to collect scoped evidence; do not repeat the older probes for this change.
+
+
+## P12 — user-supplied native recheck happy path, 2026-11-19
+
+Scoped LIVE_VERIFIED: user ran
+`python3 verify.py --run-live --probe-rechecks gpt-6.1-sol` from a normal Terminal.
+All seven checks passed: initialToolEvidence, durableResume, restoredEvidenceGate,
+consentGate, nativeRecheck, finalCheckpoint and sentinelUnchanged; phase finished.
+Both turns reported completed with started=1, completed=1, command_mismatches=0,
+cwd_mismatches=0. Requested gpt-6.1-sol/low; reportedModels null; scratchRetained
+true. No process exit code was supplied. This is user-provided evidence, not an
+independent agent-run live test. The actual scratch path is not copied here.
+
+Runtime SHA-256: `cbaa64bd7dec205848f92a05be4db68f35f826383fab577e177b701b8de58f3b`
+Verifier SHA-256: `394cd606715796cc8c1833d1c9cba1040d03bcf86a4f3bdea992c02e20112064`
+Both match local files at 732ac47. This verifies the bounded synthetic path through
+initial native command evidence, durable reconnect, stale-evidence/consent gates,
+a separate native recheck and final checkpoint with unchanged sentinel/work state.
+
+It does not verify interactive Terminal timing, crash/network or unknown-outcome
+recovery, scoped native-thread deletion, all permission paths, a no-tools boundary
+or backend dispatch telemetry. Native threads and scratch remain retained. Default
+tool-check resume remains disabled; the experimental opt-in is not production-ready.
+No further run of this happy-path probe is needed. Next: explicit known-binding
+reconciliation without replay; historical terminal observations must not clear
+stale evidence. Documentation-only update, git diff --check passed; no new inference.
+
+
+## P12 known-binding recheck recovery — MOCK_VERIFIED (2026-11-19)
+
+Offline suite: `python3 -m unittest discover -s tests`: 469 passed.
+`python3 -m py_compile modelmate.py doctor.py verify.py probe_policy.py` and
+`git diff --check` passed. Coverage includes terminal reconciliation, stale evidence,
+unchanged budgets/history, account/project/binding mismatches, exhausted quota,
+STOP/PAUSE/EOF, acknowledgement without terminal confirmation, bounded polling,
+atomic-save uncertainty, CLI dispatch and metadata-copy probe isolation. Recovery
+RPC tests reject thread/model starts, resume, model listing and command/exec.
+
+The agent attempted the metadata-only verifier against the retained successful
+synthetic recheck scratch. Source unchanged passed; native terminal observation,
+reconciliation and historical-result checks remain unverified: App Server did not
+complete initialize in this environment (ProbeError, nativeRpc initialize). No new
+model turn was requested and no native thread deleted; the isolated failure copy
+was retained. No underlying network/authentication cause is established.
+
+The user's ordinary Terminal should run `python3 verify.py
+--probe-recheck-recovery SCRATCH` using the original successful probe directory,
+without --run-live. This reads retained native metadata on a private checkpoint
+copy. It does not test actual crash/network failure, active-turn interruption,
+missing native-ID discovery, current command evidence or scoped deletion. Existing
+live recheck evidence remains historical and version-bound; it does not certify
+this new recovery path.
+
+
+### Known-binding terminal recovery — scoped LIVE_VERIFIED (2026-11-19)
+
+User-supplied Terminal output from `verify.py --probe-recheck-recovery SCRATCH`
+at source commit `65d15f2` finished with all four checks passed:
+`nativeTerminalObserved`, `metadataReconciled`, `historicalResultOnly`, and
+`sourceUnchanged`. Observed terminal status was `completed`.
+
+- modelTurnsRequested: 0
+- nativeThreadsDeleted: false
+- copyRetained: false (the owned successful metadata copy was removed)
+- Runtime SHA-256: `6b3bd6a3a55536c620bedf3324e491930fed16152f7f8b7b971f2509b9ee24fc`
+- Verifier SHA-256: `c08d71248c372f0b9b475b67d6c0681c36c7ca15e2e0316593328c1cff9051f3`
+
+Both hashes match local source files at 65d15f2. This supersedes the pending
+user-run metadata check above, without changing the earlier agent initialize
+failure. Evidence covers terminal reconciliation on an isolated copy of a
+successful synthetic recheck checkpoint: original metadata remained unchanged,
+historical status did not become current test evidence, and no native start,
+interrupt or delete request was made. No additional inference was requested.
+
+It does not verify active interruption, missing-binding discovery, crash/network
+recovery, current command evidence or scoped deletion. Recovery is not thereby
+release-ready. Next eligible task: scoped native-thread cleanup with preview and
+explicit confirmation. Documentation-only update; git diff --check passed.

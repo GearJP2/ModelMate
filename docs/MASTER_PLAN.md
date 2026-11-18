@@ -214,7 +214,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; durable manual/rubric workflow resume scoped user LIVE_VERIFIED; tool rechecks/crash recovery pending | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual resume and synthetic tool recheck happy paths scoped LIVE_VERIFIED; interactive timing/unknown recovery/scoped cleanup pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
@@ -813,3 +813,75 @@ recheck transport or live verifier is connected yet. Test/lint resume remains
 disabled. Next eligible P12 work is native observation/transport integration using
 this ledger, then responsive UI/consent and retained-thread handling, then a scoped
 opt-in live test. No user-run live test is needed for this core milestone.
+
+P12 native recheck transport increment (2026-11-18): NativeRecheckConnection uses
+the existing native protocol and command observer on a separate durable thread.
+It checks fresh account/catalog/quota and work-thread identity/state, reserves the
+parent ledger before thread creation, confirms native read-only/on-request settings,
+and persists thread/turn phases before dispatch/draining. Selection/spec changes
+cannot start a turn. Unsupported approvals are declined, cancellations never turn
+late success into evidence, and conflicting later terminal observations invalidate
+the earlier result without rewriting ledger history. Parent work bindings/counters
+are unchanged. No command/exec or local runner is allowed.
+This adapter is internal and offline-tested only. Public /recheck/tool-check resume
+remain disabled. Next eligible work is event-loop/consent/CLI integration plus
+retained-thread inspection/reconciliation/deletion handling, then the opt-in live
+verifier. No live inference was run or requested for this increment.
+
+P12 experimental recheck CLI (2026-11-19): explicit resume now offers an opt-in
+--experimental-rechecks flag while default tool-check resume remains blocked.
+START restores native ownership but /recheck only previews exact command/cwd and
+standard/low model; a separate single-use /confirm-recheck token spends quota.
+State/mode/policy/spec changes invalidate the preview. Budget continuation is a
+separate explicit choice and does not dispatch. The existing selector multiplexes
+parent and child native streams; status/cancel/exit/EOF stay responsive during a
+bound turn, and child cleanup occurs while the parent writer attachment is held.
+Known completed active tool evidence can be rebound without replaying old commands.
+Missing/unknown active checks or unresolved rechecks refuse execution/resume.
+Offline inspection displays retained native IDs; SessionStore.remove refuses to
+discard recheck metadata. Native reconciliation/deletion remain unsupported.
+Next: opt-in synthetic live verifier for this scoped experimental happy path;
+not a no-tools boundary, production recovery or all-permission certification.
+
+P12 live recheck verifier preparation (2026-11-19): --probe-rechecks MODEL with
+--run-live requests at most two synthetic model turns, with no automatic retries.
+It checks initial native command evidence, durable parent reconnect, stale evidence
+blocking completion, inert consent preview, one explicitly confirmed native recheck,
+unchanged work state/bindings and final checkpoint/sentinel. Reports are redacted
+and versioned by runtime/verifier hashes; scratch and native threads remain retained.
+Offline adversarial tests reject missing/unrelated tool observations, failure,
+permission expansion, unsupported approval and unrelated errors masquerading as a
+passed stale gate. The real account has not been exercised by the agent. Next:
+user-run this one probe before claiming the experimental native happy path live.
+Also fix native preflight to retain fresh catalog/policy in the parent host, so a
+completed/failed recheck callback does not empty the UI catalog for the next preview.
+
+P12 scoped live evidence update (2026-11-19): user ran --probe-rechecks gpt-6.1-sol
+at version/hash-matched 732ac47. All seven checks passed; both completed turns had
+one command start/completion and zero command/cwd mismatches. Mark only the
+synthetic native recheck happy path LIVE_VERIFIED, not interactive Terminal timing,
+unknown/crash/network recovery, scoped deletion, all permissions or actual dispatch.
+See VERIFICATION.md for sanitized hashes/scope. No repeat of this probe is needed.
+Next eligible P12 work is explicit reconciliation of known native recheck bindings
+without replay or reusing historical evidence as current; scoped cleanup follows.
+
+
+P12 known-binding recovery increment (2026-11-19): metadata-only recovery now
+reconciles saved native recheck thread/turn identities under the session lock.
+Active turns require explicit STOP and observed terminal status; historical
+completion never restores current evidence or resets correction/recheck counters.
+A metadata-only verifier reuses retained synthetic native threads on an isolated
+local copy. Offline verification is complete; live metadata recovery remains
+unverified because the agent environment did not complete App Server initialize.
+Missing native bindings, scoped cleanup and broader crash/network recovery remain
+open. No new model inference was requested for this increment.
+
+
+P12 scoped recovery evidence update (2026-11-19): user-run metadata-only recovery
+at 65d15f2 passed nativeTerminalObserved, metadataReconciled, historicalResultOnly
+and sourceUnchanged with completed status, zero requested model turns, no native
+deletion and no retained successful copy. Source hashes match; see VERIFICATION.md.
+Known-binding terminal reconciliation is scoped LIVE_VERIFIED. Active interruption,
+missing-binding discovery and broader crash/network recovery remain open. Next
+eligible increment is scoped native-thread cleanup with preview and explicit
+confirmation; no cleanup was performed by this documentation update.

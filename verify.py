@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in live Codex checks: handoff, scratch permissions and session lifecycle."""
 import argparse
+import copy
 import hashlib
 import io
 import json
@@ -13,7 +14,8 @@ import time
 from pathlib import Path
 
 from modelmate import (Connection, ProbeError, inspect, ensure_quota, refresh_quota,
-                       select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS, NativeWorkflowConnection, WorkflowController, diagnostic_code)
+                       select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS, NativeWorkflowConnection, WorkflowController, diagnostic_code,
+                       RecheckRecoveryConnection, validate_recheck_ledger, workflow_saved_evidence)
 
 
 APPROVALS = {
@@ -772,6 +774,230 @@ def probe_workflow_resume(model, timeout):
         print('Durable workflow probe scratch retained for inspection (thread not deleted): ' + str(directory), file=sys.stderr)
 
 
+RECHECK_PROBE_KEYS = ('initialToolEvidence', 'durableResume', 'restoredEvidenceGate',
+                      'consentGate', 'nativeRecheck', 'finalCheckpoint', 'sentinelUnchanged')
+
+
+def probe_rechecks(model, timeout):
+    """At most two synthetic model turns; retain native threads and scratch metadata."""
+    directory = Path(tempfile.mkdtemp(prefix='modelmate-recheck-'))
+    project = directory / 'project'; project.mkdir(mode=0o700)
+    sentinel = project / 'sentinel.txt'; sentinel.write_text('synthetic sentinel\n')
+    connection = child = store = None
+    result = dict.fromkeys(RECHECK_PROBE_KEYS, 'unverified')
+    result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None, scratchRetained=True,
+        runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+        verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        scope='At most two synthetic model turns with native command evidence across reconnect. '
+              'Not crash/network recovery, scoped thread deletion, all permission paths, '
+              'a no-tools boundary, interactive Terminal timing or backend dispatch telemetry.')
+    policy = {role: model for role in ('economy', 'standard', 'strong')}
+    catalog = [{'model': model, 'defaultReasoningEffort': 'low',
+                'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}]
+    spec = {'command': 'printf MM-' + secrets.token_hex(16), 'cwd': str(project)}
+    raw = json.dumps({'version': 1, 'goal': 'Synthetic durable tool recheck verification',
+        'clarifications': [], 'success_criteria': ['Registered synthetic command succeeds'],
+        'steps': [{'kind': 'review', 'objective': 'Run the registered verification command once in its exact cwd. '
+                   'Do not change files, use the network or retry. Summarize the observed result briefly.',
+                   'role': 'standard', 'effort': 'low', 'risk': 'normal', 'reason': 'Explicit synthetic probe',
+                   'checks': [{'kind': 'test', 'criterion': 'Native registered command exits with zero'}]}]})
+    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
+    try:
+        result['phase'] = 'initial_tool_turn'
+        store = SessionStore(project, directory / 'state')
+        controller = WorkflowController(raw, catalog, policy)
+        connection = NativeWorkflowConnection(command, timeout)
+        host = connection.connect(controller, project, policy, store=store);host.timeout = timeout
+        host.configure_check(0, **spec)
+        host({'action': 'next', 'task_id': controller.task_id})
+        status = wait_workflow(connection, timeout)
+        result['firstTurn'] = {'terminalStatus': status, 'commandDiagnostics': dict(host._command_diagnostics)}
+        if status != 'completed':
+            result['initialToolEvidence'] = 'failed';return result
+        host.finish_checks()
+        original = controller.snapshot()
+        if original['steps'][0]['state'] != 'DONE':
+            result['initialToolEvidence'] = 'failed';return result
+        first = original['steps'][0]['evidence'][0]
+        if first['origin'] != 'tool' or first['exit_code'] != 0 or first['result'] != 'pass':
+            result['initialToolEvidence'] = 'failed';return result
+        result['initialToolEvidence'] = 'passed'
+        controller.finish_task({0: [first['id']]})
+        sid, tid = connection.session_id, connection.thread_id
+        work_turn = store.read(sid)['turn_id']
+        connection.close();connection = None
+        check_session_sentinel(project, sentinel)
+
+        result['phase'] = 'reconnect'
+        connection = NativeWorkflowConnection(command, timeout)
+        host = connection.resume(store, sid, project, policy, raw)
+        controller = host.controller;state = controller.snapshot()
+        if (connection.thread_id != tid or state['task_id'] != original['task_id']
+                or state['steps'] != original['steps'] or first['id'] not in state['stale_evidence']
+                or controller._approvals._grants):
+            result['durableResume'] = 'failed';return result
+        result['durableResume'] = 'passed'
+        try:controller.finish_task({0: [first['id']]})
+        except ProbeError as exc:
+            if (str(exc) != 'Saved checks require explicit host revalidation before task completion.'
+                    or first['id'] not in controller.snapshot()['stale_evidence']):
+                result['failureReason'] = 'stale_gate_not_confirmed';return result
+            result['restoredEvidenceGate'] = 'passed'
+        else:
+            result['restoredEvidenceGate'] = 'failed';return result
+
+        fresh = connection.preflight()
+        shell = ChatShell(io.StringIO(), catalog=fresh['catalog'], role_policy=policy,
+                          workflow=controller, workflow_action=host)
+        shell.recheck_backend = connection;shell.recheck_commands = {'1.1': spec}
+        result['phase'] = 'consent_preview'
+        shell.line('/recheck 1.1')
+        pending = shell.recheck_pending
+        if pending is None or shell.recheck is not None or controller.recheck_operations():
+            result['consentGate'] = 'failed';return result
+        result['consentGate'] = 'passed'
+        result['phase'] = 'native_recheck'
+        shell.line('/confirm-recheck ' + pending['token'])
+        child = shell.recheck
+        if child is None:
+            result['failureReason'] = 'recheck_start_unverified'
+            operations = controller.recheck_operations()
+            result['recheckReservations'] = len(operations)
+            if operations:result['recheckPhase'] = operations[-1]['phase']
+            return result
+        child.host.timeout = timeout
+        status = wait_workflow(child, timeout)
+        operation = child.operation()
+        result['recheckTurn'] = {'terminalStatus': status, 'commandDiagnostics': dict(child.host._command_diagnostics)}
+        if (status != 'completed' or operation['status'] != 'completed' or operation['exit_code'] != 0
+                or child.thread_id == tid or first['id'] in controller.snapshot()['stale_evidence']):
+            result['nativeRecheck'] = 'failed';return result
+        result['nativeRecheck'] = 'passed'
+        shell.line('/finish 1=1.1')
+        saved = store.read(sid)
+        operations = controller.recheck_operations()
+        if (saved['workflow']['state'] == 'DONE' and saved['workflow']['steps'] == original['steps']
+                and saved['thread_id'] == tid and saved['turn_id'] == work_turn
+                and len(operations) == 1 and operations[0]['number'] == 1):
+            result['finalCheckpoint'] = 'passed'
+        else:result['finalCheckpoint'] = 'failed'
+        result['phase'] = 'finished'
+        return result
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result['diagnostic'] = diagnostic_code(exc)
+        return result
+    finally:
+        for backend in (child, connection):
+            if backend is None:continue
+            try:
+                host = backend.host
+                if host is not None and host._binding is not None and host._terminal is None:
+                    if backend is child:backend.cancel()
+                    else:host({'action': 'cancel', 'task_id': host.controller.task_id})
+                    wait_workflow(backend, 5)
+            except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                result['stopState'] = 'unknown'
+            finally:backend.close()
+        if store is not None:store.close()
+        try:check_session_sentinel(project, sentinel)
+        except (ProbeError, OSError, UnicodeError):result['sentinelUnchanged'] = 'failed'
+        else:result['sentinelUnchanged'] = 'passed'
+        print('Recheck probe scratch retained (native threads not deleted): ' + str(directory), file=sys.stderr)
+
+
+RECOVERY_PROBE_KEYS = ('nativeTerminalObserved', 'metadataReconciled', 'historicalResultOnly', 'sourceUnchanged')
+
+
+def probe_recheck_recovery(scratch, timeout):
+    """Inspect retained synthetic IDs on a copy, without native start/interrupt/delete requests."""
+    source = target = connection = None
+    directory = original = source_id = None
+    result = dict.fromkeys(RECOVERY_PROBE_KEYS, 'unverified')
+    result.update(modelTurnsRequested=0, nativeThreadsDeleted=False, copyRetained=False,
+        runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+        verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        scope='Metadata-only terminal reconciliation on a copy of a successful synthetic recheck probe. '
+              'Original metadata not written; no native start/interrupt/delete requests. Not active interruption, missing-binding discovery, '
+              'crash/network recovery, current test evidence or scoped deletion proof.')
+    try:
+        result['phase'] = 'source_validation'
+        root = Path(scratch).resolve(strict=True)
+        project = root / 'project'
+        source = SessionStore(project, root / 'state', read_only=True)
+        records = source.list_sessions()
+        if len(records) != 1:
+            raise ProbeError('Expected one retained synthetic probe session.')
+        original = records[0];source_id = original['id']
+        flow = original.get('workflow')
+        if (not isinstance(flow, dict) or original['goal'] != 'Synthetic durable tool recheck verification'
+                or flow['state'] != 'DONE' or len(flow['steps']) != 1 or flow['steps'][0]['state'] != 'DONE'
+                or original['deletion_state'] != 'none'):
+            raise ProbeError('Source is not a completed synthetic recheck probe.')
+        operations = validate_recheck_ledger(flow.get('rechecks', []), workflow_saved_evidence(flow))
+        if len(operations) != 1 or operations[0]['status'] != 'completed' or operations[0]['exit_code'] != 0:
+            raise ProbeError('Source lacks one successful native recheck binding.')
+        check_session_sentinel(project, project / 'sentinel.txt')
+
+        directory = Path(tempfile.mkdtemp(prefix='modelmate-recovery-copy-'))
+        result['copyRetained'] = True
+        target = SessionStore(project, directory / 'state')
+        created = target.create(original['goal'], account_hash=original['account_hash'])
+        staged = copy.deepcopy(original);staged['id'] = created['id']
+        staged.update(state='UNVERIFIED', pause_reason=None, summary='Isolated metadata-only recovery probe copy.')
+        staged['workflow'].update(state='UNVERIFIED', reason='simulated_lost_recheck_terminal')
+        from datetime import datetime, timezone
+        staged['workflow']['rechecks'].append({'kind': 'finish', 'id': operations[0]['id'],
+            'status': 'unknown', 'exit_code': None, 'item_id': None,
+            'timestamp': datetime.now(timezone.utc).isoformat()})
+        with target._lock(created['id']):
+            target.save(staged)
+            result['phase'] = 'native_metadata'
+            connection = RecheckRecoveryConnection(['codex', 'app-server', '--stdio',
+                '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'], timeout)
+            connection.allowed_methods = connection.allowed_methods - {'turn/interrupt'}
+            report = connection.inspect_recheck(target, created['id'])
+            if report['state'] != 'terminal':
+                result['failureReason'] = 'native_terminal_unconfirmed'
+                result['nativeObservationReason'] = report.get('reason', report['state']);return result
+            result['nativeTerminalObserved'] = 'passed'
+            result['observedTerminalStatus'] = report['status']
+            result['phase'] = 'record_recovery'
+            target.record_recheck_recovery(created['id'], report)
+            after = target.read(created['id'])['workflow']
+            if (after['rechecks'][:-1] != staged['workflow']['rechecks']
+                    or after['rechecks'][-1]['kind'] != 'reconcile'
+                    or any(after[key] != flow[key] for key in ('steps', 'history', 'baseline', 'criterion_evidence'))):
+                result['metadataReconciled'] = 'failed';return result
+            result['metadataReconciled'] = 'passed'
+            recovered = validate_recheck_ledger(after['rechecks'], workflow_saved_evidence(after))[0]
+            if after['state'] != 'DONE' and recovered['exit_code'] is None and recovered['item_id'] is None:
+                result['historicalResultOnly'] = 'passed'
+            else:result['historicalResultOnly'] = 'failed'
+        result['phase'] = 'finished'
+        return result
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result['diagnostic'] = diagnostic_code(exc)
+        if connection is not None:result['nativeRpc'] = getattr(connection, 'last_method', None)
+        return result
+    finally:
+        if connection is not None:connection.close()
+        if target is not None:target.close()
+        if source is not None:
+            try:
+                unchanged = original is not None and source_id is not None and source.read(source_id) == original
+                check_session_sentinel(Path(source.project), Path(source.project) / 'sentinel.txt')
+                result['sourceUnchanged'] = 'passed' if unchanged else 'failed'
+            except (ProbeError, OSError, ValueError, TypeError):result['sourceUnchanged'] = 'failed'
+            finally:source.close()
+        if directory is not None:
+            if all(result.get(key) == 'passed' for key in RECOVERY_PROBE_KEYS):
+                try:shutil.rmtree(directory);result['copyRetained'] = False
+                except OSError:pass
+            if result['copyRetained']:
+                print('Recovery probe metadata copy retained (original untouched): ' + str(directory), file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
@@ -784,17 +1010,37 @@ def main():
                         help='up to four synthetic native workflow turns: answers, denial and cancel; local disconnect guard')
     parser.add_argument('--probe-workflow-resume', metavar='MODEL',
                         help='two synthetic durable workflow turns across reconnect; scratch/thread retained')
+    parser.add_argument('--probe-rechecks', metavar='MODEL',
+                        help='at most two synthetic native tool turns across reconnect; scratch/threads retained')
+    parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
+                        help='metadata-only recovery on an isolated copy of a completed --probe-rechecks scratch; no inference')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
+    if args.probe_recheck_recovery:
+        if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
+                                args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks)):
+            parser.error('--probe-recheck-recovery is metadata-only; select it alone without --run-live')
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            parser.error('--timeout must be finite and positive')
+        try:
+            result = probe_recheck_recovery(args.probe_recheck_recovery, args.timeout)
+            print(json.dumps(result, indent=2))
+            return 0 if all(result.get(key) == 'passed' for key in RECOVERY_PROBE_KEYS) else 1
+        except KeyboardInterrupt:
+            return 130
     if not args.run_live:
         parser.print_help()
         return 0
-    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow, args.probe_workflow_resume)) != 1:
-        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL, --probe-workflow-resume MODEL')
+    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks)) != 1:
+        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL, --probe-workflow-resume MODEL, --probe-rechecks MODEL')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_rechecks:
+            result = probe_rechecks(args.probe_rechecks, args.timeout)
+            print(json.dumps(result, indent=2))
+            return 0 if all(result.get(key) == 'passed' for key in RECHECK_PROBE_KEYS) else 1
         if args.probe_workflow_resume:
             result = probe_workflow_resume(args.probe_workflow_resume, args.timeout)
             print(json.dumps(result, indent=2))

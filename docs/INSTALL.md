@@ -82,7 +82,7 @@ sr --live --model gpt-6.1-sol --effort low
 ```
 
 Explicit workflow ใช้ `--execute-workflow` และ START ก่อนเปิด session
-จากนั้น `/next` จึงเริ่ม model turn; โปรดอ่านขั้นตอนใน [README](../README.md)
+จากนั้น `/next` จึงเริ่ม model turn; โปรดอ่านขั้นตอนใน [คู่มือใช้งาน](USAGE.md#explicit-plan-cli-experimental-manual-steps)
 Verifier ต้องรันจาก checkout และต้องมี `--run-live` จึงใช้โควตา
 
 ## อัปเดต
