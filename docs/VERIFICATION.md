@@ -1420,3 +1420,27 @@ No live inference, installed user binary or .bashrc mutation was performed.
 
 Validation: four standalone artifact tests and 353/353 full offline tests passed;
 runtime/doctor/verifier compilation and git diff --check passed. No live inference.
+
+
+### User-supplied successful durable resume probe (2026-11-18)
+
+Scoped LIVE_VERIFIED: the user ran
+`python3 verify.py --run-live --probe-workflow-resume gpt-6.1-sol`
+and supplied all five checks passed: durableResume, contextRecallAfterReconnect,
+restoredEvidenceGate, finalCheckpoint and sentinelUnchanged; phase finished.
+Both turns reported completed, one displayed exact expected answer, zero tool/
+unknown item events, and started item counts userMessage=1, agentMessage=1.
+Requested gpt-6.1-sol/low; reportedModels null; scratchRetained true. No process
+exit code was supplied. This is user-provided evidence, not an independent agent-run
+live test. The actual native scratch path and IDs are not copied into this document.
+
+Runtime SHA-256: `6903eee04032a38ff057a726500dc02a7be54459d587225646dffad17313e780`
+Verifier SHA-256: `1a939a05a226a67852e1f8f2d69f3904a5b6fb377ae55c12182e11093a3a668a`
+Both hashes match local files at commit 0a9c86b. The diagnostics confirm userMessage
+metadata is no longer miscounted as tool activity in this tested version.
+
+Scope remains two synthetic manual-check turns across process reconnect. It does
+not verify tool-check revalidation, crash/network recovery, a no-tools security
+boundary, all permission paths or backend dispatch telemetry. Durable scratch/thread
+remain retained, not deleted. Public tool-check resume and auto routing remain gated.
+Documentation-only evidence update; git diff --check passed. No new agent inference.

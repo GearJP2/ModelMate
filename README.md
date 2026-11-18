@@ -478,7 +478,8 @@ python3 verify.py --run-live --probe-workflow-resume gpt-6.1-sol
 และ durable thread ไว้** พร้อมตำแหน่งทาง stderr เพื่อให้ตรวจย้อนหลัง ไม่ลบ thread
 หรืออ้าง complete erasure หากมี failed/unverified ให้หยุด ไม่รันซ้ำอัตโนมัติ
 ผลนี้ไม่ใช่ proof ของ no-tools security boundary, network/crash recovery ทุกกรณี
-หรือ backend dispatch telemetry; ยังต้องรอ user-run live evidence สำหรับรุ่นนี้
+หรือ backend dispatch telemetry; synthetic manual-check resume มีผล user-run live
+ผ่านแล้วที่ hashes ใน docs/VERIFICATION.md ส่วน tool-check recovery ยังไม่เปิด
 
 สถิติ `attemptsScope=workflow_total` รวมประวัติเดิม ส่วน `elapsedScope=current_cli_session`
 วัด session CLI ปัจจุบันรวมเวลารอผู้ใช้ requestedSelections รวมค่าที่ร้องขอในประวัติ

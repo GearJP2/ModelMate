@@ -214,7 +214,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; durable manual/rubric workflow resume MOCK_VERIFIED; fresh tool rechecks/live recovery pending | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; durable manual/rubric workflow resume scoped user LIVE_VERIFIED; tool rechecks/crash recovery pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
@@ -729,3 +729,11 @@ native data. Four offline tests run only a copied executable from Thai/space pat
 with no repo imports or Codex in PATH. Missing Codex is handled at shared process
 startup with actionable guidance; missing plan files are not mislabeled as Codex
 failures. No dependency, package registry, auto-update or user .bashrc edit added.
+
+
+P12 scoped LIVE_VERIFIED update (2026-11-18): user-supplied corrected resume probe
+passed durable reconnect, context recall, stale-evidence gate, final checkpoint and
+sentinel. Runtime/verifier hashes match local 0a9c86b; diagnostics show userMessage
+metadata and zero observed tool/unknown items. See VERIFICATION.md. This does not
+close tool revalidation, crash/network, no-tools classifier or all permission gates.
+No repeat is needed for this synthetic manual-check happy path.
