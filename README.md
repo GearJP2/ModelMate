@@ -481,3 +481,10 @@ python3 verify.py --run-live --probe-workflow-resume gpt-6.1-sol
 สถิติ `attemptsScope=workflow_total` รวมประวัติเดิม ส่วน `elapsedScope=current_cli_session`
 วัด session CLI ปัจจุบันรวมเวลารอผู้ใช้ requestedSelections รวมค่าที่ร้องขอในประวัติ
 ไม่ใช่จำนวน model calls ใหม่ในรอบ reconnect และ reportedModels/tokenUsage ยังเป็น null
+
+
+Resume verifier แยก userMessage/metadata ออกจาก tool items ตาม schema
+`firstTurn`/`recallTurn` แสดงเฉพาะ counts, terminal status และ exact-answer boolean
+ไม่แสดงคำตอบ/nonce; `failureReason` แยกคำตอบไม่ตรง, turn ไม่จบ, tool activity
+และชนิด item ไม่รู้จัก ถ้าหยุดก่อน reconnect ค่า durableResume เป็น unverified
+ผล sentinel ที่ตรวจได้ยังรายงานแยกตามจริง โดยไม่ต้องรันโมเดลซ้ำเพื่อเช็กไฟล์

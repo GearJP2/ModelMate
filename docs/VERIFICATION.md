@@ -1372,3 +1372,35 @@ Validation: 11 targeted native-resume tests, 6 targeted resume-probe tests and
 347/347 full offline tests passed. Runtime/doctor/verifier compilation, both CLI
 help paths and git diff --check passed. No live inference or real native reconnect
 was run by the agent. Resume command-check revalidation remains unsupported.
+
+
+### Resume probe first-turn false failure and event classification fix (2026-11-18)
+
+User reported phase first_turn with durableResume failed; reconnect was never
+attempted. Supplied runtime SHA-256
+`f3ee087dea800e552937ee9b1e8ba121ee31d2193d518797fc4e5278509fef4c`
+and verifier SHA-256
+`e8871f28ef9040dad46d8d217505c53e532e4228fb1f1537464509d2c200c36c`
+match local c41a9bd files. Targeted retained scratch metadata was inspected read-only:
+active attempt completed, native binding present, no accepted checks. Sentinel was
+unchanged. Only the corresponding native rollout was read; it contains one assistant
+output exactly ACK and no persisted function-call item. No raw rollout, nonce,
+account/thread/session IDs or user scratch path is copied into this document.
+A read-only native-history RPC inspection was unavailable in the agent environment;
+no new turn or inference was requested.
+
+The verifier incorrectly counted every non-agent/reasoning/plan started item as a
+tool, including userMessage. The generated protocol schema identifies userMessage as
+input metadata. A synthetic userMessage start reproduces the failure against the old
+verifier, then passes after explicit metadata/tool classification. Actual tool items
+still stop the prerequisite; future unknown item kinds are unverified and redacted.
+Original V2 started-item counts were not persisted, so the exact event that tripped
+that historical run is not independently recovered from the rollout.
+
+Reports now include firstTurn/recallTurn diagnostics (terminal status, displayed
+message count, exact-answer boolean and allowlisted item counts) and failureReason,
+without answers, IDs or raw tool content. A first-turn prerequisite failure leaves
+durableResume unverified rather than claiming reconnect failed. Sentinel status is
+set to passed when the finally check succeeds, including an early return.
+Eight targeted resume-probe tests and 349/349 full offline tests passed; compilation
+and git diff --check passed. No live rerun; native resume remains not live-verified.

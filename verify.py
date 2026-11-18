@@ -413,6 +413,13 @@ def probe_sessions(model, timeout):
             print('Session probe stopped at ' + phase + '; scratch retained: ' + str(directory), file=sys.stderr)
 
 
+WORKFLOW_METADATA_ITEMS = {'userMessage', 'hookPrompt', 'agentMessage', 'plan', 'reasoning',
+                           'enteredReviewMode', 'exitedReviewMode', 'contextCompaction'}
+WORKFLOW_TOOL_ITEMS = {'commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall',
+                      'collabAgentToolCall', 'subAgentActivity', 'webSearch', 'imageView',
+                      'sleep', 'imageGeneration', 'functionCallOutput'}
+
+
 class WorkflowVerificationConnection(NativeWorkflowConnection):
     """Observe only bound denial replies; never retain native traces or assistant text in reports."""
     def __init__(self, command, timeout):
@@ -420,13 +427,21 @@ class WorkflowVerificationConnection(NativeWorkflowConnection):
         self._requests = {}
         self.declined = 0
         self.tool_events = 0
+        self.unknown_item_events = 0
+        self.started_items = {}
 
     def handle_event(self, message):
         super().handle_event(message)
         if (message.get('method') == 'item/started'
-                and message.get('params', {}).get('threadId') == self.thread_id
-                and message['params'].get('item', {}).get('type') not in ('agentMessage', 'reasoning', 'plan')):
-            self.tool_events += 1
+                and message.get('params', {}).get('threadId') == self.thread_id):
+            item = message['params'].get('item')
+            kind = item.get('type') if isinstance(item, dict) else None
+            if isinstance(kind, str) and kind in WORKFLOW_TOOL_ITEMS:
+                self.tool_events += 1
+            elif not isinstance(kind, str) or kind not in WORKFLOW_METADATA_ITEMS:
+                self.unknown_item_events += 1
+            label = kind if isinstance(kind, str) and kind in WORKFLOW_TOOL_ITEMS | WORKFLOW_METADATA_ITEMS else 'unknown'
+            self.started_items[label] = self.started_items.get(label, 0) + 1
         if 'id' in message and message.get('method') in APPROVALS:
             if len(self._requests) >= 100:
                 raise ProbeError('Too many workflow approval requests.')
@@ -617,6 +632,22 @@ def probe_workflow(model, timeout):
             print('Workflow probe incomplete; inspect Codex before retrying. Scratch retained: ' + str(directory), file=sys.stderr)
 
 
+def workflow_turn_diagnostics(connection, status, answers, expected):
+    return {'terminalStatus': status, 'displayedMessages': len(answers),
+            'exactExpectedAnswer': answers == [expected], 'toolEvents': connection.tool_events,
+            'unknownItemEvents': connection.unknown_item_events, 'startedItems': dict(connection.started_items)}
+
+
+def workflow_turn_failure(connection, status, answers, expected):
+    if status != 'completed':
+        return 'turn_not_completed'
+    if answers != [expected]:
+        return 'displayed_answer_mismatch'
+    if connection.tool_events:
+        return 'tool_activity_observed'
+    return 'unknown_item_type'
+
+
 def probe_workflow_resume(model, timeout):
     """Two synthetic turns across process restart; retain durable scratch for inspection."""
     directory = Path(tempfile.mkdtemp(prefix='modelmate-workflow-resume-'))
@@ -652,8 +683,10 @@ def probe_workflow_resume(model, timeout):
         _, answers = capture_workflow_answers(host)
         host({'action': 'next', 'task_id': controller.task_id})
         status = wait_workflow(connection, timeout)
-        if status != 'completed' or answers != ['ACK'] or connection.tool_events:
-            result['durableResume'] = 'failed'
+        result['firstTurn'] = workflow_turn_diagnostics(connection, status, answers, 'ACK')
+        if (status != 'completed' or answers != ['ACK']
+                or connection.tool_events or connection.unknown_item_events):
+            result['failureReason'] = workflow_turn_failure(connection, status, answers, 'ACK')
             return result
         active = controller.snapshot()['active_attempt']
         first = controller.record_check(active['id'], 0, origin='manual', result='pass',
@@ -679,8 +712,11 @@ def probe_workflow_resume(model, timeout):
         result['phase'] = 'context_recall'
         host({'action': 'next', 'task_id': controller.task_id})
         status = wait_workflow(connection, timeout)
-        if status != 'completed' or answers != [nonce] or connection.tool_events:
-            result['contextRecallAfterReconnect'] = 'failed'
+        result['recallTurn'] = workflow_turn_diagnostics(connection, status, answers, nonce)
+        if (status != 'completed' or answers != [nonce]
+                or connection.tool_events or connection.unknown_item_events):
+            result['contextRecallAfterReconnect'] = 'failed' if status != 'completed' or answers != [nonce] else 'unverified'
+            result['failureReason'] = workflow_turn_failure(connection, status, answers, nonce)
             return result
         result['contextRecallAfterReconnect'] = 'passed'
         active = controller.snapshot()['active_attempt']
@@ -730,6 +766,8 @@ def probe_workflow_resume(model, timeout):
             check_session_sentinel(project, sentinel)
         except (ProbeError, OSError, UnicodeError):
             result['sentinelUnchanged'] = 'failed'
+        else:
+            result['sentinelUnchanged'] = 'passed'
         # shortcut: retain durable scratch/thread until workflow deletion has its own scoped verification.
         print('Durable workflow probe scratch retained for inspection (thread not deleted): ' + str(directory), file=sys.stderr)
 

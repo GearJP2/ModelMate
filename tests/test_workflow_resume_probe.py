@@ -54,6 +54,35 @@ class WorkflowResumeProbeTests(unittest.TestCase):
         self.assertNotIn(str(self.scratch),report)
         self.assertIsNone(result['reportedModels'])
 
+    def test_user_message_item_is_metadata_not_a_tool(self):
+        server=PROBE_SERVER.replace(" if method=='turn/start':\n", " if method=='turn/start':\n  print(json.dumps({'method':'item/started','params':{'threadId':'thread','turnId':str(data['count']),'item':{'id':'input','type':'userMessage'}}}),flush=True)\n",1)
+        with patch(__name__+'.PROBE_SERVER',server):result=self.probe()
+        self.assertEqual(result['durableResume'],'passed',result)
+        self.assertEqual(result['contextRecallAfterReconnect'],'passed',result)
+        self.assertEqual(result['firstTurn']['toolEvents'],0)
+        self.assertEqual(result['firstTurn']['startedItems']['userMessage'],1)
+
+    def test_real_tool_or_unknown_item_stops_before_reconnect_with_safe_diagnostics(self):
+        for kind,reason in (('commandExecution','tool_activity_observed'),('PRIVATE_UNKNOWN_TYPE','unknown_item_type')):
+            with self.subTest(kind=kind):
+                self.trace.unlink(missing_ok=True)
+                Path(str(self.trace)+'.state').unlink(missing_ok=True)
+                # Use fresh private state for each independent synthetic probe.
+                import shutil
+                shutil.rmtree(self.scratch);self.scratch.mkdir()
+                event="  print(json.dumps({'method':'item/started','params':{'threadId':'thread','turnId':str(data['count']),'item':{'id':'tool-item','type':"+repr(kind)+",'command':'PRIVATE_COMMAND','cwd':'/private'}}}),flush=True)\n"
+                server=PROBE_SERVER.replace(" if method=='turn/start':\n", " if method=='turn/start':\n"+event,1)
+                with patch(__name__+'.PROBE_SERVER',server):result=self.probe()
+                self.assertEqual(result['durableResume'],'unverified')
+                self.assertEqual(result['failureReason'],reason)
+                self.assertTrue(result['firstTurn']['exactExpectedAnswer'])
+                self.assertEqual(result['sentinelUnchanged'],'passed')
+                self.assertEqual(sum(r.get('method')=='turn/start' for r in self.records()),1)
+                report=json.dumps(result)
+                self.assertNotIn('PRIVATE_UNKNOWN_TYPE',report)
+                self.assertNotIn('PRIVATE_COMMAND',report)
+                self.assertNotIn('/private',report)
+
     def test_failed_recall_is_not_retried(self):
         result=self.probe('recall')
         self.assertEqual(result['contextRecallAfterReconnect'],'failed')

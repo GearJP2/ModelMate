@@ -713,3 +713,11 @@ thread/turn fallback. --probe-workflow-resume is opt-in, two turns, retaining sc
 and durable thread for inspection. No live gate is passed by these offline tests.
 Next: user-run synthetic resume probe before claiming the native happy path live;
 then add trusted tool recheck recovery under separately verified permissions.
+
+
+P12 verifier classification fix (2026-11-18): user test stopped before reconnect.
+Retained checkpoint/rollout read-only inspection confirms completed ACK and unchanged
+sentinel; schema-based regression shows userMessage metadata was miscounted as a
+tool. Explicit metadata/tool classification and redacted prerequisite diagnostics
+are offline verified; tool/unknown activity still stops. No new inference was run,
+no test state was advanced, and native resume's live gate remains open.
