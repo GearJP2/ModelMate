@@ -1938,3 +1938,12 @@ through the Terminal launcher approved each plan, dispatched exactly one turn
 per arm at the expected requested selection and reached DONE. The offline
 suite passed 479 tests. No subscription turns were requested. The user-run pair
 and its comparison remain pending. See EVALUATION.md for commands and scope.
+
+C1 partial live result: the user-run routed arm requested `gpt-6.2-sol/low`
+once, reached CHECKING, and displayed a response that passed all five cases
+in the local scorer. The user exited before recording the rubric in the
+workflow, so its saved state is PAUSED. The initial baseline session exited
+after approval and before dispatch, with zero attempts. The launcher printed
+runtime SHA-256 `f6446317165ef09446736fbf7598d0ac5cee0b61fb3a98ad204eda55c10b1209`.
+Paired scoring remains pending. Requested model is recorded without reported
+dispatch telemetry or token usage.
