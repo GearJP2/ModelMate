@@ -2490,12 +2490,18 @@ class LiveChatConnection(Connection):
                 yield self.store.read(session_id)
 
     def _deletion_tree(self, record):
-        """Bounded snapshots include archived subagents; never infer an empty subtree."""
-        if record['deletion_state'] == 'remote_deleted' or record['thread_id'] is None:
+        """Preview every persisted root and its server-side cascade."""
+        cleanup = self._recheck_cleanup_receipts(record)
+        if record['deletion_state'] == 'remote_deleted' and (
+                'recheck_cleanup' in record or cleanup is None):
             return []
-        root = self.request('thread/read', {'threadId': record['thread_id'], 'includeTurns': False}).get('thread')
-        self._check_thread(root, record['thread_id'])
-        threads = {root['id']: root}
+        cleanup = cleanup or {}
+        if cleanup.get('pending') is not None:
+            raise ProbeError('Previous native deletion is unconfirmed; inspect Codex before proceeding.')
+        roots = set(session_native_roots(record)) - set(cleanup.get('deleted', []))
+        if not roots:
+            return []
+        threads = {}
         for archived in (False, True):
             cursor, seen = None, set()
             for _ in range(100):
@@ -2516,7 +2522,11 @@ class LiveChatConnection(Connection):
                                 or row.get('parentThreadId') not in (None, parent)):
                             raise ProbeError('Cannot resolve spawned ancestry; nothing deleted.')
                         row = dict(row, parentThreadId=parent)
-                    threads[row['id']] = row
+                    tid = row['id']
+                    if tid in threads and any(threads[tid].get(key) != row.get(key)
+                            for key in ('parentThreadId', 'cwd', 'ephemeral', 'modelProvider', 'status')):
+                        raise ProbeError('Conflicting native thread listings; nothing deleted.')
+                    threads[tid] = row
                 cursor = page.get('nextCursor')
                 if cursor is None:
                     break
@@ -2525,23 +2535,84 @@ class LiveChatConnection(Connection):
                 seen.add(cursor)
             else:
                 raise ProbeError('Deletion scope exceeds scan limit; nothing deleted.')
-        selected = {record['thread_id']}
-        while True:
-            more = {tid for tid, row in threads.items() if row.get('parentThreadId') in selected}
-            if more <= selected:
-                break
-            selected.update(more)
+        children = {}
+        for tid, row in threads.items():
+            parent = row.get('parentThreadId')
+            if parent is not None:
+                if not isinstance(parent, str) or not parent:
+                    raise ProbeError('Invalid native thread ancestry; nothing deleted.')
+                children.setdefault(parent, []).append(tid)
         tree = []
-        for tid in sorted(selected):
-            row = threads[tid]
-            if row.get('status', {}).get('type') not in ('idle', 'notLoaded'):
-                raise ProbeError('Deletion scope contains an active or unknown thread.')
-            tree.append({'thread_id': tid, 'project': row.get('cwd')})
+        for root_id in sorted(roots):
+            root = self.request('thread/read', {'threadId': root_id, 'includeTurns': False}).get('thread')
+            self._check_thread(root, root_id)
+            if record.get('workflow', {}).get('rechecks'):
+                history = self.request('thread/turns/list', {'threadId': root_id, 'limit': 1,
+                    'sortDirection': 'desc', 'itemsView': 'summary'}).get('data')
+                if (not isinstance(history, list) or len(history) > 1
+                        or any(not isinstance(turn, dict)
+                               or turn.get('status') not in ('completed', 'failed', 'interrupted')
+                               for turn in history)):
+                    raise ProbeError('Latest native turn is active or unknown; nothing deleted.')
+            selected = {root_id}
+            pending = [root_id]
+            while pending:
+                for child in children.get(pending.pop(), []):
+                    if child in selected:
+                        raise ProbeError('Cyclic native thread ancestry; nothing deleted.')
+                    selected.add(child)
+                    pending.append(child)
+            if selected & roots != {root_id}:
+                raise ProbeError('Native deletion roots overlap; nothing deleted.')
+            for tid in sorted(selected):
+                row = threads.get(tid, root)
+                self._check_thread(row, tid)
+                tree.append({'thread_id': tid, 'project': row['cwd'], 'delete_root': root_id})
+        selected = {row['thread_id'] for row in tree}
         # Other ModelMate records need their own writer locks and deletion receipts.
         for saved in self.store.list_sessions():
-            if saved['id'] != record['id'] and saved['thread_id'] in selected:
-                raise ProbeError('A descendant has separate ModelMate metadata; delete it first.')
+            if saved['id'] != record['id'] and selected.intersection(session_native_roots(saved, strict=False)):
+                raise ProbeError('A thread in scope belongs to another ModelMate session.')
         return tree
+
+    @staticmethod
+    def _recheck_cleanup_receipts(record):
+        if 'recheck_cleanup' in record:
+            return record['recheck_cleanup']
+        if record.get('workflow', {}).get('rechecks'):
+            # Older versions could acknowledge the work root before local removal refused.
+            deleted = [record['thread_id']] if record['deletion_state'] == 'remote_deleted' else []
+            return {'deleted': deleted, 'pending': None}
+        return None
+
+    def _confirm_session_deletion(self, record, tree):
+        if tree:
+            cleanup = self._recheck_cleanup_receipts(record)
+            record.update(deletion_state='requested', state='PAUSED', pause_reason='deletion_pending')
+            if cleanup is not None:
+                record.update(version=4, recheck_cleanup=cleanup)
+            self.store.save(record)
+            roots = {row['delete_root'] for row in tree}
+            # Keep the work thread available until the independent recheck roots are acknowledged.
+            for root in sorted(roots, key=lambda tid: (tid == record['thread_id'], tid)):
+                if cleanup is not None:
+                    self._fresh_account(require_usage=False)
+                    self._check_identity(record)
+                    current = self._deletion_tree(record)
+                    remaining = roots - set(cleanup['deleted'])
+                    if current != [row for row in tree if row['delete_root'] in remaining]:
+                        raise ProbeError('Deletion scope changed; request a new preview.')
+                    cleanup['pending'] = root
+                    self.store.save(record)
+                self.request('thread/delete', {'threadId': root})
+                if cleanup is not None:
+                    receipt = {'deleted': sorted(cleanup['deleted'] + [root]), 'pending': None}
+                    self.store.save(dict(record, recheck_cleanup=receipt))
+                    record['recheck_cleanup'] = cleanup = receipt
+        if record['deletion_state'] != 'remote_deleted' and (tree or 'recheck_cleanup' in record):
+            self.store.save(dict(record, deletion_state='remote_deleted'))
+            record['deletion_state'] = 'remote_deleted'
+        self.store.remove(record['id'])
 
     def session_command(self, command, values):
         import uuid
@@ -2598,13 +2669,7 @@ class LiveChatConnection(Connection):
                 self._check_identity(record)
                 if record != proposal['record'] or self._deletion_tree(record) != proposal['tree']:
                     raise ProbeError('Deletion scope changed; request a new preview.')
-                if record['deletion_state'] != 'remote_deleted' and record['thread_id'] is not None:
-                    record.update(deletion_state='requested', state='PAUSED', pause_reason='deletion_pending')
-                    self.store.save(record)
-                    self.request('thread/delete', {'threadId': record['thread_id']})
-                    record['deletion_state'] = 'remote_deleted'
-                    self.store.save(record)
-                self.store.remove(sid)
+                self._confirm_session_deletion(record, proposal['tree'])
             self.shell.write('ลบ session ตามขอบเขตที่ยืนยันแล้ว: ' + sid)
             if self.record is not None and sid == self.record['id']:
                 self.record = None
@@ -3311,6 +3376,8 @@ class RecheckRecoveryConnection(Connection):
         if session_id not in store._locked_ids:
             raise ProbeError('Recovery requires the session writer lock.')
         record = store.read(session_id)
+        if record['deletion_state'] != 'none':
+            raise ProbeError('Session deletion is pending; recovery is unavailable.')
         operation = unresolved_recheck(record)
         if operation is None:
             return {'state': 'none'}
@@ -3371,6 +3438,20 @@ SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'cri
                   'pause_reason', 'summary', 'updated_at'}
 SESSION_V2_FIELDS = SESSION_FIELDS | {'account_hash', 'turn_id', 'deletion_state'}
 SESSION_V3_FIELDS = SESSION_V2_FIELDS | {'workflow'}
+SESSION_V4_FIELDS = SESSION_V3_FIELDS | {'recheck_cleanup'}
+
+
+def session_native_roots(record, *, strict=True):
+    flow = record.get('workflow', {})
+    events = flow.get('rechecks', [])
+    bindings = ({op['thread_id'] for op in validate_recheck_ledger(events, workflow_saved_evidence(flow))}
+                if events else set())
+    root = record['thread_id']
+    if strict and (None in bindings or root in bindings
+                   or root is None and (flow or record.get('pause_reason') == 'thread_start_unknown')):
+        raise ProbeError('Native bindings are incomplete or ambiguous; nothing deleted.')
+    return (bindings | {root}) - {None}
+
 SESSION_STATES = {'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'AWAITING_TOOL_APPROVAL',
                   'RUNNING', 'CHECKING', 'DONE', 'UNVERIFIED', 'PAUSED', 'FAILED'}
 
@@ -3446,9 +3527,9 @@ class SessionStore:
         if not isinstance(record, dict):
             raise ProbeError('Invalid session metadata fields; file not modified.')
         version = record.get('version')
-        if type(version) is not int or version not in (1, 2, 3):
+        if type(version) is not int or version not in (1, 2, 3, 4):
             raise ProbeError('Unsupported session version; file not modified.')
-        if set(record) != {1: SESSION_FIELDS, 2: SESSION_V2_FIELDS, 3: SESSION_V3_FIELDS}[version]:
+        if set(record) != {1: SESSION_FIELDS, 2: SESSION_V2_FIELDS, 3: SESSION_V3_FIELDS, 4: SESSION_V4_FIELDS}[version]:
             raise ProbeError('Invalid session metadata fields; file not modified.')
         if version >= 2:
             import re
@@ -3491,7 +3572,7 @@ class SessionStore:
                 raise ValueError('timezone required')
         except (ValueError, TypeError, AttributeError):
             raise ProbeError('Invalid session timestamp.') from None
-        if version == 3:
+        if version >= 3:
             flow = validate_workflow_checkpoint(record['workflow'])
             plan = validate_plan(flow['plan'])
             step = flow['steps'][flow['step_index']] if flow['step_index'] < len(flow['steps']) else None
@@ -3502,6 +3583,19 @@ class SessionStore:
                 mirror.update(state=flow['state'], pause_reason=flow['reason'] if flow['state'] == 'PAUSED' else None)
             if flow['account_hash'] != record['account_hash'] or any(record[k] != v for k, v in mirror.items()):
                 raise ProbeError('Session metadata disagrees with its workflow checkpoint.')
+        if version == 4:
+            cleanup = record['recheck_cleanup']
+            roots = session_native_roots(record)
+            if (not flow.get('rechecks') or record['deletion_state'] == 'none'
+                    or not isinstance(cleanup, dict) or set(cleanup) != {'deleted', 'pending'}
+                    or not isinstance(cleanup['deleted'], list)
+                    or any(not isinstance(tid, str) or tid not in roots for tid in cleanup['deleted'])
+                    or cleanup['deleted'] != sorted(set(cleanup['deleted']))
+                    or (cleanup['pending'] is not None and (
+                        not isinstance(cleanup['pending'], str)
+                        or cleanup['pending'] not in roots - set(cleanup['deleted'])))
+                    or (record['deletion_state'] == 'remote_deleted' and set(cleanup['deleted']) != roots)):
+                raise ProbeError('Invalid scoped native deletion receipts.')
         return record
 
     def _open_file(self, name, flags):
@@ -3707,7 +3801,8 @@ class SessionStore:
         if session_id not in self._locked_ids:
             raise ProbeError('Deleting metadata requires the session lock.')
         record = self.read(session_id)
-        if record.get('workflow', {}).get('rechecks'):
+        if (record.get('workflow', {}).get('rechecks')
+                and (record['version'] != 4 or record['deletion_state'] != 'remote_deleted')):
             raise ProbeError('Retained native recheck threads require scoped cleanup; metadata was not removed.')
         os.unlink(name, dir_fd=self._fd)
         os.fsync(self._fd)
@@ -3890,7 +3985,7 @@ def read_workflow_confirmation(input_stream, write, *, confirmation='START', can
             continue
         if value.startswith(b'\x1b[200~') and value.endswith(b'\x1b[201~'):
             value = value[6:-6].strip()
-        if value == confirmation.encode('ascii'):
+        if ended and value == confirmation.encode('ascii'):
             return True
         if value and value != cancellation.encode('ascii'):
             details = {'bytes': len(line), 'ascii': line.isascii(),
@@ -4049,12 +4144,57 @@ def run_recheck_recovery(session_id, input_stream, output):
             connection.close()
 
 
+def run_session_cleanup(session_id, input_stream, output):
+    """Preview and delete one account-bound session without opening a chat."""
+    import uuid
+
+    def write(text):
+        output.write(terminal_text(text) + '\n')
+        output.flush()
+
+    project = os.getcwd()
+    with SessionStore(project, read_only=True) as reader:
+        reader.read(session_id)
+    with SessionStore(project) as store, store._lock(session_id):
+        record = store.read(session_id)
+        backend = LiveChatConnection(['codex', 'app-server', '--stdio',
+            '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
+        try:
+            backend.allowed_methods = {'initialize', 'account/read', 'account/rateLimits/read',
+                                       'thread/read', 'thread/turns/list', 'thread/list', 'thread/delete'}
+            backend.store, backend.cwd = store, store.project
+            backend.request('initialize', {'clientInfo': {'name': 'modelmate_session_cleanup', 'version': '0.1.0'}})
+            backend.send({'method': 'initialized'})
+            backend._fresh_account(require_usage=False)
+            backend._check_identity(record)
+            tree = backend._deletion_tree(record)
+            write(json.dumps({'delete_session': session_id, 'title': record['title'],
+                              'threads_including_descendants': tree,
+                              'work_files_deleted': False}, ensure_ascii=True))
+            token = 'DELETE ' + uuid.uuid4().hex
+            write('พิมพ์ ' + token + ' แล้ว Enter เพื่อยืนยันการลบ หรือ CANCEL เพื่อยกเลิก')
+            if not read_workflow_confirmation(input_stream, write, confirmation=token):
+                write('ยกเลิกการลบ session')
+                return 2
+            backend._fresh_account(require_usage=False)
+            backend._check_identity(record)
+            if record != store.read(session_id) or tree != backend._deletion_tree(record):
+                raise ProbeError('Deletion scope changed; request a new preview.')
+            backend._confirm_session_deletion(record, tree)
+            write('ลบ session ตามขอบเขตที่ยืนยันแล้ว: ' + session_id)
+            return 0
+        finally:
+            backend.close()
+
+
 def main():
     import argparse
     import sys
     parser = argparse.ArgumentParser(description='ModelMate Terminal chat: offline by default; --live uses ChatGPT subscription quota.')
     parser.add_argument('prompt', nargs='?', help='initial task text')
     modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--delete-session', metavar='SESSION_ID',
+                       help='preview and confirm scoped native thread and metadata deletion; no model turns')
     modes.add_argument('--recover-recheck', metavar='SESSION_ID',
                        help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
@@ -4077,6 +4217,17 @@ def main():
         parser.error('--experimental-rechecks requires --resume-workflow')
     if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
+    if args.delete_session:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Session deletion does not accept prompt/model/effort overrides')
+        try:
+            return run_session_cleanup(args.delete_session, sys.stdin, sys.stdout)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+            print('ModelMate cleanup: ' + terminal_text(message), file=sys.stderr)
+            return 1
     if args.recover_recheck:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Recheck recovery does not accept prompt/model/effort overrides')

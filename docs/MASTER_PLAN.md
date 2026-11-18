@@ -214,7 +214,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual resume and synthetic tool recheck happy paths scoped LIVE_VERIFIED; interactive timing/unknown recovery/scoped cleanup pending | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual resume and synthetic tool recheck happy paths scoped LIVE_VERIFIED; scoped cleanup MOCK_VERIFIED; active interruption and cleanup live gates pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
@@ -885,3 +885,9 @@ Known-binding terminal reconciliation is scoped LIVE_VERIFIED. Active interrupti
 missing-binding discovery and broader crash/network recovery remain open. Next
 eligible increment is scoped native-thread cleanup with preview and explicit
 confirmation; no cleanup was performed by this documentation update.
+
+P12 scoped cleanup implementation update (2026-11-19): `--delete-session SESSION_ID`
+and existing session deletion cover ledger-bound recheck roots, work root and
+previewed descendants. Explicit confirmation, per-root receipts and uncertain
+outcome retention are MOCK_VERIFIED. Active interruption and scoped native deletion
+still require evidence from a normal authenticated Terminal. See VERIFICATION.md.

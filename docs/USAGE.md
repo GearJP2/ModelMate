@@ -238,6 +238,25 @@ thread/descendants ก่อน `/confirm-delete TOKEN` ยืนยันคร
 จะเก็บกวาดเฉพาะ metadata โดยไม่ส่ง remote delete ซ้ำ
 หลังเปิดโปรแกรมใหม่ ใช้ live chat ใหม่แล้ว `/delete ID` จัดการรายการที่ลบค้างได้
 
+สำหรับ manual chat หรือ workflow ที่บันทึกไว้ รันจากโปรเจกต์เดิม:
+
+```bash
+python3 modelmate.py --delete-session SESSION_ID
+```
+
+คำสั่งนี้ใช้ App Server อ่านข้อมูลโดยไม่เปิดแชตหรือเริ่ม model turn
+สำหรับ workflow ที่มี rechecks รายการ preview แสดง work thread, native recheck
+threads ที่ผูกใน ledger และ descendants ของแต่ละ root รวม archived threads
+พิมพ์ `DELETE TOKEN` ตามที่แสดงแล้วกด Enter หรือใช้ `CANCEL` เพื่อยกเลิก
+หากพบ thread ที่ active, ต่างโปรเจกต์, มี session อื่นถือ binding เดียวกัน
+หรือ binding ไม่ครบ ระบบจะพักก่อนลบ สำหรับ recheck ที่กำลังทำงานและมี binding ครบ
+ใช้ `--recover-recheck SESSION_ID` และยืนยัน `STOP` แยกจากการลบ
+
+โปรแกรมบันทึกผลตอบรับแยกแต่ละ root และลบ metadata เมื่อทุก root ได้รับการยืนยัน
+หากขอบเขตเปลี่ยนหลังลบได้บางส่วน ให้ขอ preview ใหม่สำหรับส่วนที่เหลือ
+หากผล RPC ลบ recheck หรือ work root ใน workflow ดังกล่าวไม่ชัดเจน
+ระบบจะเก็บ checkpoint และให้ตรวจสถานะใน Codex ก่อนดำเนินการต่อ
+
 ข้อจำกัด: scan ขอบเขตลบแบบมีเพดาน รวม archived subagents; หากอ่านไม่ครบจะไม่ลบ
 หาก descendant มี ModelMate metadata แยก ต้องลบ descendant นั้นก่อน
 protocol ไม่มี delete แบบล็อกตาม scope ที่ preview จึงไม่รับประกันกรณี client อื่น

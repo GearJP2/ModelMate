@@ -1851,3 +1851,30 @@ It does not verify active interruption, missing-binding discovery, crash/network
 recovery, current command evidence or scoped deletion. Recovery is not thereby
 release-ready. Next eligible task: scoped native-thread cleanup with preview and
 explicit confirmation. Documentation-only update; git diff --check passed.
+
+## P12 scoped native cleanup — MOCK_VERIFIED (2026-11-19)
+
+`python3 modelmate.py --delete-session SESSION_ID` previews one local session's
+work root, ledger-bound recheck roots and spawned descendants across both native
+listings. It opens no model turn. The existing chat deletion uses the same scope
+and receipts. Exact confirmation with Enter is required. A fresh snapshot and
+account check precede deletion; known active, foreign or ambiguously bound
+threads block it. Acknowledged roots and any uncertain in-flight root are kept
+in schema-v4 cleanup metadata until cleanup can be finalized. Legacy work-root
+receipts are preserved. Work files are outside the deletion operation.
+
+Targeted `test_recheck_recovery.py` passed 26 tests. Full offline discovery passed
+475 tests, including independent roots, archived descendants, EOF, exact
+confirmation, uncertain partial success, older receipts, and no inference
+requests. All four Python entry points compile and `git diff --check` passed.
+
+Installed Codex CLI `0.170.0` exited before answering a metadata-only
+`initialize` attempt in the agent environment. No native deletion or inference
+was attempted. Scoped deletion and active interruption remain live verification
+gates. For cleanup, use the original successful synthetic recheck scratch in a
+normal authenticated Terminal. Set `XDG_STATE_HOME` to its `state` directory,
+run from its `project` directory, and use `--sessions` to get the local ID before
+running `--delete-session SESSION_ID`. Review the preview before confirming.
+For active interruption, use the existing opt-in `--probe-workflow MODEL`
+verifier and look for `cancel: passed` from an interrupted terminal turn.
+The probe can use up to four subscription turns.

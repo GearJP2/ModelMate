@@ -2,7 +2,7 @@
 
 Status: ledger, native transport, opt-in CLI and verifier implemented/offline-tested;
 synthetic native recheck happy path user LIVE_VERIFIED on 2026-11-19 at 732ac47.
-Known-binding terminal recovery is scoped live verified; active interruption, interactive Terminal timing and scoped deletion remain pending.
+Known-binding terminal recovery is scoped live verified; scoped deletion is mock verified. Live deletion, active interruption and interactive Terminal timing remain pending.
 User authorized this direction on
 2026-11-18 after the standalone policy probe produced negative evidence.
 Decision models/classifiers are outside the current scope.
@@ -133,8 +133,9 @@ START opens the native session but does not approve a verification turn.
 Only known saved test/lint evidence can be rechecked. Completed active work with
 missing/unknown tool checks is refused. Unresolved recheck operations block native
 resume; --show-workflow remains available offline and displays retained thread/turn
-IDs. Known-binding reconciliation without replay is available below; scoped native-thread deletion is not yet implemented. Local metadata removal refuses records containing rechecks, preserving
-those native identities for later inspection/cleanup. Threads are retained even
+IDs. Known-binding reconciliation without replay is available below. Use
+`--delete-session SESSION_ID` to preview and confirm the work root, recorded recheck
+roots and their descendants. Local metadata removal requires a receipt for each root. Threads are retained even
 after successful checks; there is no service-side erasure claim.
 
 ## Opt-in live verifier
@@ -182,4 +183,4 @@ User Terminal evidence at source 65d15f2 passed all four metadata recovery check
 with completed native status and zero requested model turns. The source remained
 unchanged and only the owned successful metadata copy was removed. See
 [VERIFICATION.md](VERIFICATION.md) for exact hashes and limits. Active-stop recovery
-and missing-binding discovery remain unverified; scoped deletion remains pending.
+and missing-binding discovery remain unverified. Scoped deletion has offline coverage.

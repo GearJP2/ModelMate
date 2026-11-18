@@ -172,7 +172,9 @@ python3 modelmate.py --recover-recheck SESSION_ID
 
 ไม่เริ่ม model turn ใหม่ หากยัง active จะถาม `STOP` / `PAUSE` ก่อนดำเนินการ
 สถานะที่จบแล้วเป็นประวัติ ไม่ทำให้ผลตรวจเก่ากลายเป็นหลักฐานปัจจุบัน
-การลบ native threads ของ workflow ที่มี rechecks แบบ scoped ยังไม่รองรับ
+ใช้ `python3 modelmate.py --delete-session SESSION_ID` จากโปรเจกต์เดิมเพื่อดูขอบเขต
+work thread, recheck threads และ descendants แล้วพิมพ์รหัสยืนยันที่แสดง
+คำสั่งนี้ไม่เริ่ม model turn; เส้นทางลบ recheck ผ่านการทดสอบจำลองแล้ว
 ดู [Native recheck contract](docs/NATIVE_RECHECK.md)
 
 ## Permissions & data
