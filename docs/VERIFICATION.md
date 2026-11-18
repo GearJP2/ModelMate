@@ -1928,3 +1928,13 @@ sentinel check passed. The follow-up checkout was `1fa2ce8`. The user transcript
 did not include a runtime checksum or an independent post-delete native listing.
 This evidence covers the successful two-root scope. Active rejection, archived
 descendants and uncertain partial deletion remain offline-tested in this path.
+
+### C1 paired routing pilot — MOCK_VERIFIED (2026-11-19)
+
+The two offline previews resolved their respective standard/low and strong/low
+bindings without creating session state. Five fixed boundary cases distinguish
+the accepted answer from the other three candidates. Synthetic App Server runs
+through the Terminal launcher approved each plan, dispatched exactly one turn
+per arm at the expected requested selection and reached DONE. The offline
+suite passed 479 tests. No subscription turns were requested. The user-run pair
+and its comparison remain pending. See EVALUATION.md for commands and scope.

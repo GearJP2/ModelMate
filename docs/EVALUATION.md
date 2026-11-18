@@ -34,3 +34,48 @@ All critical checks must pass and routed quality must meet the baseline before
 claiming equivalent quality. Report any observed consumption difference with
 its denominator, paired sample count and scope. The table defines planned
 cases. No paired live results or quota savings have been established.
+
+## Run the C1 pilot
+
+`examples/routing-pilot.py` prepares a frozen runtime and two separate scratch
+projects with separate session state. Both arms choose a repair for the same
+synthetic off-by-one bug, with the same one-letter response format. The scorer
+runs five fixed cases against trusted candidate expressions. No model-generated
+code is executed. The scratch copies contain the plans and the runtime. This
+pilot tests standard/low versus a distinct user-bound strong model at low
+effort. It uses rubric evidence and does not exercise economy routing, worktree
+writes, or quota savings.
+
+From the checkout, list model IDs that expose low effort in your account:
+
+```bash
+python3 modelmate.py --doctor | python3 -c '
+import json, sys
+for model in json.load(sys.stdin)["models"]:
+    if any(e.get("reasoningEffort") == "low" for e in model["supportedReasoningEfforts"]):
+        print(model["model"])
+'
+```
+
+Choose and keep the same two bindings across the pair. From the checkout:
+
+```bash
+PILOT="$PWD/examples/routing-pilot.py"
+PAIR="$(python3 "$PILOT" prepare)"
+read -r -p 'Standard model ID: ' STANDARD
+read -r -p 'Strong model ID: ' STRONG
+python3 "$PILOT" run "$PAIR" routed --standard "$STANDARD" --strong "$STRONG"
+python3 "$PILOT" run "$PAIR" baseline --standard "$STANDARD" --strong "$STRONG"
+```
+
+The two previews are offline. For the live pilot, append `--execute` to the
+routed command, then to the baseline command after finishing the routed arm.
+In each arm enter `START`, then `/next`, approve that arm's printed token with
+`/approve TOKEN`, and enter `/next` once more. This requests one subscription
+turn per arm. After the answer appears and the workflow reaches `CHECKING`, run
+`python3 "$PILOT" score LETTER` in another Terminal using the actual answer and
+the same script path. Enter `/verify 1 pass` if all five cases passed, or
+`/verify 1 fail` if a case failed. Then enter `/check`. On a passing run finish
+with `/finish 1=1.1`. Use `/exit` to print the workflow statistics. Record a
+failure, missing response or permission pause as observed, without replaying
+the turn. Record both requested selections, score results and exit statistics.
