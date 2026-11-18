@@ -40,7 +40,7 @@
 | Tool recheck หลัง resume | ต้องเปิด experimental opt-in และยืนยันแยกก่อนใช้โควตาเพิ่ม |
 | Recovery ของ recheck ที่มี native IDs ครบ | มีผลทดสอบสดการอ่าน terminal status; หลักฐานเดิมยังเป็นประวัติ |
 | สามโหมด `auto` / `ask_to_escalate` / `approve_plan` | มี policy สำหรับ explicit workflow; ทุกโหมดยังต้องสั่ง `/next` |
-| เลือกโมเดลอัตโนมัติจาก prompt | ยังไม่เปิด; ไม่มี decision model แยก |
+| ตัวช่วยเลือกโมเดลรายขั้น | `--suggest-models` เสนอ role และ effort จาก risk และ checks ในแผน; ยังรอผลเปรียบเทียบงานจริง |
 | ค้นเว็บพร้อมขออนุญาตใช้ข้อมูลส่วนตัว | ยังไม่เปิด |
 
 รายละเอียดสถานะและงานที่เหลืออยู่ใน [Master plan](docs/MASTER_PLAN.md)

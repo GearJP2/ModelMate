@@ -1654,6 +1654,7 @@ class ChatShell:
         self.exit_code = 0
         self.workflow = workflow
         self.workflow_action = workflow_action
+        self.started_at = time.monotonic()
         self._workflow_check_attempt = None
         self.recheck_backend = self.recheck = self.recheck_pending = None
         self.recheck_commands = {}
@@ -1898,6 +1899,27 @@ class ChatShell:
                                                        pending['selection'], self.event)
         self.show_workflow()
 
+    def show_workflow_status(self, state):
+        stats = workflow_statistics(self.workflow, self.started_at)
+        done = sum(step['state'] == 'DONE' for step in state['steps'])
+        reason = ' · ' + state['reason'] if state['reason'] else ''
+        self.write(state['state'] + reason + ' · ' + state['mode']
+                   + ' · เสร็จ ' + str(done) + '/' + str(len(state['steps'])) + ' ขั้น')
+        self.write(f"เวลาในแชต {stats['elapsedSeconds']:.1f} วินาทีรวมเวลารอ"
+                   f" · {stats['attempts']} attempts · {stats['recheckAttempts']} rechecks")
+        if state['active_attempt'] is not None:
+            selection = state['active_attempt']['selection']
+            self.write('โมเดลที่ร้องขอ: ' + selection['model'] + '/' + selection['effort'])
+        operations = self.workflow.recheck_operations()
+        if operations:
+            status = 'unknown' if self.workflow._recheck_fault else operations[-1]['status']
+            self.write('Recheck: ' + status)
+        if self.recheck_active():
+            self.write('ใช้ /cancel เพื่อขอหยุด recheck')
+        elif state['state'] == 'READY' and self.workflow_action is not None:
+            self.write('ใช้ /next เพื่อเริ่มขั้นปัจจุบัน')
+        self.write('ใช้ /workflow เพื่อดูแผน เกณฑ์ตรวจ และตัวเลือกที่รอการตอบ')
+
     def workflow_command(self, cmd, values):
         state = self.show_workflow(render=False)
         try:
@@ -1909,6 +1931,9 @@ class ChatShell:
             if cmd in ('/workflow', '/status'):
                 if values:
                     raise ProbeError('Use /workflow or /status without arguments.')
+                if cmd == '/status':
+                    self.show_workflow_status(state)
+                    return
             elif cmd in ('/next', '/check'):
                 if values:
                     raise ProbeError('Use ' + cmd + ' without arguments.')

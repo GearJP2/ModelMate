@@ -421,6 +421,9 @@ docs/VERIFICATION.md, including its version limitations. Classifier/auto routing
 broader permission paths, private-web isolation and broader recovery remain gated.
 
 
+ระหว่างทำงาน `/status` แสดงสถานะ จำนวนขั้นที่เสร็จ จำนวน attempts และ rechecks
+พร้อมเวลาในแชตรวมเวลารอ ใช้ `/workflow` เมื่อต้องการดูแผน เกณฑ์ตรวจ หรือรหัสตอบอนุมัติ
+
 ตอนจบ explicit workflow session จะแสดง `สถิติ workflow` เป็น JSON: elapsedSeconds
 รวมเวลารอผู้ใช้, จำนวน attempts, requestedSelections และ state ส่วน reportedModels
 และ tokenUsage เป็น null เมื่อยังไม่มีข้อมูล ไม่ได้คำนวณค่าใช้จ่ายหรืออ้างว่าประหยัด

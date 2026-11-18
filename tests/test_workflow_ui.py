@@ -55,6 +55,19 @@ class WorkflowUITests(unittest.TestCase):
         self.assertEqual(actions, [])
         self.assertEqual(c.snapshot()['steps'][0]['attempts'], 0)
 
+    def test_status_summarizes_chat_time_and_counts_without_rendering_full_plan(self):
+        shell, controller, output, actions = self.shell()
+        output.seek(0)
+        output.truncate()
+        shell.line('/status')
+        summary = output.getvalue()
+        self.assertIn('READY · ask_to_escalate · เสร็จ 0/1 ขั้น', summary)
+        self.assertIn('วินาทีรวมเวลารอ · 0 attempts · 0 rechecks', summary)
+        self.assertIn('/next', summary)
+        self.assertNotIn(PLAN['success_criteria'][0], summary)
+        self.assertEqual(actions, [])
+        self.assertEqual(controller.snapshot()['steps'][0]['attempts'], 0)
+
     def test_missing_host_blocks_next_without_consuming_budget(self):
         shell, c, out, _ = self.shell(connected=False)
         shell.line('/next')
