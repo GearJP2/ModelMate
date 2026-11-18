@@ -337,8 +337,8 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 เพิ่มสิทธิ์จะถูก decline/pause ตาม native transport รุ่นนี้; read-only/on-request
 ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
 
-รุ่นนี้รับแผนที่ไม่มี clarifications และใช้ manual/rubric checks เท่านั้นในการ
-execute; test/lint/source ต้องมี trusted checker เพิ่มก่อนจึงจะเปิดได้
+รุ่นนี้รับแผนที่ไม่มี clarifications, manual/rubric checks และ test/lint ที่ผูก
+คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ยังไม่เปิด
 checkpoint บันทึกอัตโนมัติแยกโปรเจกต์ ดูด้วย `--sessions`/`--show-workflow ID`
 แต่ native workflow ยังเป็น ephemeral thread และยัง resume ไม่ได้ ห้ามใช้
 manual chat เพื่อข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
@@ -351,3 +351,46 @@ paths, private-web isolation and native recovery remain gated.
 ตอนจบ explicit workflow session จะแสดง `สถิติ workflow` เป็น JSON: elapsedSeconds
 รวมเวลารอผู้ใช้, จำนวน attempts, requestedSelections และ state ส่วน reportedModels
 และ tokenUsage เป็น null เมื่อยังไม่มีข้อมูล ไม่ได้คำนวณค่าใช้จ่ายหรืออ้างว่าประหยัด
+
+
+### ผูก test/lint กับคำสั่งที่ผู้ใช้ยืนยัน
+
+แยกคำสั่งจากแผนโมเดลเป็นไฟล์ JSON version 1: `checks` แต่ละรายการต้องมี
+`step`, `check` (เลขเริ่มที่ 1), `command`, `cwd` เท่านั้น ดูตัวอย่าง
+`examples/check-model-policy.commands.json` cwd สัมพัทธ์อ้างอิงโฟลเดอร์โปรเจกต์
+ปัจจุบัน และถูก resolve เป็น absolute path ก่อนแสดงยืนยัน ไฟล์จำกัด 64 KiB
+ห้ามผูก check ซ้ำ หรือใช้ command/cwd เดียวกันซ้ำหลาย checks ภายในขั้นเดียว
+
+ดู preview แบบ offline ก่อน:
+
+```bash
+python3 modelmate.py --workflow examples/check-model-policy.json --check-commands examples/check-model-policy.commands.json --role-model standard=gpt-6.1-sol
+```
+
+เพิ่ม `--execute-workflow` เพื่อเริ่มแบบ opt-in แล้วตรวจคำสั่ง/cwd ก่อนพิมพ์ START
+ทุก test/lint ต้องมี binding ครบก่อนเปิด backend รูปแบบ preview ใช้ JSON escapes
+เพื่อแสดง control/bidi characters อย่างชัดเจน ไม่แอบตัดออกจาก command ที่ยืนยัน
+
+Native Codex จะได้รับคำสั่งตรวจของขั้นปัจจุบัน ให้รันหลังทำงานในขั้นนั้นเพียงครั้งเดียว
+ภายใน model turn เดียวกัน จากนั้นรอ terminal event แล้วใช้:
+
+```text
+/check
+/finish 1=1.1
+/exit
+```
+
+ตัวอย่างนี้ไม่ต้อง `/verify`: exit code มาจาก native command start/completion
+ที่ตรง thread/turn/item/command/cwd จริง รหัส 0 คือผ่าน รหัสอื่นคือไม่ผ่าน
+missing/declined/unknown หรือคำสั่งเปลี่ยนรูปแบบเป็น UNVERIFIED; ข้อความโมเดล
+ว่า tests passed ไม่ใช่หลักฐาน และ `/verify` ไม่รับ test/lint โดยตรง
+
+ไม่มี local shell fallback, command/exec ทางลัด หรือการเพิ่ม sandbox permissions
+การยืนยัน START ไม่ใช่ tool approval; native read-only/on-request ยังคงบังคับ
+คำสั่งที่ sandbox อนุญาตอาจรันเองได้ ส่วน approval requests จะถูก decline/pause
+คำสั่งที่รันซ้ำหลาย item ภายใน attempt ไม่ถูกนับเป็น hidden correction
+check failure ใช้ initial attempt + corrections 2 รอบเหมือนเดิม แล้วต้องหยุดถาม
+
+นี่คือการผูกผลคำสั่งใน turn นั้น ไม่ใช่การรับประกันไฟล์ทั้งหมดไม่เปลี่ยนภายหลัง
+bindings ไม่ถูก persist สำหรับ native resume ซึ่งยังไม่เปิด; metadata เก็บผล/IDs
+ตามเดิมโดยไม่คัดลอก stdout/stderr การเชื่อมคำสั่งรุ่นนี้ยังรอ user-run live test

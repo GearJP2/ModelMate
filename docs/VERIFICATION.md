@@ -1206,3 +1206,21 @@ turn is required to reproduce or regression-test these UI changes.
 Validation: 10 targeted workflow-entry tests and 308/308 full offline tests
 passed; runtime/doctor/verifier compilation and git diff --check passed.
 No additional live inference was run.
+
+
+### User command/cwd test/lint bindings — offline increment (2026-11-18)
+
+Ten new test methods cover config schema/size/duplicates/indices/cwd validation,
+no execution while loading, required bindings before backend startup, CLI argument
+wiring, exact command propagation into turn/start, accepted tool evidence saved to
+checkpoint, failure budget exhaustion, successful unrelated commands remaining
+UNVERIFIED, and registration for later test/lint steps. Native observations are
+produced by fake App Server subprocesses, not actual command execution/inference.
+User's earlier full-suite result (308 tests, OK confirmed in follow-up) supports
+the prior runtime only; it does not verify this command-binding integration live.
+No new live inference has been run. Runtime permissions remain read-only/on-request.
+
+Validation: ten targeted command-binding tests and 318/318 full offline tests
+passed. The sample command was also run locally: test_models.py 12/12 passed.
+Runtime/doctor/verifier compilation, offline sample preview and git diff --check
+passed. No new live inference or native command-tool live test was run.

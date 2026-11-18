@@ -643,3 +643,16 @@ answer/manual check/step acceptance and stats, but not final DONE (literal examp
 placeholder was rejected). Added short explicit evidence refs and removed duplicate
 host state rendering. Offline tests verify final coverage and ref rejection; the
 transcript does not establish native recovery or complete workflow live readiness.
+
+
+### P10 explicit native command-check bindings (2026-11-18)
+
+MOCK_VERIFIED: --check-commands loads separate user-owned bounded JSON bindings
+for test/lint. Exact command/cwd are displayed before START; every test/lint must
+be configured before backend startup. Future steps are registered by controller
+step IDs; dispatch includes only current-step commands. Existing exact native
+thread/turn/item/start/completion checks supply tool evidence. No local shell,
+native command/exec bypass, model-based pass claims or manual test/lint override.
+Known failures retain correction budget; missing/mismatched results UNVERIFIED.
+No classifier, native recovery or expanded permission gate is enabled. Next live
+check uses the small test_models.py sample, not the full suite inside a model turn.

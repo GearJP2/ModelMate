@@ -997,12 +997,15 @@ class WorkflowHost:
                 raise ProbeError('Invalid executor identity; outcome unknown.')
         return copy.deepcopy(binding)
 
-    def configure_check(self, check_index, *, command, cwd):
+    def configure_check(self, check_index, *, command, cwd, step_index=None):
         """Register a host-approved check specification; this never authorizes or executes it."""
         state = self.controller.snapshot()
         if state['active_attempt'] is not None or state['step_index'] >= len(state['steps']):
             raise ProbeError('Configure checks before an attempt.')
-        checks = state['plan']['steps'][state['step_index']]['checks']
+        target = state['step_index'] if step_index is None else step_index
+        if type(target) is not int or not state['step_index'] <= target < len(state['steps']):
+            raise ProbeError('Check must belong to the current or a future step.')
+        checks = state['plan']['steps'][target]['checks']
         if (type(check_index) is not int or not 0 <= check_index < len(checks)
                 or checks[check_index]['kind'] not in ('test', 'lint')):
             raise ProbeError('Only declared test/lint checks can bind command observations.')
@@ -1010,7 +1013,7 @@ class WorkflowHost:
         _plan_text(cwd)
         if not os.path.isabs(cwd):
             raise ProbeError('Check working directory must be absolute.')
-        key = (state['steps'][state['step_index']]['id'], check_index)
+        key = (state['steps'][target]['id'], check_index)
         self._specs[key] = {'command': command, 'cwd': cwd}
 
     def _request_interrupt(self):
@@ -2498,9 +2501,13 @@ class NativeWorkflowConnection(Connection):
             raise ProbeError('Workflow delegation is disabled.')
         self._sent_attempts.add(active['id'])
         self._displayed.clear()
+        verification = [dict(check=index + 1, **spec) for (step_id, index), spec in sorted(self.host._specs.items())
+                        if step_id == active['step_id']]
         result = self.request('turn/start', {'threadId': self.thread_id, 'model': selection['model'],
             'effort': selection['effort'], 'input': [{'type': 'text', 'text': json.dumps({
-                'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step']}, ensure_ascii=False)}]})
+                'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step'],
+                'verification_commands': verification,
+                'verification_instructions': 'After completing the step, use the native command tool to run each verification command exactly once in its specified cwd. Do not retry commands within this attempt. If execution is unavailable, report that limitation; do not claim a check passed.'}, ensure_ascii=False)}]})
         turn = result.get('turn')
         if not isinstance(turn, dict) or not isinstance(turn.get('id'), str) or not turn['id']:
             raise ProbeError('Missing workflow turn identity; outcome unknown.')
@@ -2974,12 +2981,52 @@ def workflow_statistics(controller, started_at, *, now=None):
             'reportedModels': None, 'tokenUsage': None}
 
 
-def run_workflow_file(path, bindings, mode, execute, input_stream, output):
+def load_check_commands(path, plan, project):
+    """User-owned bindings are separate from model proposals; loading never executes commands."""
+    if path is None:
+        return []
+    with open(path, 'rb') as source:
+        payload = source.read(65537)
+    if len(payload) > 65536:
+        raise ProbeError('Check command file exceeds 64 KiB.')
+    try:
+        data = json.loads(payload, object_pairs_hook=_unique_json_object, parse_constant=_invalid_plan_constant)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ProbeError('Invalid check command JSON.') from exc
+    if (not isinstance(data, dict) or set(data) != {'version', 'checks'}
+            or type(data['version']) is not int or data['version'] != 1
+            or not isinstance(data['checks'], list) or len(data['checks']) > 384):
+        raise ProbeError('Expected check command schema: version 1 and checks list.')
+    result, identities, commands = [], set(), set()
+    for item in data['checks']:
+        if (not isinstance(item, dict) or set(item) != {'step', 'check', 'command', 'cwd'}
+                or type(item['step']) is not int or type(item['check']) is not int
+                or not 1 <= item['step'] <= len(plan['steps'])):
+            raise ProbeError('Invalid step/check command binding.')
+        checks = plan['steps'][item['step'] - 1]['checks']
+        if not 1 <= item['check'] <= len(checks) or checks[item['check'] - 1]['kind'] not in ('test', 'lint'):
+            raise ProbeError('Command bindings require a declared test/lint check.')
+        _plan_text(item['command'])
+        _plan_text(item['cwd'])
+        cwd = os.path.realpath(os.path.join(project, item['cwd']))
+        if not os.path.isdir(cwd):
+            raise ProbeError('Check working directory must exist.')
+        identity = (item['step'], item['check'])
+        command_key = (item['step'], item['command'], cwd)
+        if identity in identities or command_key in commands:
+            raise ProbeError('Duplicate check identity or ambiguous command/cwd within a step.')
+        identities.add(identity); commands.add(command_key)
+        result.append(dict(item, cwd=cwd))
+    return result
+
+
+def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     with open(path, 'rb') as source:
         raw = source.read(65537).decode('utf-8')
     plan = validate_plan(raw)
+    commands = load_check_commands(checks_path, plan, os.getcwd())
     policy = {}
     for binding in bindings:
         if '=' not in binding:
@@ -2999,13 +3046,20 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output):
     controller = WorkflowController(raw, catalog, policy, mode)
     preview = ChatShell(output, catalog=catalog, role_policy=policy, workflow=controller)
     preview.show_workflow()
+    for spec in commands:
+        preview.write('คำสั่งตรวจ ' + str(spec['step']) + '.' + str(spec['check']) + ': '
+                      + json.dumps({'command': spec['command'], 'cwd': spec['cwd']}, ensure_ascii=True))
     preview.write('โมเดลข้างต้นเป็นค่าที่ร้องขอ; ยังไม่ได้ตรวจ catalog/quota จริง')
     if not execute:
         preview.write('Preview เท่านั้น ไม่เปิด Codex ไม่ใช้โควตา; --execute-workflow เพื่อเริ่มแบบ opt-in')
         return 0
-    if controller.state != 'READY' or any(check['kind'] not in ('manual', 'rubric')
+    required = {(i + 1, j + 1) for i, step in enumerate(plan['steps'])
+                for j, check in enumerate(step['checks']) if check['kind'] in ('test', 'lint')}
+    if controller.state != 'READY' or any(check['kind'] == 'source'
             for step in plan['steps'] for check in step['checks']):
-        raise ProbeError('Live explicit plans require no clarifications and manual/rubric checks only.')
+        raise ProbeError('Live explicit plans require no clarifications; source checks are not supported.')
+    if required != {(spec['step'], spec['check']) for spec in commands}:
+        raise ProbeError('Every test/lint check needs an explicit --check-commands binding before execution.')
     if any(step['effort'] == 'ultra' for step in plan['steps']):
         raise ProbeError('Automatic delegation effort is not enabled.')
     preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · ยัง resume native ไม่ได้')
@@ -3027,6 +3081,9 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output):
             '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
             '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
         host = backend.connect(controller, os.getcwd(), policy)
+        for spec in commands:
+            host.configure_check(spec['check'] - 1, step_index=spec['step'] - 1,
+                                 command=spec['command'], cwd=spec['cwd'])
         snapshot = backend.preflight()
         import hashlib
         with SessionStore(os.getcwd()) as store:
@@ -3052,6 +3109,7 @@ def main():
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
+    parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
     parser.add_argument('--execute-workflow', action='store_true', help='opt-in native workflow; requires START confirmation')
     modes.add_argument('--sessions', action='store_true', help='list local sessions without connecting to Codex')
     modes.add_argument('--show-workflow', metavar='SESSION_ID', help='inspect a cached workflow without resuming it')
@@ -3061,14 +3119,14 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
-    if not args.workflow and (args.role_model or args.workflow_mode or args.execute_workflow):
+    if not args.workflow and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON')
     if args.workflow:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Workflow uses plan efforts and explicit role bindings; no prompt/model/resume overrides')
         try:
             return run_workflow_file(args.workflow, args.role_model, args.workflow_mode or 'ask_to_escalate',
-                                     args.execute_workflow, sys.stdin, sys.stdout)
+                                     args.execute_workflow, sys.stdin, sys.stdout, args.check_commands)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
