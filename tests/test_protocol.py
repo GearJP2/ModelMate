@@ -3,15 +3,37 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import Mock
 
-from modelmate import Connection, ProbeError
+from modelmate import Connection, NativeWorkflowConnection, ProbeError
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_standalone_commands_cannot_bypass_workflow_permission_gate(self):
+        # No server is needed: unsupported requests must fail before any RPC send.
+        for connection_type in (Connection, NativeWorkflowConnection):
+            connection = object.__new__(connection_type)
+            connection.send = Mock()
+            for method in ('command/exec', 'command/exec/write',
+                           'command/exec/terminate'):
+                with self.subTest(connection=connection_type.__name__, method=method):
+                    with self.assertRaisesRegex(ProbeError, 'does not permit'):
+                        connection.request(method, {'command': ['printf', 'synthetic']})
+            connection.send.assert_not_called()
+
     def connection(self, source):
         c = Connection([sys.executable, '-u', '-c', source], .5)
         self.addCleanup(c.close)
         return c
+
+    def test_missing_server_cwd_is_not_reported_as_missing_codex(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / 'absent')
+            with self.assertRaises(FileNotFoundError) as raised:
+                Connection(['codex', 'app-server', '--stdio'], .5, cwd=missing)
+            self.assertEqual(raised.exception.filename, missing)
 
     def test_standalone_runtime_import_does_not_launch_process_or_network(self):
         import tempfile

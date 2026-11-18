@@ -18,6 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ShellPolicyTests(unittest.TestCase):
+    def test_offline_prompt_explains_explicit_entry_points_without_classifier(self):
+        output = io.StringIO()
+        shell = ChatShell(output)
+        shell.line('อธิบาย Python list')
+        self.assertIn('--live', output.getvalue())
+        self.assertIn('--workflow', output.getvalue())
+        self.assertNotIn('classifier', output.getvalue())
+
     def shell(self):
         output, send = io.StringIO(), Mock()
         return ChatShell(output, send, CATALOG, POLICY), output, send
@@ -189,7 +197,8 @@ class SubprocessShellTests(unittest.TestCase):
                                 input=b'/status\n/exit\n', capture_output=True, timeout=3,
                                 env=dict(os.environ, PATH='/nonexistent'))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('ไม่เริ่ม inference'.encode(), result.stdout)
+        self.assertIn('--live'.encode(), result.stdout)
+        self.assertIn('--workflow'.encode(), result.stdout)
 
     def test_pipe_input_blank_commands_and_eof(self):
         p = self.spawn()

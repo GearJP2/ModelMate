@@ -7,6 +7,8 @@
 
 ## เริ่มใช้งาน
 
+ติดตั้ง runtime ไฟล์เดียวเป็นคำสั่ง `sr`: [คู่มือติดตั้ง/อัปเดต/ถอนติดตั้ง](docs/INSTALL.md)
+
 ต้องมี Python 3.9+ และ Codex CLI (ตรวจ protocol กับ 0.169.0)
 ใช้ Python standard library ไม่ต้องติดตั้ง `openai` หรือ Python dependency เพิ่ม
 เข้าสู่ระบบด้วย ChatGPT ผ่าน `codex login` หากยังไม่ได้ล็อกอิน
@@ -39,7 +41,14 @@ python3 modelmate.py --live --model gpt-6.1-terra --effort low
 Preflight ไม่ใช่การจอง quota หรือ hard spending cap ของบริการ
 
 โปรแกรมใช้ thread เดิมคุยต่อและส่งข้อความเพิ่มระหว่างตอบได้
-รุ่นนี้เลือกโมเดลเอง ไม่มี classifier/auto routing หรือวงจร plan→implement→review
+เลือกโมเดลผ่าน manual selection หรือ explicit workflow role bindings
+ตัด decision model/classifier แยกออกจากขอบเขตตามผู้ใช้ยืนยัน 2026-11-18
+ไม่มีการเรียกโมเดลเพิ่มเพื่อเลือกโมเดลเริ่มต้น; auto routing จาก prompt ยังไม่เปิด
+
+แกนบันทึก native recheck มี offline tests แล้ว: จองรอบแบบ durable แยกจาก work
+attempt, จำกัดรอบและไม่ replay ผลที่ยังไม่ทราบ รองรับ checkpoint เดิม โดยยังไม่เปิด
+`/recheck` หรือ tool-check resume ใน CLI จนกว่าจะเชื่อม native transport และตรวจครบ
+ดู [ข้อกำหนด native recheck](docs/NATIVE_RECHECK.md) สำหรับขอบเขตที่เหลือ
 อัตโนมัติ ไม่เปิด effort ultra ที่มี automatic delegation
 การส่ง model ID เป็นการร้องขอโมเดล ไม่ใช่ execution telemetry ที่ยืนยัน actual dispatch
 
@@ -94,13 +103,25 @@ python3 modelmate.py --help
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m py_compile modelmate.py doctor.py verify.py
+python3 -m py_compile modelmate.py doctor.py verify.py probe_policy.py
 ```
 
 Default tests ใช้ JSONL subprocess/fake controller ไม่ใช้ quota จริง
 ตัวเชื่อม live chat ผ่านการทดสอบจำลองแล้ว แต่ยังรอผลใช้งานสดจาก Terminal ของผู้ใช้
 ผลตรวจสดที่ได้รับแล้วครอบคลุม account/catalog/quota, synthetic context recall,
 การปฏิเสธ scratch command/patch และการรัน printf ตาม native policy
+
+ตรวจเส้นทาง standalone command โดย **ไม่เรียกโมเดล** (เป็น diagnostic แยกจาก runtime):
+
+```bash
+python3 probe_policy.py --run
+```
+
+สร้าง config/rules สังเคราะห์ในโฟลเดอร์ชั่วคราว ตรวจ rule decisions และลอง native
+`printf` ไม่เกินสองคำสั่ง ไม่แก้ config จริง ไม่เปิด tool recheck ให้เอง
+Exit `1` หมายถึงคำสั่งใน deny fixture ยังรันได้; `2` หมายถึงยังยืนยันไม่ได้
+ไม่มีผลจาก probe นี้ที่รับรอง permission parity อ่านขอบเขตใน
+[ผลตรวจ standalone policy probe](docs/VERIFICATION.md#p03--no-inference-standalone-policy-probe-2026-11-18)
 
 คำสั่งต่อไปนี้ **ใช้ quota จริง** เลือกรันเฉพาะกรณีที่ต้องตรวจ:
 
@@ -141,7 +162,7 @@ Harness ยังคืน exit 1 สำหรับผลนี้เพื่�
 มี `WorkflowController` สำหรับทดสอบลำดับขั้น/ผลตรวจ/งบแก้ไขแบบออฟไลน์แล้ว
 ผูกกับ `SessionStore.workflow(...)` เพื่อบันทึกแต่ละ transition และคืนสถานะข้าม process ได้
 มี Workflow UI แบบ host-injected ผ่าน `run_chat(..., workflow=controller, workflow_action=host)` แล้ว
-ยังไม่มี CLI entry point สำหรับโหลด workflow; native transport เป็น experimental host API ที่ยังไม่ผ่าน live gate จึงไม่มี auto execution ในรุ่นนี้
+มี experimental explicit-plan CLI ตามหัวข้อด้านล่าง; ยังไม่มี auto execution และ CLI build นี้ยังรอ user-run live verification
 รายละเอียดสัญญา trusted host callbacks และข้อจำกัดอยู่ใน [ผลตรวจ P10](docs/VERIFICATION.md)
 
 เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/check`, `/mode`
@@ -256,11 +277,11 @@ state directory หรือ lock เพิ่ม สถานะ `DONE` เป�
 `NativeWorkflowConnection` เชื่อม explicit `WorkflowController` กับ Codex App Server
 และ `run_chat(..., workflow=controller, workflow_action=host, backend=connection)`
 โดย `connection.connect(controller, cwd, role_policy)` คืน host สำหรับลงทะเบียน checks
-ใช้ native read-only/on-request, ephemeral thread เดียว และ model/effort override ราย turn
+ใช้ native read-only/on-request และ model/effort override ราย turn; host API ที่ไม่ส่ง store ยังเป็น ephemeral แต่ explicit CLI ใหม่ใช้ durable thread
 ตัว transport ตรวจ subscription/catalog/quota ก่อนส่งงาน และยืนยัน sandbox จาก thread/start
 คำขอ tool approval จะถูก decline และพัก; ไม่ยกระดับสิทธิ์ ไม่เปิด classifier/auto routing
 
-ในรุ่นนี้ยังไม่เปิด native workflow ผ่าน CLI และไม่รองรับ native workflow resume
+มี explicit-plan CLI แบบ opt-in และ experimental durable resume สำหรับ manual/rubric ตามหัวข้อด้านล่าง
 caller ต้องปิด connection ใน `finally` และถือ timeout/start failure ว่า outcome unknown
 ไม่เรียก dispatch ซ้ำเอง การเรียก native host API จริงใช้โควตา; tests ใช้ fake server เท่านั้น
 การตั้ง model/effort เป็นเพียงค่าที่ร้องขอ ไม่ใช่หลักฐาน backend dispatch
@@ -296,3 +317,196 @@ Verifier ตรวจคำตอบจากข้อความที่ UI �
 จากสถานะ READY พร้อม tripwire ป้องกันการเรียกโมเดลเพิ่มแม้ guard เสีย
 ผล `answerDisplay`/`disconnectGuard` จาก verifier ก่อนแก้ PR #7 ยังไม่ถือเป็น
 หลักฐาน live สำหรับสองหัวข้อนี้ ต้องใช้ผลจาก verifier ที่แก้แล้วพร้อม hash ใหม่
+
+### Explicit-plan CLI (experimental, manual steps)
+
+Preview แผนและ model bindings แบบ offline ไม่เปิด backend หรือสร้าง session:
+
+```bash
+python3 modelmate.py --workflow examples/explain-lists.json --role-model standard=gpt-6.1-sol
+```
+
+เริ่มแบบ opt-in โดยใช้โควตาเมื่อสั่ง `/next`:
+
+```bash
+python3 modelmate.py --workflow examples/explain-lists.json --role-model standard=gpt-6.1-sol --execute-workflow
+```
+
+อ่านแผนแล้วพิมพ์ `START` เพื่อยืนยัน จากนั้นใช้คำสั่งตามลำดับ:
+
+```text
+/next
+/verify 1 pass
+/check
+/finish 1=1.1
+/exit
+```
+
+รอคำตอบและ terminal event ก่อน `/verify` ตรวจคำตอบเองก่อนระบุ `pass`
+`/verify` รับเฉพาะ manual/rubric checks; ค่าที่รับคือ pass/fail/unknown
+หมายเลข check เริ่มที่ 1 ในขั้นปัจจุบัน ใช้ `/check` เพื่อประเมินและไปขั้นถัดไป
+หาก fail จะใช้ correction budget เดิม; unknown/missing ไม่ถือว่าผ่าน
+`1.1` หมายถึงขั้น 1 check 1 ตาม `ref` ที่แสดง ใช้ได้หลัง `/check` ยอมรับขั้นนั้นแล้ว
+`/finish` ต้องระบุหลักฐานสำหรับทุกเกณฑ์ เช่น `/finish 1=1.1 2=2.1,2.2`
+เลือกเฉพาะหลักฐานที่รองรับเกณฑ์จริง UUID เดิมยังใช้ได้ แต่ไม่ต้องคัดลอกแล้ว
+ไม่อนุญาตให้โมเดลจบงานเอง
+การออกจาก CLI สำเร็จไม่ได้แปลว่างานผ่านเกณฑ์ ต้องดูสถานะ DONE แยกต่างหาก
+
+ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
+ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
+นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
+เพิ่มสิทธิ์จะถูก decline/pause ตาม native transport รุ่นนี้; read-only/on-request
+ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
+
+รุ่นนี้รับแผนที่ไม่มี clarifications, manual/rubric checks และ test/lint ที่ผูก
+คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ยังไม่เปิด
+checkpoint บันทึกอัตโนมัติแยกโปรเจกต์ ดูด้วย `--sessions`/`--show-workflow ID`
+session ใหม่เป็น durable; experimental resume รองรับ manual/rubric ตามหัวข้อด้านล่าง
+ห้ามใช้ manual chat ข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
+
+The explicit command-check happy path has user-supplied live evidence recorded in
+docs/VERIFICATION.md, including its version limitations. Classifier/auto routing,
+broader permission paths, private-web isolation and native recovery remain gated.
+
+
+ตอนจบ explicit workflow session จะแสดง `สถิติ workflow` เป็น JSON: elapsedSeconds
+รวมเวลารอผู้ใช้, จำนวน attempts, requestedSelections และ state ส่วน reportedModels
+และ tokenUsage เป็น null เมื่อยังไม่มีข้อมูล ไม่ได้คำนวณค่าใช้จ่ายหรืออ้างว่าประหยัด
+
+
+### ผูก test/lint กับคำสั่งที่ผู้ใช้ยืนยัน
+
+แยกคำสั่งจากแผนโมเดลเป็นไฟล์ JSON version 1: `checks` แต่ละรายการต้องมี
+`step`, `check` (เลขเริ่มที่ 1), `command`, `cwd` เท่านั้น ดูตัวอย่าง
+`examples/check-model-policy.commands.json` cwd สัมพัทธ์อ้างอิงโฟลเดอร์โปรเจกต์
+ปัจจุบัน และถูก resolve เป็น absolute path ก่อนแสดงยืนยัน ไฟล์จำกัด 64 KiB
+ห้ามผูก check ซ้ำ หรือใช้ command/cwd เดียวกันซ้ำหลาย checks ภายในขั้นเดียว
+
+ดู preview แบบ offline ก่อน:
+
+```bash
+python3 modelmate.py --workflow examples/check-model-policy.json --check-commands examples/check-model-policy.commands.json --role-model standard=gpt-6.1-sol
+```
+
+เพิ่ม `--execute-workflow` เพื่อเริ่มแบบ opt-in แล้วตรวจคำสั่ง/cwd ก่อนพิมพ์ START
+ทุก test/lint ต้องมี binding ครบก่อนเปิด backend รูปแบบ preview ใช้ JSON escapes
+เพื่อแสดง control/bidi characters อย่างชัดเจน ไม่แอบตัดออกจาก command ที่ยืนยัน
+
+Native Codex จะได้รับคำสั่งตรวจของขั้นปัจจุบัน ให้รันหลังทำงานในขั้นนั้นเพียงครั้งเดียว
+ภายใน model turn เดียวกัน จากนั้นรอ terminal event แล้วใช้:
+
+```text
+/check
+/finish 1=1.1
+/exit
+```
+
+ตัวอย่างนี้ไม่ต้อง `/verify`: exit code มาจาก native command start/completion
+ที่ตรง thread/turn/item/command/cwd จริง รหัส 0 คือผ่าน รหัสอื่นคือไม่ผ่าน
+missing/declined/unknown หรือคำสั่งเปลี่ยนรูปแบบเป็น UNVERIFIED; ข้อความโมเดล
+ว่า tests passed ไม่ใช่หลักฐาน และ `/verify` ไม่รับ test/lint โดยตรง
+
+ไม่มี local shell fallback, command/exec ทางลัด หรือการเพิ่ม sandbox permissions
+การยืนยัน START ไม่ใช่ tool approval; native read-only/on-request ยังคงบังคับ
+คำสั่งที่ sandbox อนุญาตอาจรันเองได้ ส่วน approval requests จะถูก decline/pause
+คำสั่งที่รันซ้ำหลาย item ภายใน attempt ไม่ถูกนับเป็น hidden correction
+check failure ใช้ initial attempt + corrections 2 รอบเหมือนเดิม แล้วต้องหยุดถาม
+
+นี่คือการผูกผลคำสั่งใน turn นั้น ไม่ใช่การรับประกันไฟล์ทั้งหมดไม่เปลี่ยนภายหลัง
+bindings ไม่ถูก persist และ public resume ของ test/lint ยังไม่เปิด; metadata เก็บผล/IDs
+ตามเดิมโดยไม่คัดลอก stdout/stderr ตัวอย่าง test_models.py มีผล user-run live ถึง DONE แล้ว
+ดูขอบเขตและข้อจำกัดของหลักฐานใน docs/VERIFICATION.md
+
+
+สำหรับขั้นที่มีเฉพาะ test/lint: หากสั่ง `/check` ระหว่าง RUNNING ระบบจะรอ
+terminal event ของ attempt นั้นแล้วตรวจครั้งเดียว ไม่มี model turn เพิ่ม
+การกดซ้ำไม่เพิ่มงาน และ `/cancel` หรือ `/exit` ล้างคำขอที่รอไว้
+manual/rubric ไม่รองรับการรอตรวจล่วงหน้า ต้องรอ CHECKING และ `/verify` ก่อน
+ถ้าไม่ได้สั่งล่วงหน้า เมื่อเห็น CHECKING ให้พิมพ์ `/check` ก่อน `/finish`
+ข้อความโมเดลที่เริ่มพูดหรือบอกผลไม่ได้หมายความว่า backend จบ turn แล้ว
+
+
+START confirmation ข้ามบรรทัดว่างที่อาจค้างจากการ paste โดยไม่ถือว่ายืนยัน
+รองรับ bracketed-paste wrapper ที่ครบในบรรทัดเดียว ข้อมูลอื่น/EOF/ข้อความยาว
+เกิน 256 bytes ไม่เปิด backend wrapper ที่ไม่ครบจะถูกปฏิเสธ ให้พิมพ์ START เอง
+การอ่านยังไม่กินคำสั่ง /next ที่อยู่ถัดไป และการยืนยันไม่ใช้ TextIO read-ahead
+
+
+Command matching รับ literal command หรือ shell argv wrapper หนึ่งชั้นจาก
+`/bin/bash`, `/usr/bin/bash`, `/bin/sh`, `/usr/bin/sh` พร้อม `-c`/`-lc` เท่านั้น
+inner command ต้องตรงทุกตัวอักษร, ไม่มี argv เพิ่ม และ cwd ต้องตรงเดิม
+ไม่ทำ generic token normalization, ไม่ตัด `cd`/`&&`/`;` หรือเปลี่ยน quoting ภายใน
+command code เพื่อให้ผ่าน Wrapper support เป็นขอบเขต matcher ที่ทดสอบ offline;
+ไม่ได้พิสูจน์ว่า wrapper คือต้นเหตุของ live UNVERIFIED ที่ผู้ใช้ส่งมา
+
+เมื่อไม่มี matching command completion จะเก็บ check เป็น unknown และแสดง
+`diagnostics` เฉพาะจำนวน started/completed/command_mismatches/cwd_mismatches
+ไม่มี raw command, path, stdout/stderr ใน diagnostics; เก็บ counts ใน finding
+ของ unknown evidence เพื่อย้อนตรวจได้ ไม่ยอมรับคำว่า tests passed จากโมเดลแทน
+
+
+Interactive TTY confirmation ใช้ Python input/readline เพื่อรองรับการแก้ข้อความ
+และ paste ที่มี newline ภายใน wrapper; stdin/stdout ที่เป็น pipe ยังคงใช้ byte
+reader เดิมเพื่อไม่กินคำสั่งถัดไป หากยืนยันไม่ตรง จะแสดง input diagnostics
+เฉพาะ byte count/ascii/control count/paste-marker flag ไม่คัดลอกข้อความดิบ
+EOF, CANCEL และข้อความอื่นยังไม่เปิด backend; ไม่มีการยืนยันโดยอัตโนมัติ
+
+
+### Durable workflow resume (experimental, manual/rubric)
+
+explicit CLI session ใหม่บันทึก durable native thread; host API/verifier ที่ไม่ส่ง
+SessionStore ยังใช้ ephemeral ตามเดิม session เก่าที่เป็น ephemeral จะไม่ถูกแปลง
+หรือสร้าง thread ใหม่แทนโดยอัตโนมัติ หาก native thread หาย/ยัง active/identity
+หรือ permissions ไม่ตรง จะหยุดโดยไม่ replay งาน
+
+ใช้ `--sessions` เพื่อเลือก ID จริงในโปรเจกต์ แล้วแทน `SESSION_ID` ด้านล่าง:
+
+```bash
+python3 modelmate.py --resume-workflow SESSION_ID --role-model standard=gpt-6.1-sol
+python3 modelmate.py --resume-workflow SESSION_ID --role-model standard=gpt-6.1-sol --execute-workflow
+```
+
+คำสั่งแรกเป็น preview แบบ offline คำสั่งที่สองต้องยืนยัน START เช่นเดิม
+ตรวจบัญชี/project/catalog/quota/native thread/ล่าสุด turn และ read-only/on-request
+ใหม่ทั้งหมด writer lock ถือจน connection ปิด; ไม่มีการคืน model/tool grants เดิม
+ต้อง `/continue TOKEN` ที่แสดงใหม่ก่อน `/next` ไม่เริ่มงานเองหลัง reconnect
+step IDs/attempts/correction budget เดิมยังอยู่ ถ้า native start outcome ไม่ทราบ
+หรือ turn ID ไม่ตรง checkpoint จะไม่เดา ไม่ใช้ turn เก่าแทน และไม่เริ่ม turn ใหม่
+
+ผลตรวจที่ restore มาเป็น stale ตรวจผลปัจจุบันก่อนยืนยัน เช่น:
+
+```text
+/revalidate 1.1 pass
+```
+
+รับเฉพาะ manual/rubric และผลที่ตรงกับหลักฐานเดิม ยืนยันนี้ไม่ข้าม restore รอบใหม่
+`/finish` ยังต้องมี accepted evidence ครบและไม่มี stale checks
+ผล test/lint เก่าต้องตรวจด้วย trusted tool ใหม่ จึงยังไม่เปิด public CLI resume
+สำหรับแผนที่มี test/lint แทนที่จะให้มือยืนยัน exit code ข้าม gate
+Native recovery ที่ active turn จบแล้วอาจเปิดเป็น CHECKING/PAUSED; terminal status
+ไม่เท่ากับ tests ผ่าน หาก cached/native state ขัดกันจะไม่ทำงานต่อ
+
+ตรวจ happy path แบบ opt-in ด้วยคำสั่งเดียว (สูงสุด 2 turns, ไม่มี retry):
+
+```bash
+python3 verify.py --run-live --probe-workflow-resume gpt-6.1-sol
+```
+
+ตรวจ context หลัง process restart, IDs/counters, stale-evidence gate และ DONE
+รายงาน hashes โดยไม่พิมพ์ nonce/account/thread IDs ตัว probe จะ **เก็บ scratch
+และ durable thread ไว้** พร้อมตำแหน่งทาง stderr เพื่อให้ตรวจย้อนหลัง ไม่ลบ thread
+หรืออ้าง complete erasure หากมี failed/unverified ให้หยุด ไม่รันซ้ำอัตโนมัติ
+ผลนี้ไม่ใช่ proof ของ no-tools security boundary, network/crash recovery ทุกกรณี
+หรือ backend dispatch telemetry; synthetic manual-check resume มีผล user-run live
+ผ่านแล้วที่ hashes ใน docs/VERIFICATION.md ส่วน tool-check recovery ยังไม่เปิด
+
+สถิติ `attemptsScope=workflow_total` รวมประวัติเดิม ส่วน `elapsedScope=current_cli_session`
+วัด session CLI ปัจจุบันรวมเวลารอผู้ใช้ requestedSelections รวมค่าที่ร้องขอในประวัติ
+ไม่ใช่จำนวน model calls ใหม่ในรอบ reconnect และ reportedModels/tokenUsage ยังเป็น null
+
+
+Resume verifier แยก userMessage/metadata ออกจาก tool items ตาม schema
+`firstTurn`/`recallTurn` แสดงเฉพาะ counts, terminal status และ exact-answer boolean
+ไม่แสดงคำตอบ/nonce; `failureReason` แยกคำตอบไม่ตรง, turn ไม่จบ, tool activity
+และชนิด item ไม่รู้จัก ถ้าหยุดก่อน reconnect ค่า durableResume เป็น unverified
+ผล sentinel ที่ตรวจได้ยังรายงานแยกตามจริง โดยไม่ต้องรันโมเดลซ้ำเพื่อเช็กไฟล์

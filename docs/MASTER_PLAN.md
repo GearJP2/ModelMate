@@ -56,7 +56,7 @@ plugin marketplace, จัดการ billing, streaming reasoning ภายใ
 คำขอที่ไม่รองรับต้องหยุด/ปฏิเสธโดยไม่อนุมัติ
 User ยอมรับ native readable roots; ไม่อ้าง project-only isolation ที่ไม่ได้บังคับ
 Manual live prototype เปิด opt-in ได้ตามนโยบายใหม่ แต่ไม่ถือว่า G2 ทั้งหมดผ่าน
-Auto workflow, no-tools classifier และ private web isolation ยังมี gates แยก
+Auto workflow และ private web isolation ยังมี gates แยก; decision classifier ถูกตัดจาก scope
 
 ### G3 — การค้นเว็บไม่รับข้อมูลส่วนตัวโดยอัตโนมัติ
 
@@ -154,8 +154,8 @@ checks ระบุสิ่งที่ต้องตรวจ ไม่ให
 Controller สร้าง task ID/step ID และ attempt counters เอง
 
 หาก clarifications ไม่ว่าง ให้ถามก่อนเริ่มขั้นที่ขึ้นกับคำตอบ
-ผล classifier ผิดรูปแบบ: แสดงข้อผิดพลาด/พัก ไม่เดาเป็น SIMPLE แล้วลงมือ
-classifier ต้องผ่าน quota/model policy เช่นเดียวกับ execution
+ผลแผนผิดรูปแบบ: แสดงข้อผิดพลาด/พัก ไม่เดาเป็น SIMPLE แล้วลงมือ
+ไม่เรียก decision classifier เพื่อสร้างหรืออนุมัติแผน
 
 ### Task state ที่ controller เป็นเจ้าของ
 
@@ -208,16 +208,16 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P03 | พิสูจน์ permission boundary | P01 | IN_PROGRESS: user ยอมรับ native policy; live prototype tests | จำเป็น |
 | P04 | Quota policy และ pause | P02 | MOCK_VERIFIED | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
-| P06 | Plan schema / classifier / routing | P04, P05 | IN_PROGRESS: validator/preparation MOCK_VERIFIED; live classifier รอ P03 | จำเป็น |
+| P06 | Plan schema / policy routing | P04, P05 | MOCK_VERIFIED: explicit plan validation; decision classifier removed by user scope | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
-| P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: shell/workflow host UI MOCK_VERIFIED; native workflow entry point ยังไม่เปิด | ไม่จำเป็นถ้าไม่แตะ policy |
+| P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: explicit-plan CLI/command-check happy path user LIVE_VERIFIED; broader routing/recovery pending | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
-| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: controller/checkpoints/UI/native transport MOCK_VERIFIED; public entry point pending live permission gates | จำเป็น |
+| P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
-| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; workflow checkpoint recovery MOCK_VERIFIED; live workflow/UI pending | จำเป็น |
+| P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual happy path LIVE_VERIFIED; durable manual/rubric workflow resume scoped user LIVE_VERIFIED; tool rechecks/crash recovery pending | จำเป็น |
 | P13 | Web privacy boundary | P03, P09 | TODO | จำเป็น |
-| P14 | Metrics และรายงาน | P10, P11 | TODO | ไม่จำเป็นถ้าไม่แตะ policy |
-| P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | TODO | ตรวจคำกล่าวอ้าง |
+| P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
+| P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
 | P16 | End-to-end / evaluation / release | P01–P15 | TODO | จำเป็น |
 
 Dependency ไม่ได้อนุญาตทำงานขนานโดยอัตโนมัติ
@@ -303,7 +303,7 @@ account mismatch, null, error, exhausted window, stale snapshot ต้องไ�
 Catalog เป็นแหล่ง model IDs/efforts ที่รองรับ แต่ไม่ใช่คะแนนคุณภาพหรือราคา
 เก็บ policy mapping รุ่นแรกเป็นข้อมูลชัดเจนสำหรับโมเดลที่ทดสอบแล้ว
 ตัวใหญ่ review mapping; ชื่อไม่รู้จักต้องให้ผู้ใช้เลือกหรือพัก ไม่จัดอันดับจากชื่อ
-ห้ามเรียก API classifier ที่ไม่อยู่ใน subscription catalog
+ไม่เพิ่ม API decision classifier; ใช้ explicit bindings ตาม scope ปัจจุบัน
 role economy/standard/strong เป็น policy ไม่ใช่ข้อเท็จจริงถาวรของ vendor
 
 ผ่านเมื่อ: unsupported model/effort ถูกปฏิเสธ, catalog pagination,
@@ -314,9 +314,9 @@ missing role, hidden model, catalog เปลี่ยนตอน resume แล
 ### P06 — Plan และ routing
 
 ไฟล์: modelmate.py, tests/test_routing.py, synthetic plan fixtures
-Implement validator ตาม section 5 ก่อนต่อ classifier
-Classifier เป็น read-only/no-tools step ผ่าน quota gate และ model policy
-เรียกเมื่อโจทย์ใหม่/ขอบเขตเปลี่ยน ไม่เรียกเพราะ approval reply หรือ status command
+อัปเดตตามผู้ใช้ 2026-11-18: ไม่ทำ decision model/classifier แยก
+ใช้ validator ตาม section 5 กับ explicit plan/role bindings และ controller policy
+ไม่เพิ่ม inference หรือบริการภายนอกเพื่อเลือกโมเดลเริ่มต้น
 แสดง goal, criteria, steps และเหตุผลสั้น ๆ; ห้ามแสดง private reasoning
 
 ผ่านเมื่อ: งานง่ายไม่ถูกบังคับ plan+strong review, งานเสี่ยงมี check,
@@ -378,7 +378,7 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 ใช้ SessionStore.workflow เพื่อ autosave ทุก transition ภายใต้ writer lock และ restore จาก session schema v3
 restore ไม่คืน approval/token/grant; active turn ที่ยังไม่ทราบผลต้อง reconcile ก่อน ไม่ replay
 controller methods รับเฉพาะ trusted host/UI events ไม่ใช่ API ที่เปิดให้โมเดลเรียกโดยตรง
-Controller ถือ state/step IDs/counters; classifier แค่เสนอ
+Controller ถือ state/step IDs/counters; explicit plan ไม่ให้อำนาจขยายสิทธิ์
 initial attempt + correction 1 + correction 2 จากนั้นหยุดถาม
 user เลือกทำต่อแล้วเริ่ม budget ใหม่ได้เฉพาะ explicit choice พร้อมเก็บรอบเก่า
 แก้ permission/model ต้องผ่าน gates ทุกครั้ง
@@ -616,3 +616,200 @@ reports all six checks passed, including actual rendered answers and the correct
 READY-state local disconnect probe. Runtime/verifier hashes match local files;
 see VERIFICATION.md. Scoped LIVE_VERIFIED for this probe only. Full permission/web
 and native recovery gates remain open; this does not enable auto routing or CLI.
+
+### P08/P10/P12 explicit-plan CLI increment (2026-11-18)
+
+MOCK_VERIFIED: --workflow previews bounded validated JSON offline with explicit
+role bindings, requested efforts, risk, reason and criteria. --execute-workflow
+requires START before opening Codex, then manual /next dispatch under model gates.
+Only no-clarification/manual-rubric plans execute. /verify records explicit user
+observations; /check evaluates; /finish maps each criterion to accepted evidence.
+SessionStore.workflow checkpoints precede dispatch; native sessions remain
+inspection-only/ephemeral with no resume support. No automatic classifier or tool
+approval acceptance was added. The new CLI needs user-run live verification before
+claiming its happy path is live-verified. Commit milestones now follow the user's
+latest autonomous-work instructions; no per-increment PR or merge is required.
+
+
+P14 local metrics increment (2026-11-18): explicit workflow CLI prints a final
+structured summary with local session duration including user wait, consumed
+attempt count, distinct requested selections and workflow state. reportedModels
+and tokenUsage stay null; no pricing, savings or actual-dispatch inference.
+No persistent metrics file/schema change yet. Offline-tested; new CLI live test pending.
+
+
+Explicit-plan CLI feedback (2026-11-18): user live transcript confirms startup,
+answer/manual check/step acceptance and stats, but not final DONE (literal example
+placeholder was rejected). Added short explicit evidence refs and removed duplicate
+host state rendering. Offline tests verify final coverage and ref rejection; the
+transcript does not establish native recovery or complete workflow live readiness.
+
+
+### P10 explicit native command-check bindings (2026-11-18)
+
+MOCK_VERIFIED: --check-commands loads separate user-owned bounded JSON bindings
+for test/lint. Exact command/cwd are displayed before START; every test/lint must
+be configured before backend startup. Future steps are registered by controller
+step IDs; dispatch includes only current-step commands. Existing exact native
+thread/turn/item/start/completion checks supply tool evidence. No local shell,
+native command/exec bypass, model-based pass claims or manual test/lint override.
+Known failures retain correction budget; missing/mismatched results UNVERIFIED.
+No classifier, native recovery or expanded permission gate is enabled. Next live
+check uses the small test_models.py sample, not the full suite inside a model turn.
+
+
+P08/P10 deferred check fix (2026-11-18): user transcript exposed /check timing
+confusion, not proof of accepted command evidence. Tool-only /check can now wait
+for the current attempt terminal event; cancel/exit clears it. Manual checks remain
+post-turn. This offline-tested fix does not change native permission/retry gates or
+establish a new live verification result.
+
+
+P08 confirmation feedback (2026-11-18): visible START was rejected before backend
+startup on user's Terminal; exact raw input/cause unknown. Hardened blank-line and
+complete single-line paste handling, with pseudo-terminal and offline regression
+coverage. EOF and invalid/oversized input remain non-approval. An input-only check
+can be run without Codex/inference before any further paid-quota live test.
+
+
+P10 native evidence mismatch (2026-11-18): user's correctly timed /check returned
+UNVERIFIED. Source of mismatch is unknown because old runtime omitted command
+observations/diagnostics; do not claim a successful command-check live gate.
+Offline-tested constrained shell-wrapper matching and persisted count-only unknown
+evidence diagnostics now help future verification. No generic shell normalization,
+permission expansion or acceptance of model assertions was introduced.
+
+
+P08 full TTY confirmation fix (2026-11-18): input-only success did not prove full CLI
+paste handling. A full pseudo-terminal regression reproduces multiline bracketed
+paste rejection. Interactive input now uses stdlib readline; pipe handling remains
+bounded and preserves subsequent commands. Cancellation remains fail-closed. User's
+exact raw input and command-evidence live integration remain unverified; no new
+inference is needed to check confirmation/exit without /next.
+
+
+P08/P10 scoped live completion (2026-11-18): user-supplied explicit command-check
+transcript reached DONE through observed tool pass and explicit 1=1.1 coverage,
+with one requested gpt-6.1-sol/low attempt and no manual test override. See
+VERIFICATION.md for provenance/version limitations. No further repeat is required
+for this happy path. This does not close native recovery, all permission paths,
+classifier/no-tools or private-web gates; no general production-ready claim.
+
+
+### P12 durable native workflow resume increment (2026-11-18)
+
+MOCK_VERIFIED: new explicit CLI workflows use durable threads and writer-locked
+schema-v3 attachment. Local checkpoint exists before thread/start; each attempt
+atomically clears the old native turn binding when reserved, and stores the new
+turn ID only after a valid start response. Unknown response/save failure cannot
+reassociate an old native turn with a new attempt.
+Resume checks fresh account/catalog/quota, project/provider/thread identity,
+non-ephemeral idle state, latest terminal/native binding and effective permissions.
+It preserves IDs/counters, resets grants and requires explicit continuation.
+Public --resume-workflow currently supports manual/rubric only; /revalidate cannot
+accept tool checks. Previous accepted results remain stale until trusted rechecks.
+Old ephemeral sessions and unknown/active/mismatched native state do not get a new
+thread/turn fallback. --probe-workflow-resume is opt-in, two turns, retaining scratch
+and durable thread for inspection. No live gate is passed by these offline tests.
+Next: user-run synthetic resume probe before claiming the native happy path live;
+then add trusted tool recheck recovery under separately verified permissions.
+
+
+P12 verifier classification fix (2026-11-18): user test stopped before reconnect.
+Retained checkpoint/rollout read-only inspection confirms completed ACK and unchanged
+sentinel; schema-based regression shows userMessage metadata was miscounted as a
+tool. Explicit metadata/tool classification and redacted prerequisite diagnostics
+are offline verified; tool/unknown activity still stops. No new inference was run,
+no test state was advanced, and native resume's live gate remains open.
+
+
+P15 standalone installation increment (2026-11-18): documented user-local sr copy,
+chmod, quoted Bash alias, update/hash comparison, uninstall and retained session/
+native data. Four offline tests run only a copied executable from Thai/space paths
+with no repo imports or Codex in PATH. Missing Codex is handled at shared process
+startup with actionable guidance; missing plan files are not mislabeled as Codex
+failures. No dependency, package registry, auto-update or user .bashrc edit added.
+
+
+P12 scoped LIVE_VERIFIED update (2026-11-18): user-supplied corrected resume probe
+passed durable reconnect, context recall, stale-evidence gate, final checkpoint and
+sentinel. Runtime/verifier hashes match local 0a9c86b; diagnostics show userMessage
+metadata and zero observed tool/unknown items. See VERIFICATION.md. This does not
+close tool revalidation, crash/network, no-tools classifier or all permission gates.
+No repeat is needed for this synthetic manual-check happy path.
+
+
+P03/P12 tool recheck investigation (2026-11-18): standalone command/exec is a
+candidate for checks without a model turn, but sandboxing alone does not establish
+equivalence with native tool command rules and approval handling. Current upstream
+source builds an execution request directly; the installed schema does not expose
+a per-request approval policy. This approach is BLOCKED pending version-specific
+enforcement evidence; P12 manual/rubric resume remains available. No direct-command
+executor, local subprocess fallback or model turn was added. A transport regression
+checks that standalone command requests are rejected before sending an RPC.
+See VERIFICATION.md for sources, scope and the next required proof.
+
+
+P03 standalone diagnostic increment (2026-11-18): probe_policy.py opt-in --run
+evaluates a disposable allow/forbidden printf rules fixture with the installed CLI,
+confirms its trusted project config before attempting at most two standalone
+commands, and never sends account/thread/model RPCs. Configuration trust is scoped
+to the disposable project and server process; user/managed settings remain in place.
+The runtime RPC allowlists are unchanged. Connection accepts an optional subprocess
+cwd so the server actually starts within the fixture project. Tests cover that cwd
+and fail-closed prerequisites, bad outputs, approvals, EOF and no replay. This is
+a negative diagnostic, not permission parity certification. Local Codex 0.169.0
+matched fixture decisions but stopped at server_initialize, so no native command
+was attempted. Next: run this no-inference probe from a normal user terminal to
+collect version/hash-bound output; even a completed run does not close G2 or P12.
+
+P03 probe correction (2026-11-18): user normal-terminal output reached project_config
+with fixture decisions matched but no commands sent. Fix config/read to include the
+fixture cwd explicitly; process cwd alone is insufficient for its project-layer
+lookup. Add boolean-only prerequisite diagnostics and a fake-server regression
+that does not supply project layers without the matching request cwd. Existing
+trust/identity/marker checks remain required. Native result after this correction
+is still pending; no permission gate is passed by the regression.
+
+P03 trust encoding correction (2026-11-18): subsequent user boolean diagnostics
+showed the fixture layer was discovered but disabled. Replace quoted dotted CLI
+trust keys with a single projects inline-table value, because CLI override paths
+split on literal dots. A regression covers dotted/space/Thai fixture paths, and
+installed CLI accepts the new TOML value in a no-inference rule check. Do not
+remove disabled-layer rejection or alter persistent/managed trust. Native result
+after this correction remains pending.
+
+P03 standalone probe completed (2026-11-18): version/hash-matched user report for
+630cc24 reaches finished with all config booleans true; both baseline and forbidden
+fixture printf commands execute. This is scoped negative evidence: standalone
+permission parity is not established. Reject command/exec for current P12 tool
+revalidation; do not repeat the probe seeking a pass or open the runtime allowlist.
+See VERIFICATION.md for hashes and limits. Next eligible work: design an explicit
+native-tool verification turn with model/quota consent, durable no-replay handling
+and preserved correction/evidence gates. That alternative consumes model quota;
+it is not the previously investigated zero-inference path and is not implemented.
+
+
+P06 scope update and P12 durable recheck core (2026-11-18): user removed separate
+decision models/classifiers. Delete unused classifier preparation/instructions,
+keep explicit plan validation/role bindings/model approvals, and replace the offline
+prompt's pending-classifier message with explicit entry-point guidance. Historical
+verification entries above remain historical, not current classifier requirements.
+
+P12 implementation contract: [NATIVE_RECHECK.md](NATIVE_RECHECK.md). Controller-only
+recheck reservations now persist an append-only version-2 checkpoint ledger with
+separate counters, native binding phases and observed terminal results. Existing
+version-1 workflow checkpoints remain readable and unchanged until a reservation
+is made; session metadata stays version 3. Writer lock, immutable ledger prefix and
+poisoning after uncertain saves prevent silent replay/rollback. A known matching
+completion can clear only its source stale tool evidence in the current process;
+reconciliation after an unknown result or another restore cannot do so. Recheck
+budgets survive model/command changes and require recorded continuation after 3
+slots. Work counters/native bindings/criterion coverage are preserved. Metrics
+separate work attempts from recheck reservations.
+
+This is an offline state milestone, not enabled execution. No /recheck CLI, native
+recheck transport or live verifier is connected yet. Test/lint resume remains
+disabled. Next eligible P12 work is native observation/transport integration using
+this ledger, then responsive UI/consent and retained-thread handling, then a scoped
+opt-in live test. No user-run live test is needed for this core milestone.

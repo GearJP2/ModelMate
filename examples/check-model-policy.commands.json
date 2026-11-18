@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "checks": [
+    {
+      "step": 1,
+      "check": 1,
+      "command": "python3 -B -m unittest discover -s tests -p test_models.py",
+      "cwd": "."
+    }
+  ]
+}

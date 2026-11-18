@@ -1160,3 +1160,500 @@ recovery, all tool paths, backend dispatch telemetry or service-side erasure.
 No public native workflow CLI, auto routing, native recovery or private-web gate
 is enabled by this result. This evidence update changes documentation only;
 `git diff --check` passed; no additional inference was run by the agent.
+
+### Explicit-plan CLI — offline increment (2026-11-18)
+
+Seven new tests cover offline preview/cancel without backend startup, invalid or
+oversized plans/bindings, unsupported checks/clarifications, CLI option conflicts,
+manual evidence/criterion mapping, rejection of manual test/lint results, and a
+real subprocess CLI loop with a fake native App Server. The loop confirms START
+and subsequent /next input are both preserved, answer checks reach DONE only with
+explicit accepted coverage, and the on-disk checkpoint validates as DONE.
+No live inference run. Native workflow recovery and automatic routing remain gated.
+
+Validation: seven targeted entry tests and 305/305 full offline tests passed;
+runtime/doctor/verifier compilation and `git diff --check` passed.
+
+
+### P14 local explicit-workflow statistics (2026-11-18)
+
+Final CLI summary reports elapsedSeconds from preview start through session close
+(including user wait), attempt count and distinct requested model/effort pairs.
+reportedModels and tokenUsage are null, never estimated from prompts or plan roles.
+The summary does not include task text, answers, account IDs or approval tokens.
+Eight targeted entry tests, including statistics/count/clock checks and an actual
+fake-server CLI exit summary, passed. Full offline suite: 306/306 passed; runtime,
+doctor and verifier compilation plus git diff --check passed. No live inference.
+
+
+### User-supplied explicit-plan CLI transcript and usability fix (2026-11-18)
+
+User supplied a live explain-lists CLI transcript: confirmation, one native attempt,
+answer display, explicit manual pass, accepted step evidence and final statistics
+were observed. The user entered the literal EVIDENCE_ID placeholder; the controller
+correctly rejected it. Final task criteria were not accepted; exit paused the task.
+This is partial live evidence, not a successful DONE or native resume test. No
+runtime/verifier hashes or process exit code were supplied. No raw transcript,
+session IDs, evidence UUIDs or approval tokens are stored here.
+
+Usability fix: /finish now accepts explicit STEP.CHECK refs (e.g. 1=1.1) resolving
+only accepted completed-step evidence; UUID syntax remains supported. Placeholder
+errors explain the reference form. Completed attempts display CHECKING for the
+current step without changing the durable controller ledger. Successful host
+/next and /check commands no longer render duplicate state blocks. No extra live
+turn is required to reproduce or regression-test these UI changes.
+
+Validation: 10 targeted workflow-entry tests and 308/308 full offline tests
+passed; runtime/doctor/verifier compilation and git diff --check passed.
+No additional live inference was run.
+
+
+### User command/cwd test/lint bindings — offline increment (2026-11-18)
+
+Ten new test methods cover config schema/size/duplicates/indices/cwd validation,
+no execution while loading, required bindings before backend startup, CLI argument
+wiring, exact command propagation into turn/start, accepted tool evidence saved to
+checkpoint, failure budget exhaustion, successful unrelated commands remaining
+UNVERIFIED, and registration for later test/lint steps. Native observations are
+produced by fake App Server subprocesses, not actual command execution/inference.
+User's earlier full-suite result (308 tests, OK confirmed in follow-up) supports
+the prior runtime only; it does not verify this command-binding integration live.
+No new live inference has been run. Runtime permissions remain read-only/on-request.
+
+Validation: ten targeted command-binding tests and 318/318 full offline tests
+passed. The sample command was also run locally: test_models.py 12/12 passed.
+Runtime/doctor/verifier compilation, offline sample preview and git diff --check
+passed. No new live inference or native command-tool live test was run.
+
+
+### Early /check user feedback and deferred-check fix (2026-11-18)
+
+User supplied a live command-check CLI transcript: /check arrived during RUNNING
+and was rejected; turn later became CHECKING, but /finish was attempted without
+another /check. No command evidence was accepted, and exit paused the workflow.
+The assistant claimed 12 tests/exit 0, which is not sufficient trusted evidence.
+This transcript is partial evidence only, not a completed command-check live test.
+No raw session IDs, tokens or transcript are stored here; hashes were not supplied.
+
+For tool-only steps, an explicit early /check now waits for the same attempt's
+confirmed terminal event, then evaluates once. Duplicate requests do not add work;
+UI text alone never triggers evaluation. Cancel/exit or paused/failed/foreign
+attempt state clears the request. Manual/rubric still require explicit post-turn
+verification. No new model turn or automatic /next is introduced.
+Regression tests cover early/repeated /check, no extra dispatch, queued cancellation,
+manual rejection and unrelated successful commands remaining UNVERIFIED.
+
+Validation: 13 command-binding tests and 321/321 full offline tests passed;
+runtime/doctor/verifier compilation and git diff --check passed. No live rerun.
+
+
+### Confirmation input hardening (2026-11-18)
+
+User reported visible START followed by cancellation before backend startup. The
+transcript alone does not identify the raw bytes/cause; no inference occurred in
+that reported path. The old byte reader rejects a leftover empty line and literal
+bracketed-paste wrappers. The new shared reader skips empty newline-terminated
+lines (never treating them as consent), accepts a complete single-line wrapper
+around exact START, rejects EOF/invalid/incomplete/oversized input, and preserves
+following workflow commands. A real pseudo-terminal subprocess test confirms blank
+line + START + /next behavior; file-backed tests cover wrappers/CRLF and denials.
+No claim is made that the user's Terminal cause has been conclusively reproduced.
+
+Validation: 13 targeted workflow-entry tests and 324/324 full offline tests
+passed; runtime/doctor/verifier compilation and git diff --check passed.
+No live inference or new backend startup was required for the input tests.
+
+
+### Live command-check UNVERIFIED and diagnostic/matcher increment (2026-11-18)
+
+User supplied a later live transcript: backend completed and /check ran at CHECKING,
+but the controller reported checks_unavailable/UNVERIFIED. Assistant text claimed
+12 tests and exit 0, which is not trusted tool evidence. Final task remained paused;
+no DONE or actual-dispatch claim is recorded. Raw command observations were not
+retained in that build, so exact mismatch cause cannot be recovered from the pasted
+transcript. The locally generated item schema has string command/cwd and integer
+or null exitCode, but does not identify this run's actual values. No user IDs/tokens
+or raw transcript are copied into this evidence record.
+
+Matcher now supports a single explicit absolute bash/sh -c/-lc argv wrapper only
+when its inner command equals the registered code literally, with identical cwd.
+Extra argv, changed flags, different paths, chained/changed inner commands and
+shell-token normalization are rejected. This does not prove the wrapper caused the
+user's failure. Missing matches now record unknown tool evidence with bounded-field
+counts (starts/completions/command mismatches/cwd mismatches) and show diagnostics
+without raw commands/paths/output. No model text is interpreted as command evidence.
+
+New tests cover accepted literal-inner wrappers, rejected extra commands/argv and
+quoting changes, redacted unknown diagnostics persisted in checkpoints, and a
+wrapped-command fake App Server through deferred /check to explicit final coverage.
+Full offline suite 328/328 passed; runtime/doctor/verifier compilation and
+`git diff --check` passed. No new live inference was run. Native command integration
+remains not live-verified; a future single-turn run can distinguish missing events
+from command/cwd mismatch without repeatedly guessing.
+
+
+### Full-TTY confirmation regression (2026-11-18)
+
+User's input-only check accepted typed START, but a later full CLI run again rejected
+visible START before backend startup. Its raw bytes are unknown. An added full CLI
+pseudo-terminal test reproduced rejection for bracketed paste containing START plus
+an embedded newline; typed START passed. This demonstrates a receiver defect, not
+proof that the user's exact input had those bytes.
+
+Interactive sys.stdin/sys.stdout TTYs now activate standard-library readline and
+use input(); non-TTY streams retain the bounded byte reader and no-read-ahead
+behavior. Full CLI TTY tests stop at a stub backend constructor (no Codex process or
+inference) and verify typed START and multiline paste reach that boundary, while
+CANCEL never does. Invalid confirmation shows counts/flags only, never raw input.
+Existing piped full CLI/fake App Server and EOF/invalid input tests remain in place.
+
+Validation: 15 targeted workflow-entry tests and 330/330 full offline tests
+passed; runtime/doctor/verifier compilation and git diff --check passed.
+No new live inference was run.
+
+
+### User-supplied successful command-check CLI run (2026-11-18)
+
+Scoped LIVE_VERIFIED for the single-step test_models.py happy path. The user ran
+the explicit-plan CLI with examples/check-model-policy.json, its separate command
+bindings and requested gpt-6.1-sol/low. Transcript shows START accepted, one attempt,
+backend terminal completion, /check accepting a pass test with tool evidence,
+/finish mapping criterion 1 to ref 1.1, DONE and clean /exit retaining DONE.
+The user did not use /verify to override the tool check. Reported models and token
+usage remained null. Total session time includes user wait, not model-only latency.
+
+This is user-supplied transcript evidence, not an independent agent-run live test.
+No runtime hash, raw native events, disk checkpoint inspection or process exit code
+was supplied. Local documentation baseline is fca9151 with runtime SHA-256
+`7c3988d5dca5c52a30f65c58da7b67acbfee6baa0e91369008f20cbc2d7a22ae`;
+these identify the local candidate, not an independently established hash of the
+user's execution. Session IDs, evidence UUIDs, tokens and raw transcript are omitted.
+The transcript does not establish whether shell wrapping caused earlier mismatches.
+
+Scope excludes native recovery, all tools/permission paths, forced retry scenarios,
+backend model dispatch telemetry and private-web isolation. These gates remain open.
+The earlier zero-attempt startup/exit report also supports the TTY confirmation happy
+path, without establishing the raw cause of past rejected input. No additional live
+inference or rerun was performed by the agent. Documentation-only update; diff check
+passed. Prior offline suite at this runtime: 330/330 passed.
+
+
+### Durable workflow/recovery offline increment (2026-11-18)
+
+New explicit CLI workflows use ephemeral=false; bare native host API calls and the
+older workflow probe keep ephemeral=true. A schema-v3 checkpoint and writer lock
+exist before thread/start; no implicit user-choice event is fabricated to bind a
+thread. Attempt reservation clears the prior native turn ID atomically. Native ID
+binding is saved only after a valid, non-reused turn/start response. Durable resume
+reuses thread/read, thread/turns/list and thread/resume under existing native policy.
+
+Eleven new native recovery tests run separate fake server processes with synthetic
+persisted native state. They cover context through actual display writes, task/step
+identity and counters, stale manual evidence requiring revalidation, missing model
+grants, writer locks, active/interrupted turns, wrong account/project/provider,
+old ephemeral threads, changed permission/history/preview data, unknown start and
+native binding-save failure with no replay. CLI preview is read-only; execution
+uses the saved plan. Earlier TTY tests now use an isolated state home before their
+stub backend, since metadata setup precedes process startup.
+
+Six new resume-probe tests cover two-turn reconnect/DONE, redacted retained scratch,
+recall mismatch with no retry, dropped UI text, detecting a bypassed stale-evidence
+gate, rejecting ephemeral recovery, and explicit live opt-in/exit status. The shared
+answer-capture helper observes UI writes, preserving the existing verifier's checks.
+The two-turn probe uses synthetic manual facts; it is not a no-tools security gate.
+
+Public resume is limited to manual/rubric plans; no manual tool-result override.
+Tool checks require new trusted observations and are not resumed through the CLI.
+Durable scratch/native threads are retained by the new probe (no deletion claim).
+No new live inference has been run; previous live reports apply only to their
+recorded versions and scopes. New native resume is not yet LIVE_VERIFIED.
+
+Validation: 11 targeted native-resume tests, 6 targeted resume-probe tests and
+347/347 full offline tests passed. Runtime/doctor/verifier compilation, both CLI
+help paths and git diff --check passed. No live inference or real native reconnect
+was run by the agent. Resume command-check revalidation remains unsupported.
+
+
+### Resume probe first-turn false failure and event classification fix (2026-11-18)
+
+User reported phase first_turn with durableResume failed; reconnect was never
+attempted. Supplied runtime SHA-256
+`f3ee087dea800e552937ee9b1e8ba121ee31d2193d518797fc4e5278509fef4c`
+and verifier SHA-256
+`e8871f28ef9040dad46d8d217505c53e532e4228fb1f1537464509d2c200c36c`
+match local c41a9bd files. Targeted retained scratch metadata was inspected read-only:
+active attempt completed, native binding present, no accepted checks. Sentinel was
+unchanged. Only the corresponding native rollout was read; it contains one assistant
+output exactly ACK and no persisted function-call item. No raw rollout, nonce,
+account/thread/session IDs or user scratch path is copied into this document.
+A read-only native-history RPC inspection was unavailable in the agent environment;
+no new turn or inference was requested.
+
+The verifier incorrectly counted every non-agent/reasoning/plan started item as a
+tool, including userMessage. The generated protocol schema identifies userMessage as
+input metadata. A synthetic userMessage start reproduces the failure against the old
+verifier, then passes after explicit metadata/tool classification. Actual tool items
+still stop the prerequisite; future unknown item kinds are unverified and redacted.
+Original V2 started-item counts were not persisted, so the exact event that tripped
+that historical run is not independently recovered from the rollout.
+
+Reports now include firstTurn/recallTurn diagnostics (terminal status, displayed
+message count, exact-answer boolean and allowlisted item counts) and failureReason,
+without answers, IDs or raw tool content. A first-turn prerequisite failure leaves
+durableResume unverified rather than claiming reconnect failed. Sentinel status is
+set to passed when the finally check succeeds, including an early return.
+Eight targeted resume-probe tests and 349/349 full offline tests passed; compilation
+and git diff --check passed. No live rerun; native resume remains not live-verified.
+
+
+### Standalone runtime installation (2026-11-18)
+
+Four new offline tests install only modelmate.py as executable sr in a path with
+Thai/space characters, then run from a separate scratch project with isolated
+Python-only PATH, no Codex and no repo imports. Help/preview succeed without state
+creation. Quoted Bash alias preserves executable path and arguments. Missing Codex
+produces actionable CLI/PATH guidance in doctor, manual live and workflow startup,
+without a traceback or inference. Fake/real executable names other than codex retain
+their existing FileNotFoundError behavior; missing plan errors are not reclassified.
+Agent versions inspected locally: Python 3.12.0; Codex CLI 0.169.0 (version only).
+No live inference, installed user binary or .bashrc mutation was performed.
+
+Validation: four standalone artifact tests and 353/353 full offline tests passed;
+runtime/doctor/verifier compilation and git diff --check passed. No live inference.
+
+
+### User-supplied successful durable resume probe (2026-11-18)
+
+Scoped LIVE_VERIFIED: the user ran
+`python3 verify.py --run-live --probe-workflow-resume gpt-6.1-sol`
+and supplied all five checks passed: durableResume, contextRecallAfterReconnect,
+restoredEvidenceGate, finalCheckpoint and sentinelUnchanged; phase finished.
+Both turns reported completed, one displayed exact expected answer, zero tool/
+unknown item events, and started item counts userMessage=1, agentMessage=1.
+Requested gpt-6.1-sol/low; reportedModels null; scratchRetained true. No process
+exit code was supplied. This is user-provided evidence, not an independent agent-run
+live test. The actual native scratch path and IDs are not copied into this document.
+
+Runtime SHA-256: `6903eee04032a38ff057a726500dc02a7be54459d587225646dffad17313e780`
+Verifier SHA-256: `1a939a05a226a67852e1f8f2d69f3904a5b6fb377ae55c12182e11093a3a668a`
+Both hashes match local files at commit 0a9c86b. The diagnostics confirm userMessage
+metadata is no longer miscounted as tool activity in this tested version.
+
+Scope remains two synthetic manual-check turns across process reconnect. It does
+not verify tool-check revalidation, crash/network recovery, a no-tools security
+boundary, all permission paths or backend dispatch telemetry. Durable scratch/thread
+remain retained, not deleted. Public tool-check resume and auto routing remain gated.
+Documentation-only evidence update; git diff --check passed. No new agent inference.
+
+
+## P03/P12 — standalone recheck capability decision, 2026-11-18
+
+Decision: keep public test/lint resume and standalone command execution disabled.
+The installed Codex 0.169.0 generated CommandExecParams schema supports argv, cwd,
+sandboxPolicy and timeoutMs, but no approvalPolicy. A schema is not enforcement
+evidence. The official [App Server documentation](https://developers.openai.com/codex/app-server/)
+describes command/exec as standalone execution without a thread/turn; this could
+avoid a model turn, but does not establish parity with native tool command rules.
+
+The upstream [command execution request processor](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/command_exec_processor.rs)
+inspected on this date selects effective sandbox permissions, builds ExecParams
+with UseDefault and starts an execution request. That processor does not show a
+command-rule decision or turn approval routing. This is a reason to withhold the
+capability, not proof of a bypass in the installed binary: upstream main may differ
+from 0.169.0, and downstream enforcement has not been demonstrated. Reading
+configRequirements alone would not prove that every applicable command rule was
+preserved. A user accepting a check plan cannot waive stronger host restrictions.
+
+The existing RPC allowlist remains unchanged. An offline transport regression
+asserts command/exec, command/exec/write and command/exec/terminate are refused
+before send in diagnostic and native workflow connections. This proves only the
+client gate; it does not test backend enforcement. No command executor, permission
+override, local subprocess fallback, new model turn or quota-consuming probe was
+introduced. Runtime and verifier hashes remain unchanged.
+
+Next required proof: on the exact supported server version, demonstrate that a
+harmless permitted command runs while the same harmless command under an applicable
+deny rule is denied, and that approval-required commands cannot execute before the
+native decision. Cover project configuration, stronger managed restrictions,
+timeout/disconnect and no replay. Use synthetic fixtures without changing user
+configuration. Until a supported path can establish these properties, do not add
+a standalone executor or advertise zero-model-cost tool revalidation. If that
+path becomes supported, reserve each recheck durably before execution and record
+unknown outcomes without resetting correction budgets or silently retrying.
+
+Offline validation: protocol tests 7/7 passed; full unittest discovery 354/354
+passed; git diff --check passed. These checks do not close the native permission
+gate described above.
+
+
+## P03 — no-inference standalone policy probe, 2026-11-18
+
+Added opt-in `python3 probe_policy.py --run`. No flag prints help without starting
+Codex. The diagnostic creates its own private temporary directory and trusted
+project config/rules, then removes only that directory on exit. It does not edit
+real configuration, change HOME/CODEX_HOME, copy credentials or create threads.
+The process-local trust override names only the synthetic project; managed/user
+configuration remains loaded. Connection's optional cwd argument is used to start
+the server in that project rather than merely passing a cwd to individual RPCs.
+
+The installed CLI evaluates two explicit fixture commands with execpolicy check:
+one allow and one forbidden. This utility evaluates policy without executing the
+supplied command; see the official [rules documentation](https://developers.openai.com/codex/rules/).
+Only after both decisions match, initialization succeeds and config/read confirms
+the effective marker plus enabled project layer does the probe send command/exec.
+It requests read-only with network disabled, bounded output and timeout, and uses
+only two fixed printf argv vectors. No shell, user prompt, test suite or arbitrary
+command is accepted. No account, catalog, quota, thread or turn request is sent.
+
+The probe reports version, source/rule hashes and redacted stages/results. Exit 1
+means the forbidden fixture command also executed; this prevents treating the path
+as verified, but is not conclusive proof that server-side rules were loaded and
+bypassed. Config visibility and a CLI rule decision do not prove server loading.
+Exit 2 means prerequisites/execution remain unverified, including RPC errors:
+unsupported methods, sandbox startup failure and genuine denial can look alike.
+Neither result passes permission parity; only help returns 0 (interrupt returns
+130). Unexpected approval requests are never accepted, and timeout/EOF/error never
+triggers a retry. The runtime standalone command allowlist remains closed.
+
+Agent-run installed CLI check on 2026-11-18: codex-cli 0.169.0; fixtureDecisions
+matched; phase server_initialize; projectConfigObserved false; both native command
+results unverified; process exit 2. Thus no command/exec request was sent. No new
+inference was run. This does not establish a backend denial or a passed live gate.
+Normal-terminal output is still needed to investigate this exact native path.
+Even that narrow result cannot certify managed restrictions, approval timing,
+crash recovery or permission parity; public tool-check resume stays disabled.
+
+Offline validation: 10 policy-probe tests passed, including native fake-server
+execution and command capture from the actual fixture cwd; full suite 365/365
+passed. The shared transport also distinguishes a missing cwd from a missing
+Codex executable. Compile checks for all four entry points and git diff --check
+passed. No new dependency or model invocation was added.
+
+
+## P03 — explicit config-read cwd correction, 2026-11-18
+
+User-supplied normal-terminal report reached project_config on codex-cli 0.169.0:
+fixtureDecisions matched, projectConfigObserved false, both commands unverified,
+permissionParity unverified. Probe SHA-256
+`058359457f1e7bfb6df9912828c770ae9f9e6e58e0bd8dc3e137e6d091a33aaf`
+and runtime SHA-256
+`bbe5871404ab2b4d675ed963a841d0688ca751b3c6acc3b6c81933bdbab4d057`
+match d2d79c8. No native command was sent by that report's code path; no permission
+gate passed and no inference was requested. No exit code was supplied.
+
+The probe omitted cwd from config/read, whose installed schema explicitly supports
+project resolution through that parameter. The upstream
+[configuration reader](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/config_manager_service.rs)
+passes this optional cwd into layer loading independently of server process cwd.
+The diagnostic now sends the exact fixture cwd and retains every existing marker,
+project identity and enabled-layer check. It additionally reports only five boolean
+configEvidence fields: effective marker, layers shape, matching fixture layer,
+enabled fixture layer, and enabled layer marker. No config values, paths, reasons
+or private layer names are printed.
+
+The fake server now withholds project config when cwd is omitted or wrong, so the
+prior probe would fail the execution-path regression. Disabled layers, wrong
+effective marker, foreign project path, missing layer marker and malformed layers
+still stop before any command; diagnostic output is checked for synthetic private
+values. Targeted tests 10/10 passed. Native success after this change remains
+unverified; do not interpret this fix as established permission parity.
+Full offline suite 365/365, probe compile and git diff --check also passed.
+
+
+## P03 — trust override encoding correction, 2026-11-18
+
+User report for probe SHA-256
+`62604852662d2a30b59771b6e531c657dd85fad8b6f5cb8cba666038c8a4b63d`
+(04fedbf) and unchanged runtime hash reached project_config. Boolean evidence:
+layersPresent and fixtureLayerPresent true; fixtureLayerEnabled,
+effectiveMarkerMatches and fixtureLayerMarkerMatches false. Thus discovery worked,
+but the layer stayed disabled and no standalone commands were sent. This does not
+identify the precise server-side disabled reason or prove managed-policy denial.
+
+The probe had encoded its CLI trust override as a dotted key containing a quoted
+path. Upstream [override handling](https://github.com/openai/codex/blob/main/codex-rs/config/src/overrides.rs)
+splits key paths literally on dots, without parsing quoted TOML key segments.
+Changed the override to a top-level projects inline-table value with one quoted
+fixture path. This preserves path dots/Unicode/spaces without malformed key
+segments. The change remains process-local and keeps the fixture layer enabled
+check mandatory; it does not edit persistent trust or override managed policy.
+
+Offline policy probe tests 11/11 passed, including dots/spaces/Thai in the actual
+fake-server cwd. An agent-run no-inference check on installed Codex 0.169.0 accepted
+the new override with execpolicy check and returned the expected forbidden rule
+decision. Python 3.12 tomllib also confirmed the exact single project key/value;
+tomllib is used only for this local check, not as a runtime dependency. Neither
+check verifies native App Server project trust. Native result after this encoding
+fix remains pending; permission parity and public tool rechecks remain gated.
+Full offline suite 366/366, probe compile and git diff --check passed.
+
+
+## P03 — completed standalone policy probe: negative evidence, 2026-11-18
+
+User-supplied normal-terminal output for Codex 0.169.0 reached finished:
+fixtureDecisions matched, projectConfigObserved true, baseline executed,
+forbiddenCommand executed, permissionParity not_established_for_fixture. All five
+configEvidence booleans were true. No process exit code was supplied; this code
+path returns 1 deliberately, not a successful permission certification.
+
+Probe SHA-256: `c4ec4ea5058c82bbe3d614b4337b3e1f24e1071f5a91fe6bba41acbf16e60dcb`
+Runtime SHA-256: `bbe5871404ab2b4d675ed963a841d0688ca751b3c6acc3b6c81933bdbab4d057`
+Rules SHA-256: `f5281513af1ea09f02da12d00caaa55d05ea59a1da5d8173d7f126df1e502c17`
+Source hashes match local 630cc24. The synthetic rule hash matches prior runs.
+
+This establishes that both fixed printf commands executed through command/exec
+in this fixture, despite the separate CLI rule evaluation returning forbidden for
+one of them and the project config layer being enabled. It does not establish
+whether the standalone server loaded that rule, why it executed, or whether native
+model tools/managed policies behave the same way. No model turn was requested.
+Do not describe this as a universal Codex policy bypass or repeat the same probe
+to seek a passing result. No private config, paths or raw traces were collected.
+
+Decision: reject standalone command/exec as the current tool-revalidation backend.
+Runtime allowlists and public test/lint resume restrictions remain unchanged.
+The completed diagnostic is useful negative evidence, not a passed G2/P12 gate.
+Next eligible work is a separately scoped native-tool verification-turn design:
+explicit model/quota consent, existing native permissions, fresh observed command
+evidence, durable reservation and unknown-outcome/no-replay handling, preserving
+correction counters and stale-evidence checks. Such a path uses model quota and
+must not be presented as zero-inference revalidation or started automatically.
+This update changes documentation only; git diff --check passed. No repeated
+native probe or additional inference was run by the agent.
+
+
+## P06/P12 — classifier removal and durable recheck core, 2026-11-18
+
+User removed separate decision models/classifiers from scope. Deleted the unused
+CLASSIFIER_INSTRUCTIONS and prepare_classification function and their five
+preparation tests; plan schema/routing/model approval tests remain. Offline prompt
+guidance now names --live/--workflow without promising a future classifier. This
+removes a dormant API, not an existing live classifier call.
+
+Added controller-only reserve/advance/limit-choice APIs and a version-2 workflow
+checkpoint ledger, with version-1 read compatibility. It records command/cwd
+digests, selections, source evidence IDs, budgets and native binding phases without
+raw commands/output. Session schema stays version 3. SessionStore rejects recheck
+ledger rollback/rewrite under the existing writer lock. Persistence failures freeze
+the controller; a saved unresolved reservation survives reopen and blocks dispatch.
+Recheck reservations do not replace work native turn IDs or reset work attempts.
+
+Thirteen offline tests use real private temporary SessionStore files and inject
+save failures before and after atomic replacement, replay attempts, premature
+bindings/results, bad quota/selection, schema mutation and budget extensions. They
+cover changed commands/models across reconnect, unknown outcomes, immutable ledger
+prefixes, backward compatibility, per-process stale-evidence confirmation and
+separate metrics. A matching completion from a newly reserved operation can clear
+its source stale evidence; saved or reconciled historical completion cannot.
+
+Scope: state/persistence only. Native recheck event matching, model consent, UI
+cancellation and retained-thread lifecycle are specified in NATIVE_RECHECK.md but
+not connected. No new /recheck command or public tool-check resume is enabled.
+No command/exec runtime permission or local executor was added. No live inference
+was requested; the prior native happy-path evidence applies only to its recorded
+source hashes, not to this new runtime. The next step is native adapter integration,
+not another user-run live probe of this controller core.
+
+Validation: targeted recheck tests 13/13 passed; full offline unittest suite 375/375
+passed; compile checks for modelmate.py, doctor.py, verify.py and probe_policy.py,
+and git diff --check passed. Five tests were removed with the deleted classifier;
+existing routing/policy tests and the native mock scenarios still pass.

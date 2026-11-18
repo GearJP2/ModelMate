@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "goal": "ตรวจ model policy ด้วย unit tests ที่มีอยู่ โดยไม่แก้ไฟล์",
+  "clarifications": [],
+  "success_criteria": ["ชุดทดสอบ test_models.py ผ่านด้วย exit code 0 จากคำสั่งที่กำหนด"],
+  "steps": [
+    {
+      "kind": "review",
+      "objective": "รัน verification command ที่ผู้ใช้ระบุด้วย native command tool ตาม command และ cwd ที่ส่งมาอย่างตรงตัวเพียงครั้งเดียว แล้วสรุปผลสั้น ๆ ห้ามแก้ไฟล์ ห้ามใช้เครือข่าย และห้ามลองคำสั่งซ้ำใน attempt เดียว",
+      "role": "standard",
+      "effort": "low",
+      "risk": "normal",
+      "reason": "ตรวจเฉพาะ model policy ด้วย tests ที่มีอยู่ ไม่มีการแก้โค้ด",
+      "checks": [
+        {"kind": "test", "criterion": "test_models.py รันผ่านด้วยคำสั่งที่ผูกไว้และ exit code 0"}
+      ]
+    }
+  ]
+}

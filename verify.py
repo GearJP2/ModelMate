@@ -413,15 +413,35 @@ def probe_sessions(model, timeout):
             print('Session probe stopped at ' + phase + '; scratch retained: ' + str(directory), file=sys.stderr)
 
 
+WORKFLOW_METADATA_ITEMS = {'userMessage', 'hookPrompt', 'agentMessage', 'plan', 'reasoning',
+                           'enteredReviewMode', 'exitedReviewMode', 'contextCompaction'}
+WORKFLOW_TOOL_ITEMS = {'commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall',
+                      'collabAgentToolCall', 'subAgentActivity', 'webSearch', 'imageView',
+                      'sleep', 'imageGeneration', 'functionCallOutput'}
+
+
 class WorkflowVerificationConnection(NativeWorkflowConnection):
     """Observe only bound denial replies; never retain native traces or assistant text in reports."""
     def __init__(self, command, timeout):
         super().__init__(command, timeout)
         self._requests = {}
         self.declined = 0
+        self.tool_events = 0
+        self.unknown_item_events = 0
+        self.started_items = {}
 
     def handle_event(self, message):
         super().handle_event(message)
+        if (message.get('method') == 'item/started'
+                and message.get('params', {}).get('threadId') == self.thread_id):
+            item = message['params'].get('item')
+            kind = item.get('type') if isinstance(item, dict) else None
+            if isinstance(kind, str) and kind in WORKFLOW_TOOL_ITEMS:
+                self.tool_events += 1
+            elif not isinstance(kind, str) or kind not in WORKFLOW_METADATA_ITEMS:
+                self.unknown_item_events += 1
+            label = kind if isinstance(kind, str) and kind in WORKFLOW_TOOL_ITEMS | WORKFLOW_METADATA_ITEMS else 'unknown'
+            self.started_items[label] = self.started_items.get(label, 0) + 1
         if 'id' in message and message.get('method') in APPROVALS:
             if len(self._requests) >= 100:
                 raise ProbeError('Too many workflow approval requests.')
@@ -452,6 +472,20 @@ def wait_workflow(connection, seconds, *, allow_denial=False):
         for key, _ in connection.selector.select(min(.1, max(0, deadline - time.monotonic()))):
             connection.read_ready(key.fileobj)
     raise ProbeError('Workflow probe timed out; outcome unknown; no replay.')
+
+
+def capture_workflow_answers(host):
+    """Observe the actual display writes, not text payloads that the UI might drop."""
+    output = io.StringIO()
+    shell = ChatShell(output, workflow=host.controller, workflow_action=host)
+    answers = []
+    def observe(message):
+        before = output.tell()
+        shell.event(message)
+        if message.get('type') == 'text':
+            answers.append(output.getvalue()[before:].strip())
+    host.on_change = observe
+    return output, answers
 
 
 def probe_workflow(model, timeout):
@@ -513,15 +547,7 @@ def probe_workflow(model, timeout):
         connection = WorkflowVerificationConnection(command, timeout)
         host = connection.connect(controller, directory, policy)
         host.timeout = timeout
-        output = io.StringIO()
-        shell = ChatShell(output, workflow=controller, workflow_action=host)
-        answers = []
-        def observe(message):
-            before = output.tell()
-            shell.event(message)
-            if message.get('type') == 'text':
-                answers.append(output.getvalue()[before:].strip())
-        host.on_change = observe
+        output, answers = capture_workflow_answers(host)
         for index in (0, 1):
             result['phase'] = 'answer_display' if index == 0 else 'context_recall'
             output.seek(0); output.truncate()
@@ -606,6 +632,146 @@ def probe_workflow(model, timeout):
             print('Workflow probe incomplete; inspect Codex before retrying. Scratch retained: ' + str(directory), file=sys.stderr)
 
 
+def workflow_turn_diagnostics(connection, status, answers, expected):
+    return {'terminalStatus': status, 'displayedMessages': len(answers),
+            'exactExpectedAnswer': answers == [expected], 'toolEvents': connection.tool_events,
+            'unknownItemEvents': connection.unknown_item_events, 'startedItems': dict(connection.started_items)}
+
+
+def workflow_turn_failure(connection, status, answers, expected):
+    if status != 'completed':
+        return 'turn_not_completed'
+    if answers != [expected]:
+        return 'displayed_answer_mismatch'
+    if connection.tool_events:
+        return 'tool_activity_observed'
+    return 'unknown_item_type'
+
+
+def probe_workflow_resume(model, timeout):
+    """Two synthetic turns across process restart; retain durable scratch for inspection."""
+    directory = Path(tempfile.mkdtemp(prefix='modelmate-workflow-resume-'))
+    project = directory / 'project'; project.mkdir(mode=0o700)
+    sentinel = project / 'sentinel.txt'; sentinel.write_text('synthetic sentinel\n')
+    connection = store = None
+    keys = ('durableResume', 'contextRecallAfterReconnect', 'restoredEvidenceGate', 'finalCheckpoint', 'sentinelUnchanged')
+    result = dict.fromkeys(keys, 'unverified')
+    result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None,
+        runtimeSha256=hashlib.sha256(Path(sys.modules[NativeWorkflowConnection.__module__].__file__).read_bytes()).hexdigest(),
+        verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        scratchRetained=True, scope='Two synthetic manual-check turns across reconnect. Not tool-check revalidation, '
+        'crash/network recovery, a no-tools security boundary, all permission paths or backend dispatch telemetry.')
+    catalog = [{'model': model, 'defaultReasoningEffort': 'low',
+                'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}]
+    policy = {role: model for role in ('economy', 'standard', 'strong')}
+    nonce = secrets.token_hex(16)
+    raw = json.dumps({'version': 1, 'goal': 'Synthetic durable workflow verification',
+        'clarifications': [], 'success_criteria': ['Harness observed initial ACK', 'Harness observed context recall'],
+        'steps': [{'kind': 'implement', 'objective': prompt, 'role': 'standard', 'effort': 'low',
+                   'risk': 'normal', 'reason': 'Explicit synthetic verification',
+                   'checks': [{'kind': 'manual', 'criterion': 'Harness compares displayed answer'}]}
+                  for prompt in ('Remember this synthetic code: ' + nonce + '. Reply only ACK. Do not use tools or network.',
+                                 'Reply only with the synthetic code from the preceding step. Do not use tools, files or network.')]})
+    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
+    try:
+        result['phase'] = 'first_turn'
+        store = SessionStore(project, directory / 'state')
+        controller = WorkflowController(raw, catalog, policy)
+        connection = WorkflowVerificationConnection(command, timeout)
+        host = connection.connect(controller, project, policy, store=store); host.timeout = timeout
+        _, answers = capture_workflow_answers(host)
+        host({'action': 'next', 'task_id': controller.task_id})
+        status = wait_workflow(connection, timeout)
+        result['firstTurn'] = workflow_turn_diagnostics(connection, status, answers, 'ACK')
+        if (status != 'completed' or answers != ['ACK']
+                or connection.tool_events or connection.unknown_item_events):
+            result['failureReason'] = workflow_turn_failure(connection, status, answers, 'ACK')
+            return result
+        active = controller.snapshot()['active_attempt']
+        first = controller.record_check(active['id'], 0, origin='manual', result='pass',
+            reference='Synthetic displayed ACK', finding='Harness observed exact ACK')
+        host({'action': 'check', 'task_id': controller.task_id})
+        sid, tid = connection.session_id, connection.thread_id
+        original = controller.snapshot()
+        controller.pause(); connection.close(); connection = None
+        check_session_sentinel(project, sentinel)
+        result['phase'] = 'reconnect'
+        connection = WorkflowVerificationConnection(command, timeout)
+        host = connection.resume(store, sid, project, policy, raw); host.timeout = timeout
+        controller = host.controller
+        state = controller.snapshot()
+        if (connection.thread_id != tid or state['task_id'] != original['task_id'] or state['step_index'] != 1
+                or state['steps'][0]['id'] != original['steps'][0]['id'] or state['steps'][0]['attempts'] != 1
+                or first['id'] not in state['stale_evidence'] or controller._approvals._grants):
+            result['durableResume'] = 'failed'
+            return result
+        result['durableResume'] = 'passed'
+        _, answers = capture_workflow_answers(host)
+        controller.answer_pause(state['pause_token'], 'continue')
+        result['phase'] = 'context_recall'
+        host({'action': 'next', 'task_id': controller.task_id})
+        status = wait_workflow(connection, timeout)
+        result['recallTurn'] = workflow_turn_diagnostics(connection, status, answers, nonce)
+        if (status != 'completed' or answers != [nonce]
+                or connection.tool_events or connection.unknown_item_events):
+            result['contextRecallAfterReconnect'] = 'failed' if status != 'completed' or answers != [nonce] else 'unverified'
+            result['failureReason'] = workflow_turn_failure(connection, status, answers, nonce)
+            return result
+        result['contextRecallAfterReconnect'] = 'passed'
+        active = controller.snapshot()['active_attempt']
+        second = controller.record_check(active['id'], 0, origin='manual', result='pass',
+            reference='Synthetic displayed recall', finding='Harness compared retained nonce')
+        host({'action': 'check', 'task_id': controller.task_id})
+        coverage = {0: [first['id']], 1: [second['id']]}
+        try:
+            controller.finish_task(coverage)
+        except ProbeError as exc:
+            if (str(exc) != 'Saved checks require explicit host revalidation before task completion.'
+                    or first['id'] not in controller.snapshot()['stale_evidence']):
+                return result
+            result['restoredEvidenceGate'] = 'passed'
+        else:
+            result['restoredEvidenceGate'] = 'failed'
+            return result
+        controller.revalidate_check(first['id'], origin='manual', result='pass',
+            reference='Harness revalidated retained ACK observation', finding='Original displayed ACK remains the checked synthetic fact')
+        controller.finish_task(coverage)
+        saved = store.read(sid)['workflow']
+        if saved['state'] == 'DONE' and [step['attempts'] for step in saved['steps']] == [1, 1]:
+            result['finalCheckpoint'] = 'passed'
+        else:
+            result['finalCheckpoint'] = 'failed'
+        check_session_sentinel(project, sentinel)
+        result['sentinelUnchanged'] = 'passed'
+        result['phase'] = 'finished'
+        return result
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result['diagnostic'] = diagnostic_code(exc)
+        return result
+    finally:
+        if connection is not None:
+            try:
+                host = connection.host
+                if host is not None and host.controller.snapshot()['active_attempt'] is not None and host._terminal is None:
+                    host({'action': 'cancel', 'task_id': host.controller.task_id})
+                    wait_workflow(connection, 5)
+            except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                result['stopState'] = 'unknown'
+            finally:
+                connection.close()
+        if store is not None:
+            store.close()
+        try:
+            check_session_sentinel(project, sentinel)
+        except (ProbeError, OSError, UnicodeError):
+            result['sentinelUnchanged'] = 'failed'
+        else:
+            result['sentinelUnchanged'] = 'passed'
+        # shortcut: retain durable scratch/thread until workflow deletion has its own scoped verification.
+        print('Durable workflow probe scratch retained for inspection (thread not deleted): ' + str(directory), file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
@@ -616,17 +782,24 @@ def main():
                         help='two live turns across reconnect; delete only the harness-created scratch thread')
     parser.add_argument('--probe-workflow', metavar='MODEL',
                         help='up to four synthetic native workflow turns: answers, denial and cancel; local disconnect guard')
+    parser.add_argument('--probe-workflow-resume', metavar='MODEL',
+                        help='two synthetic durable workflow turns across reconnect; scratch/thread retained')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if not args.run_live:
         parser.print_help()
         return 0
-    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow)) != 1:
-        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL')
+    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow, args.probe_workflow_resume)) != 1:
+        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL, --probe-workflow-resume MODEL')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_workflow_resume:
+            result = probe_workflow_resume(args.probe_workflow_resume, args.timeout)
+            print(json.dumps(result, indent=2))
+            return 0 if all(result.get(key) == 'passed' for key in ('durableResume', 'contextRecallAfterReconnect',
+                'restoredEvidenceGate', 'finalCheckpoint', 'sentinelUnchanged')) else 1
         if args.probe_workflow:
             result = probe_workflow(args.probe_workflow, args.timeout)
             print(json.dumps(result, indent=2))
