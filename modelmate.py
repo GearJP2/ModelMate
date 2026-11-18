@@ -3047,6 +3047,33 @@ def load_check_commands(path, plan, project):
     return result
 
 
+def read_workflow_confirmation(input_stream, write):
+    """Read one explicit confirmation without consuming buffered workflow commands."""
+    while True:
+        line = b''
+        ended = False
+        while len(line) <= 256:
+            chunk = os.read(input_stream.fileno(), 1)
+            if not chunk or chunk == b'\n':
+                ended = chunk == b'\n'
+                break
+            line += chunk
+        if len(line) > 256:
+            write('ข้อมูลยืนยันยาวเกินกำหนด; ไม่เปิด backend')
+            return False
+        value = line.strip()
+        if not value and ended:
+            write('ยังไม่ได้ยืนยัน: พิมพ์ START แล้ว Enter หรือ CANCEL เพื่อยกเลิก')
+            continue
+        if value.startswith(b'\x1b[200~') and value.endswith(b'\x1b[201~'):
+            value = value[6:-6].strip()
+        if value == b'START':
+            return True
+        if value and value != b'CANCEL':
+            write('ข้อมูลยืนยันไม่ตรง START; ไม่เปิด backend กรุณาพิมพ์คำนี้โดยตรงแทนการ paste')
+        return False
+
+
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
@@ -3090,16 +3117,9 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     if any(step['effort'] == 'ultra' for step in plan['steps']):
         raise ProbeError('Automatic delegation effort is not enabled.')
     preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · ยัง resume native ไม่ได้')
-    preview.write('ใช้โควตา subscription เมื่อกด /next; พิมพ์ START เพื่อยืนยันแผน หรือข้อความอื่นเพื่อยกเลิก:')
+    preview.write('ใช้โควตา subscription เมื่อกด /next; พิมพ์ START แล้ว Enter เพื่อยืนยันแผน หรือ CANCEL เพื่อยกเลิก:')
     output.flush()
-    # Avoid TextIO read-ahead: later input is consumed by run_chat using os.read.
-    confirmation = b''
-    while len(confirmation) <= 256:
-        chunk = os.read(input_stream.fileno(), 1)
-        if not chunk or chunk == b'\n':
-            break
-        confirmation += chunk
-    if confirmation.strip() != b'START':
+    if not read_workflow_confirmation(input_stream, preview.write):
         preview.write('ยกเลิกแล้ว ยังไม่เปิด backend')
         return 0
     backend = None

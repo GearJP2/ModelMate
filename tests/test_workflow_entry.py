@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modelmate import ChatShell, ProbeError, WorkflowController, run_workflow_file, SessionStore, main, workflow_statistics, WorkflowHost
+from modelmate import ChatShell, ProbeError, WorkflowController, run_workflow_file, SessionStore, main, workflow_statistics, WorkflowHost, read_workflow_confirmation
 from test_routing import PLAN, CATALOG, POLICY, QUOTA
 from test_native_workflow import SERVER
 
@@ -33,6 +33,41 @@ class WorkflowEntryTests(unittest.TestCase):
             source.write(text);source.seek(0)
             return run_workflow_file(self.path, bindings or ['standard=synthetic-standard'],
                                      'ask_to_escalate', execute, source, io.StringIO())
+
+    def test_confirmation_ignores_blank_paste_lines_without_approving_them(self):
+        for payload in (b'\nSTART\n/next\n', b'\r\nSTART\r\n/next\n',
+                        b'\x1b[200~START\x1b[201~\n/next\n'):
+            with tempfile.TemporaryFile('w+b') as source:
+                source.write(payload);source.seek(0)
+                self.assertTrue(read_workflow_confirmation(source, lambda _: None))
+                self.assertEqual(os.read(source.fileno(), 6), b'/next\n')
+
+    def test_confirmation_on_a_real_pseudoterminal_preserves_next_command(self):
+        import pty
+        master, slave = pty.openpty()
+        try:
+            code = ("import sys,os;from modelmate import read_workflow_confirmation;"
+                    "print(read_workflow_confirmation(sys.stdin,print));print(os.read(0,6))")
+            process = subprocess.Popen([sys.executable, '-u', '-c', code], cwd=ROOT,
+                                       stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                os.write(master, b'\nSTART\n/next\n')
+                output, error = process.communicate(timeout=3)
+                self.assertEqual(process.returncode, 0, error)
+                self.assertIn(b'True\n', output)
+                self.assertIn(b"b'/next\\n'", output)
+            finally:
+                if process.poll() is None:process.kill();process.wait(timeout=3)
+                process.stdout.close();process.stderr.close()
+        finally:
+            os.close(master);os.close(slave)
+
+    def test_confirmation_eof_invalid_and_unclosed_paste_never_approve(self):
+        for payload in (b'', b'\n\n', b'CANCEL\n', b'NO\nSTART\n',
+                        b'\x1b[200~START\n', b'\x1bSTART\n', b'x'*257+b'START\n', b'START'+b' '*257+b'\n'):
+            with tempfile.TemporaryFile('w+b') as source:
+                source.write(payload);source.seek(0)
+                self.assertFalse(read_workflow_confirmation(source, lambda _: None))
 
     def test_preview_and_declined_confirmation_never_start_process(self):
         with patch('modelmate.subprocess.Popen',side_effect=AssertionError('backend forbidden')):

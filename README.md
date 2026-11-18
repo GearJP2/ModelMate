@@ -402,3 +402,9 @@ terminal event ของ attempt นั้นแล้วตรวจครั�
 manual/rubric ไม่รองรับการรอตรวจล่วงหน้า ต้องรอ CHECKING และ `/verify` ก่อน
 ถ้าไม่ได้สั่งล่วงหน้า เมื่อเห็น CHECKING ให้พิมพ์ `/check` ก่อน `/finish`
 ข้อความโมเดลที่เริ่มพูดหรือบอกผลไม่ได้หมายความว่า backend จบ turn แล้ว
+
+
+START confirmation ข้ามบรรทัดว่างที่อาจค้างจากการ paste โดยไม่ถือว่ายืนยัน
+รองรับ bracketed-paste wrapper ที่ครบในบรรทัดเดียว ข้อมูลอื่น/EOF/ข้อความยาว
+เกิน 256 bytes ไม่เปิด backend wrapper ที่ไม่ครบจะถูกปฏิเสธ ให้พิมพ์ START เอง
+การอ่านยังไม่กินคำสั่ง /next ที่อยู่ถัดไป และการยืนยันไม่ใช้ TextIO read-ahead

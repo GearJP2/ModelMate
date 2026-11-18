@@ -1245,3 +1245,20 @@ manual rejection and unrelated successful commands remaining UNVERIFIED.
 
 Validation: 13 command-binding tests and 321/321 full offline tests passed;
 runtime/doctor/verifier compilation and git diff --check passed. No live rerun.
+
+
+### Confirmation input hardening (2026-11-18)
+
+User reported visible START followed by cancellation before backend startup. The
+transcript alone does not identify the raw bytes/cause; no inference occurred in
+that reported path. The old byte reader rejects a leftover empty line and literal
+bracketed-paste wrappers. The new shared reader skips empty newline-terminated
+lines (never treating them as consent), accepts a complete single-line wrapper
+around exact START, rejects EOF/invalid/incomplete/oversized input, and preserves
+following workflow commands. A real pseudo-terminal subprocess test confirms blank
+line + START + /next behavior; file-backed tests cover wrappers/CRLF and denials.
+No claim is made that the user's Terminal cause has been conclusively reproduced.
+
+Validation: 13 targeted workflow-entry tests and 324/324 full offline tests
+passed; runtime/doctor/verifier compilation and git diff --check passed.
+No live inference or new backend startup was required for the input tests.

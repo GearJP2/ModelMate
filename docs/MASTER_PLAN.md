@@ -663,3 +663,10 @@ confusion, not proof of accepted command evidence. Tool-only /check can now wait
 for the current attempt terminal event; cancel/exit clears it. Manual checks remain
 post-turn. This offline-tested fix does not change native permission/retry gates or
 establish a new live verification result.
+
+
+P08 confirmation feedback (2026-11-18): visible START was rejected before backend
+startup on user's Terminal; exact raw input/cause unknown. Hardened blank-line and
+complete single-line paste handling, with pseudo-terminal and offline regression
+coverage. EOF and invalid/oversized input remain non-approval. An input-only check
+can be run without Codex/inference before any further paid-quota live test.
