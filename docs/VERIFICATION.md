@@ -1913,3 +1913,18 @@ workflow connection. The next attempt paused with the specific reason
 cases cover read-only sandbox mismatch and native workflow approval decline.
 The scoped user live approval-denial evidence above still applies to the
 version and path recorded there.
+
+### Scoped native deletion — scoped LIVE_VERIFIED (2026-11-19)
+
+The user ran `--delete-session SESSION_ID` in the original successful synthetic
+recheck scratch. The preview listed exactly two roots in that project, the work
+thread and the independently bound recheck thread. Entering only `DELETE`
+cancelled the first attempt. On a fresh preview, the exact new confirmation
+produced the success message. The runtime reaches that message after it receives
+a native delete acknowledgement for each root and removes local metadata.
+
+A follow-up local `--sessions` check returned no saved session, and the verifier's
+sentinel check passed. The follow-up checkout was `1fa2ce8`. The user transcript
+did not include a runtime checksum or an independent post-delete native listing.
+This evidence covers the successful two-root scope. Active rejection, archived
+descendants and uncertain partial deletion remain offline-tested in this path.
