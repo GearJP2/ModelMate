@@ -435,6 +435,27 @@ def validate_plan(raw):
     return plan
 
 
+def suggest_workflow_models(plan):
+    """Recommend an initial role and effort from explicit step risk and checks."""
+    plan = copy.deepcopy(plan)
+    for step in plan['steps']:
+        if step['role'] == 'strong':
+            # The author can mark the step where a strong model is needed.
+            continue
+        if step['risk'] == 'high':
+            role, effort = 'standard', 'medium'
+            reason = 'ขั้นนี้มีความเสี่ยงสูง จึงเพิ่ม effort และใช้เกณฑ์ตรวจที่ระบุ'
+        elif step['kind'] == 'implement' and all(check['kind'] in ('test', 'lint') for check in step['checks']):
+            role, effort = 'economy', 'low'
+            reason = 'ขั้นลงมือความเสี่ยงปกติมี test/lint ตรวจผลทุกข้อ จึงเริ่มที่ economy/low'
+        else:
+            role, effort = 'standard', 'low'
+            reason = 'ใช้ standard/low สำหรับการวางแผน การทบทวน หรือขั้นที่ต้องประเมินผลเพิ่มเติม'
+        if (step['role'], step['effort']) != (role, effort):
+            step.update(role=role, effort=effort, reason=reason)
+    return plan
+
+
 def routing_decision(raw, catalog, role_policy=None):
     """Resolve a proposal; ready means ready for approval, never for execution."""
     try:
@@ -521,7 +542,8 @@ class ModelApprovals:
         if self._pending is None:
             self._pending = {'token': uuid.uuid4().hex, 'key': key}
         return dict(display, state='ask', scope=scope, token=self._pending['token'],
-                    plan=plan if scope == 'plan' else None)
+                    plan=plan if scope == 'plan' else None,
+                    selections=route['selections'] if scope == 'plan' else None)
 
     def answer(self, token, choice):
         """Record an explicit UI choice; never accept model output as a choice."""
@@ -1768,7 +1790,12 @@ class ChatShell:
             elif state['step_index'] == len(state['steps']):
                 self.write('ขั้นงานผ่านแล้ว; ยืนยันเกณฑ์ด้วย /finish เช่น /finish 1=1.1 โดยเลือก ref ที่รองรับเกณฑ์จริง')
         if request is not None and self.pending is not None:
-            self.write('โมเดลที่เสนอ: ' + json.dumps(request['selection']) + ' · ' + request['reason'])
+            if request['scope'] == 'plan':
+                self.write('ยืนยันโมเดลและ effort ของทั้งแผน')
+                for index, selection in enumerate(request['selections'], 1):
+                    self.write('  ขั้น ' + str(index) + ' · ' + selection['model'] + '/' + selection['effort'])
+            else:
+                self.write('โมเดลที่เสนอ: ' + json.dumps(request['selection']) + ' · ' + request['reason'])
             self.write('/approve ' + request['token'] + ' · /decline ' + request['token'] + ' · /pause ' + request['token'])
         elif self.pending is not None:
             token = self.pending['token']
@@ -2941,6 +2968,8 @@ class NativeWorkflowConnection(Connection):
         self.role_policy = copy.deepcopy(role_policy)
         self.account_id = controller._account_id
         fresh = self.preflight()
+        if routing_decision(controller._raw, fresh['catalog'], self.role_policy)['state'] != 'ready_for_approval':
+            raise ProbeError('Workflow model or effort is unavailable in the current catalog.')
         if store is not None:
             if store.project != self.cwd:
                 raise ProbeError('Workflow project mismatch.')
@@ -3996,11 +4025,13 @@ def read_workflow_confirmation(input_stream, write, *, confirmation='START', can
 
 
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
-                      experimental_rechecks=False):
+                      experimental_rechecks=False, suggest_models=False):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     if experimental_rechecks and resume_id is None:
         raise ProbeError('--experimental-rechecks requires --resume-workflow.')
+    if suggest_models and resume_id is not None:
+        raise ProbeError('--suggest-models requires a new --workflow plan.')
     if resume_id is not None:
         with SessionStore(os.getcwd(), read_only=True) as reader:
             saved = reader.read(resume_id)
@@ -4013,6 +4044,9 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
             raw = source.read(65537).decode('utf-8')
     mode = mode or 'ask_to_escalate'
     plan = validate_plan(raw)
+    if suggest_models and not plan['clarifications']:
+        raw = json.dumps(suggest_workflow_models(plan), ensure_ascii=False)
+        plan = validate_plan(raw)
     commands = load_check_commands(checks_path, plan, os.getcwd())
     policy = {}
     for binding in bindings:
@@ -4042,6 +4076,8 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     for spec in commands:
         preview.write('คำสั่งตรวจ ' + str(spec['step']) + '.' + str(spec['check']) + ': '
                       + json.dumps({'command': spec['command'], 'cwd': spec['cwd']}, ensure_ascii=True))
+    if suggest_models:
+        preview.write('ข้อเสนอจาก risk และ checks ของแต่ละขั้น · คุณภาพยังต้องยืนยันจากผลตรวจ')
     preview.write('โมเดลข้างต้นเป็นค่าที่ร้องขอ; ยังไม่ได้ตรวจ catalog/quota จริง')
     if experimental_rechecks:
         preview.write('Experimental recheck · standard=' + policy['standard'] + '/low · native threads retained')
@@ -4199,6 +4235,8 @@ def main():
                        help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
+    parser.add_argument('--suggest-models', action='store_true',
+                        help='recommend role/effort from explicit step risk and checks; requires a new --workflow')
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
     parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
@@ -4213,6 +4251,8 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.suggest_models and not args.workflow:
+        parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
         parser.error('--experimental-rechecks requires --resume-workflow')
     if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
@@ -4245,7 +4285,7 @@ def main():
         try:
             return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
-                                     experimental_rechecks=args.experimental_rechecks)
+                                     experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

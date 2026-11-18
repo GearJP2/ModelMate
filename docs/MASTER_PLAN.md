@@ -896,3 +896,9 @@ P12 active-turn evidence update (2026-11-19): the user-run synthetic workflow
 probe at `74dbba8` confirmed an interrupted terminal turn. This covers native
 workflow cancellation in that probe. Scoped deletion and the separate retained
 recheck STOP path still need live evidence. See VERIFICATION.md.
+
+P05–P07 routing update (2026-11-19): opt-in `--suggest-models` recommends
+role/effort from declared step kind, risk and check types using explicit role
+bindings. Existing modes gate the resulting plan and Approve plan shows its
+complete selections. Catalog acceptance and quota checks remain distinct from
+quality evaluation. This policy has offline coverage; live comparison is P16.

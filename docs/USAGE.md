@@ -395,6 +395,15 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 ไม่อนุญาตให้โมเดลจบงานเอง
 การออกจาก CLI สำเร็จไม่ได้แปลว่างานผ่านเกณฑ์ ต้องดูสถานะ DONE แยกต่างหาก
 
+เพิ่ม `--suggest-models` ตอนเปิดแผนใหม่เพื่อให้ controller เสนอ role และ effort
+จาก risk และ checks ที่ระบุไว้ในแผน โดยไม่เรียกโมเดลเพิ่ม
+ขั้น implement ความเสี่ยงปกติที่ตรวจได้ด้วย test/lint ทุกข้อเริ่มที่ economy/low
+ขั้นความเสี่ยงสูงที่ยังไม่ได้ระบุ strong ใช้ standard/medium
+ขั้นอื่นเริ่มที่ standard/low และตัวเลือก strong ที่ระบุในแผนจะถูกเก็บไว้
+ตรวจ preview เพื่อดูข้อเสนอและเหตุผลก่อนเปิด workflow ผลตรวจจริงเป็นตัวบอกคุณภาพ
+เมื่อเริ่มงาน โปรแกรมตรวจว่า catalog รองรับตัวเลือก และใช้กฎอนุมัติของโหมดที่เลือก
+Approve plan จะแสดง model และ effort ของทุกขั้นก่อนขออนุมัติ
+
 ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
 ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
 นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools

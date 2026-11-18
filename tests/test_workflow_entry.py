@@ -94,6 +94,23 @@ class WorkflowEntryTests(unittest.TestCase):
                 self.path.write_text(raw)
                 with self.assertRaises(ProbeError):self.run_file()
 
+    def test_model_suggestions_preview_each_step_without_backend(self):
+        self.plan['steps'].extend([
+            copy.deepcopy(PLAN['steps'][0]),
+            dict(copy.deepcopy(PLAN['steps'][0]), risk='high'),
+            dict(copy.deepcopy(PLAN['steps'][0]), kind='review', role='strong'),
+        ])
+        self.path.write_text(json.dumps(self.plan))
+        output = io.StringIO()
+        bindings = [role + '=' + model for role, model in POLICY.items()]
+        with patch('modelmate.NativeWorkflowConnection', side_effect=AssertionError('backend forbidden')):
+            self.assertEqual(run_workflow_file(self.path, bindings, None, False, io.StringIO(), output,
+                                              suggest_models=True), 0)
+        for selection in ('synthetic-standard/low', 'synthetic-economy/low',
+                          'synthetic-standard/medium', 'synthetic-strong/low'):
+            self.assertIn(selection, output.getvalue())
+        self.assertEqual(json.loads(self.path.read_text()), self.plan)
+
     def test_unsupported_checks_and_clarification_cannot_execute(self):
         with patch('modelmate.NativeWorkflowConnection.__init__',side_effect=AssertionError('backend forbidden')):
             for kind in ('test','lint','source'):
@@ -169,7 +186,7 @@ class WorkflowEntryTests(unittest.TestCase):
         self.assertEqual(c.snapshot()['active_attempt']['checks'],{})
 
     def test_workflow_option_conflicts_fail_before_backend(self):
-        for args in (['--execute-workflow'],['--workflow',str(self.path),'prompt'],
+        for args in (['--execute-workflow'], ['--suggest-models'],['--workflow',str(self.path),'prompt'],
                      ['--workflow',str(self.path),'--resume','a'],['--workflow',str(self.path),'--live']):
             with patch('sys.argv',['modelmate.py']+args),patch('sys.stderr',new_callable=io.StringIO):
                 with self.assertRaises(SystemExit) as exc:main()

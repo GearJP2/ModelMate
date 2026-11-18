@@ -2,7 +2,7 @@ import copy
 import json
 import unittest
 
-from modelmate import ModelApprovals, ProbeError
+from modelmate import ModelApprovals, ProbeError, suggest_workflow_models
 from test_routing import CATALOG, PLAN, POLICY
 
 
@@ -37,6 +37,26 @@ class ModeTests(unittest.TestCase):
                     self.assertNotIn('tool_permission', result)
                     self.assertEqual(result['selection']['model'], POLICY[role])
                     self.assertTrue(result['reason'])
+
+    def test_suggested_steps_use_each_mode_and_plan_requests_include_all_selections(self):
+        plan = proposal()
+        plan['steps'].append(dict(copy.deepcopy(plan['steps'][0]), role='strong', kind='review'))
+        suggested = suggest_workflow_models(plan)
+        self.assertEqual(plan['steps'][0]['role'], 'standard')
+        for mode in ('auto', 'ask_to_escalate', 'approve_plan'):
+            with self.subTest(mode=mode):
+                controller = self.controller()
+                first = self.decide(controller, suggested, mode)
+                self.assertEqual(first['selection'], {'model': POLICY['economy'], 'effort': 'low'})
+                self.assertEqual(first['state'], 'ask' if mode == 'approve_plan' else 'allow_model')
+                if mode == 'approve_plan':
+                    self.assertEqual(first['selections'], [
+                        {'model': POLICY['economy'], 'effort': 'low'},
+                        {'model': POLICY['strong'], 'effort': 'low'},
+                    ])
+                    controller.answer(first['token'], 'approve')
+                review = self.decide(controller, suggested, mode, step_id='review', step_index=1)
+                self.assertEqual(review['state'], 'ask' if mode == 'ask_to_escalate' else 'allow_model')
 
     def test_valid_grant_avoids_repeated_questions(self):
         for mode in ('ask_to_escalate', 'approve_plan'):
