@@ -1657,3 +1657,46 @@ Validation: targeted recheck tests 13/13 passed; full offline unittest suite 375
 passed; compile checks for modelmate.py, doctor.py, verify.py and probe_policy.py,
 and git diff --check passed. Five tests were removed with the deleted classifier;
 existing routing/policy tests and the native mock scenarios still pass.
+
+
+## P12 — native recheck transport, offline evidence, 2026-11-18
+
+Added internal NativeRecheckConnection, using fresh account/catalog/quota and an
+idle durable work-thread identity check before reserving a recheck. It starts a
+different durable native thread with shared read-only/on-request options and checks
+the returned permissions/project/provider. Only the parent ledger is persisted;
+a transient one-check controller reuses WorkflowHost command/cwd/start/completion
+matching. No classifier or model-based routing is involved. The caller must obtain
+explicit consent for the supplied standard/low model and exact check specification.
+
+The reservation, thread binding and turn reservation are on disk before the next
+native RPC. The returned turn ID is saved before queued events are processed.
+Parent work bindings/history/counters remain unchanged. A completed matching native
+observation can revalidate its source evidence; missing/foreign/wrong-cwd/failed
+checks and model pass claims cannot. Cancellation racing success, EOF, unknown
+responses, timeout and failed saves do not create automatic retries. Unsupported
+command/patch approvals are declined; unknown requests are not accepted. Closing
+without confirmed termination leaves the recheck unresolved and the thread retained.
+
+A late conflicting terminal observation can append unknown after a terminal ledger
+record, restore the source stale flag and change DONE to UNVERIFIED. This preserves
+the original terminal history instead of overwriting it. Cancel still sends the
+known native interrupt after parent persistence failure. Thread/turn failures do
+not borrow the work attempt's native binding. The RPC allowlist regression now also
+covers this adapter: standalone command/exec remains unavailable.
+
+Synthetic JSONL tests inspect the real SessionStore file when fake thread/start and
+turn/start RPCs arrive, exercise exact/shell-wrapped commands, failed prerequisites,
+changed quota/catalog/specification, approvals, repeats, late conflicts, cancellation,
+disconnects and injected save failures. Filtered child events cannot finish the
+parent workflow. These tests do not prove live enforcement, all tool paths,
+service-side erasure or actual backend model dispatch. No live inference was run.
+
+Public CLI recheck, terminal event-loop multiplexing, consent UX, retained-thread
+reconciliation/deletion and a scoped live verifier are still pending. Do not open
+public test/lint resume or advertise this as a completed native recovery feature.
+
+Validation: full offline unittest suite 413/413 passed, including 38 new native
+recheck transport cases; all four entry points compile; git diff --check passed.
+The tests use synthetic servers and private temporary files, not the installed
+account or live model inference. No user-run live test is required yet.

@@ -1,7 +1,7 @@
 # Native tool revalidation — implementation contract
 
-Status: durable controller ledger implemented/offline-tested; native transport and
-CLI not connected, not an enabled runtime feature. User authorized this direction on
+Status: durable controller ledger and native transport implemented/offline-tested;
+CLI not connected, not an enabled end-user feature. User authorized this direction on
 2026-11-18 after the standalone policy probe produced negative evidence.
 Decision models/classifiers are outside the current scope.
 
@@ -91,5 +91,19 @@ reserved. Older ModelMate builds cannot read version-2 checkpoints; do not downg
 the runtime after creating one. No session files are migrated during plain reads.
 
 Implementation order: checkpoint ledger and offline fault-injection tests (done), native
-transport/observation handling, CLI integration, then the scoped live verifier.
+transport/observation handling (offline-tested), CLI integration, then the scoped live verifier.
 Keep public tool-check resume disabled until those dependent pieces are complete.
+
+The internal NativeRecheckConnection starts one separate durable thread/turn after
+the caller supplies an explicitly consented selection and exact check specification.
+It exposes drain/tick/cancel for a future event loop, not a blocking model-wait loop.
+A transient verification controller reuses WorkflowHost's existing command observer;
+only the parent recheck ledger owns persisted state. Child workflow-change events
+are filtered; the caller receives parent changes only after a ledger terminal event.
+
+The adapter does not resume an unknown recheck thread or certify historical output
+as current. Failed writes poison the parent; cancel still attempts the known native
+interrupt even if persistence has failed. Closing without confirmed termination
+records unknown and retains the thread. A late conflicting terminal event appends
+an unknown outcome, restores the source stale flag and revokes parent DONE if needed.
+These paths have synthetic transport tests, not live permission/recovery proof.

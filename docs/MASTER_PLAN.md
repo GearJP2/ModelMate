@@ -813,3 +813,17 @@ recheck transport or live verifier is connected yet. Test/lint resume remains
 disabled. Next eligible P12 work is native observation/transport integration using
 this ledger, then responsive UI/consent and retained-thread handling, then a scoped
 opt-in live test. No user-run live test is needed for this core milestone.
+
+P12 native recheck transport increment (2026-11-18): NativeRecheckConnection uses
+the existing native protocol and command observer on a separate durable thread.
+It checks fresh account/catalog/quota and work-thread identity/state, reserves the
+parent ledger before thread creation, confirms native read-only/on-request settings,
+and persists thread/turn phases before dispatch/draining. Selection/spec changes
+cannot start a turn. Unsupported approvals are declined, cancellations never turn
+late success into evidence, and conflicting later terminal observations invalidate
+the earlier result without rewriting ledger history. Parent work bindings/counters
+are unchanged. No command/exec or local runner is allowed.
+This adapter is internal and offline-tested only. Public /recheck/tool-check resume
+remain disabled. Next eligible work is event-loop/consent/CLI integration plus
+retained-thread inspection/reconciliation/deletion handling, then the opt-in live
+verifier. No live inference was run or requested for this increment.

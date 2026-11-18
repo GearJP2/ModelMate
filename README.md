@@ -45,8 +45,8 @@ Preflight ไม่ใช่การจอง quota หรือ hard spending 
 ตัด decision model/classifier แยกออกจากขอบเขตตามผู้ใช้ยืนยัน 2026-11-18
 ไม่มีการเรียกโมเดลเพิ่มเพื่อเลือกโมเดลเริ่มต้น; auto routing จาก prompt ยังไม่เปิด
 
-แกนบันทึก native recheck มี offline tests แล้ว: จองรอบแบบ durable แยกจาก work
-attempt, จำกัดรอบและไม่ replay ผลที่ยังไม่ทราบ รองรับ checkpoint เดิม โดยยังไม่เปิด
+แกนบันทึกและ native transport ของ recheck มี offline tests แล้ว: จองรอบแบบ durable
+แยกจาก work attempt, จำกัดรอบและไม่ replay ผลที่ยังไม่ทราบ รองรับ checkpoint เดิม โดยยังไม่เปิด
 `/recheck` หรือ tool-check resume ใน CLI จนกว่าจะเชื่อม native transport และตรวจครบ
 ดู [ข้อกำหนด native recheck](docs/NATIVE_RECHECK.md) สำหรับขอบเขตที่เหลือ
 อัตโนมัติ ไม่เปิด effort ultra ที่มี automatic delegation

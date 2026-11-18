@@ -594,6 +594,16 @@ def _workflow_selection(value):
     _plan_text(value['effort'])
 
 
+def recheck_spec_digest(command, cwd):
+    import hashlib
+    _plan_text(command)
+    _plan_text(cwd)
+    if not os.path.isabs(cwd):
+        raise ProbeError('Recheck cwd must be absolute.')
+    return hashlib.sha256(json.dumps({'command': command, 'cwd': cwd}, sort_keys=True,
+        separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+
+
 class WorkflowController:
     """Offline state only. Methods accept trusted host/UI events, never model claims as authority."""
 
@@ -717,7 +727,6 @@ class WorkflowController:
 
     def reserve_recheck(self, evidence_id, command, cwd, selection, quota, checked_at, catalog, role_policy=None):
         """Reserve durable state only; the native adapter must separately obtain execution consent."""
-        import hashlib
         import uuid
         state = self.snapshot()
         current = [e for step in self._steps for e in step['evidence']]
@@ -734,10 +743,7 @@ class WorkflowController:
             raise ProbeError('Recheck preflight paused: ' + decision['reason'])
         if selection != select_role(catalog, 'standard', role_policy, 'low'):
             raise ProbeError('Rechecks require the explicitly bound standard model at low effort.')
-        _plan_text(command)
-        _plan_text(cwd)
-        if not os.path.isabs(cwd):
-            raise ProbeError('Recheck cwd must be absolute.')
+        digest = recheck_spec_digest(command, cwd)
         operations = self.recheck_operations()
         if any(op['status'] in ('pending', 'unknown') for op in operations):
             raise ProbeError('Previous recheck outcome is unresolved; nothing replayed.')
@@ -746,8 +752,6 @@ class WorkflowController:
         number = 1 + sum(op['evidence_id'] == evidence_id and op['cycle'] == cycle for op in operations)
         if number > 3:
             raise ProbeError('Recheck correction limit: choose continue, revise_scope or pause explicitly.')
-        digest = hashlib.sha256(json.dumps({'command': command, 'cwd': cwd}, sort_keys=True,
-            separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
         identity = uuid.uuid4().hex
         self._append_recheck({'kind': 'reserve', 'id': identity, 'evidence_id': evidence_id,
             'spec_digest': digest, 'selection': copy.deepcopy(selection), 'cycle': cycle, 'number': number})
@@ -759,6 +763,10 @@ class WorkflowController:
         if kind not in ('thread', 'turn_reserved', 'turn', 'finish'):
             raise ProbeError('Unsupported recheck event.')
         previous = next((op for op in self.recheck_operations() if op['id'] == operation_id), None)
+        if kind == 'finish' and values.get('status') == 'unknown' and previous is not None:
+            self._stale_evidence.add(previous['evidence_id'])
+            if self.state == 'DONE':
+                self.state, self.reason = 'UNVERIFIED', 'recheck_observation_conflict'
         self._append_recheck(dict(values, kind=kind, id=operation_id))
         operation = next(op for op in self.recheck_operations() if op['id'] == operation_id)
         if (kind == 'finish' and operation_id in self._current_rechecks
@@ -1359,7 +1367,8 @@ def validate_recheck_ledger(events, evidence):
             continue
         identity = event.get('id')
         operation = operations.get(identity) if isinstance(identity, str) else None
-        if operation is None or operation['status'] not in ('pending', 'unknown'):
+        invalidating = kind == 'finish' and event.get('status') == 'unknown'
+        if operation is None or (operation['status'] not in ('pending', 'unknown') and not invalidating):
             raise ProbeError('Recheck event has no unresolved reservation.')
         if kind == 'finish':
             if set(event) != {'kind', 'id', 'status', 'exit_code', 'item_id', 'timestamp'}:
@@ -2907,6 +2916,159 @@ class NativeWorkflowConnection(Connection):
 
     def tick(self):
         self.host.tick()
+
+
+class NativeRecheckConnection(NativeWorkflowConnection):
+    """One explicitly consented verification turn; durable ownership stays with its parent."""
+    allowed_methods = Connection.allowed_methods | {'thread/read', 'thread/start', 'turn/start', 'turn/interrupt'}
+
+    def __init__(self, command, timeout=15):
+        super().__init__(command, timeout)
+        self.parent = self.operation_id = None
+        self._started = self._tainted = self._cancel_requested = False
+        self.on_change = None
+
+    def operation(self):
+        if self.parent is None or self.operation_id is None:
+            return None
+        operation = next(op for op in self.parent.recheck_operations() if op['id'] == self.operation_id)
+        if self.parent._recheck_fault:
+            operation['status'] = 'unknown'
+        return operation
+
+    def start_recheck(self, parent, evidence_id, command, cwd, project, role_policy, selection,
+                      *, work_thread_id, on_change=None):
+        """Caller must obtain consent for this exact evidence/spec/selection; no automatic retries."""
+        if (self._started or not isinstance(parent, WorkflowController)
+                or not isinstance(work_thread_id, str) or not work_thread_id.strip()
+                or (on_change is not None and not callable(on_change))):
+            raise ProbeError('Invalid or reused native recheck transport.')
+        self._started = True
+        self.cwd = os.path.realpath(project)
+        self.role_policy = copy.deepcopy(role_policy)
+        self.account_id = parent._account_id
+        if self.account_id is None:
+            raise ProbeError('Recheck requires an account-bound parent workflow.')
+        inspect(self)
+        fresh = self.preflight()
+        LiveChatConnection._check_thread(self, self.request('thread/read',
+            {'threadId': work_thread_id, 'includeTurns': False}).get('thread'), work_thread_id)
+        self.parent, self.on_change = parent, on_change
+        self._spec = {'command': command, 'cwd': cwd}
+        operation = parent.reserve_recheck(evidence_id, command, cwd, selection,
+            fresh['quota'], fresh['checked_at'], fresh['catalog'], self.role_policy)
+        self.operation_id = operation['id']
+        self._selection = copy.deepcopy(selection)
+        try:
+            result = self.request('thread/start', dict(native_thread_options(selection, self.cwd), ephemeral=False))
+            thread = result.get('thread')
+            if not isinstance(thread, dict) or not isinstance(thread.get('id'), str):
+                raise ProbeError('Missing recheck thread identity; outcome unknown.')
+            LiveChatConnection._check_thread(self, thread, thread['id'])
+            if thread['id'] == work_thread_id or not native_permissions_confirmed(result):
+                raise ProbeError('Recheck thread isolation/permissions were not confirmed.')
+            self.thread_id = thread['id']
+            parent.advance_recheck(self.operation_id, 'thread', thread_id=self.thread_id)
+            source = workflow_saved_evidence(parent.export_checkpoint())[evidence_id]
+            raw = json.dumps({'version': 1, 'goal': 'Revalidate one saved tool check', 'clarifications': [],
+                'success_criteria': ['Observe the registered command result'], 'steps': [{
+                    'kind': 'review', 'objective': 'Run the registered verification command once in its exact cwd. '
+                        'Do not change files, use the network or retry. Report unavailable execution honestly.',
+                    'role': 'standard', 'effort': 'low', 'risk': 'normal',
+                    'reason': 'User explicitly requested a fresh check of saved evidence.',
+                    'checks': [{'kind': source['kind'], 'criterion': 'Observe the registered command exit code'}]}]})
+            # Reuse the command observer; only the parent ledger owns durable recheck state.
+            self.controller = WorkflowController(raw, fresh['catalog'], self.role_policy, 'auto')
+            self.host = WorkflowHost(self.controller, self.preflight, self.dispatch, self.interrupt)
+            self.host.on_change = self._display_recheck_event
+            self.host.configure_check(0, **self._spec)
+            self.host({'action': 'next', 'task_id': self.controller.task_id})
+            if self.host._binding is None:
+                raise ProbeError('Recheck turn was not dispatched; outcome unverified.')
+            return self.operation()
+        except BaseException:
+            self._mark_unknown()
+            raise
+
+    def _display_recheck_event(self, event):
+        if self.on_change is not None and event.get('type') in ('text', 'progress'):
+            self.on_change(copy.deepcopy(event))
+
+    def dispatch(self, descriptor):
+        operation = self.operation()
+        expected = {(self.controller.snapshot()['steps'][0]['id'], 0): self._spec}
+        if (operation is None or operation['phase'] != 'thread_bound' or operation['status'] != 'pending'
+                or descriptor.get('selection') != operation['selection']
+                or descriptor.get('selection') != self._selection
+                or self.host._specs != expected
+                or descriptor.get('step') != self.controller.snapshot()['plan']['steps'][0]
+                or recheck_spec_digest(**self._spec) != operation['spec_digest']):
+            raise ProbeError('Recheck no longer matches its durable reservation; no turn sent.')
+        self.parent.advance_recheck(self.operation_id, 'turn_reserved')
+        binding = super().dispatch(descriptor)
+        self.parent.advance_recheck(self.operation_id, 'turn', turn_id=binding['turn_id'])
+        return binding
+
+    def _mark_unknown(self, *, invalidate_terminal=False):
+        self._tainted = True
+        operation = self.operation()
+        if operation is None or operation['status'] == 'unknown':
+            return
+        if operation['status'] != 'pending' and not invalidate_terminal:
+            return
+        try:
+            self.parent.advance_recheck(self.operation_id, 'finish', status='unknown', exit_code=None, item_id=None)
+        except (Exception, KeyboardInterrupt):
+            # A failed ledger write leaves the reservation unresolved and freezes its controller.
+            self.parent._stale_evidence.add(operation['evidence_id'])
+
+    def _finish_recheck(self):
+        operation = self.operation()
+        if operation is None or operation['status'] not in ('pending', 'unknown') or self.host._terminal is None:
+            return
+        status = self.host._terminal
+        observed = self.host._observations.get(0, {})
+        code = observed.get('exit_code') if status == 'completed' and not self._tainted and not self._cancel_requested else None
+        self.parent.advance_recheck(self.operation_id, 'finish', status=status, exit_code=code,
+                                    item_id=observed.get('item_id') if code is not None else None)
+        if self.on_change is not None:
+            self.on_change({'type': 'workflow_changed', 'task_id': self.parent.task_id})
+
+    def drain(self):
+        if self.host is None:
+            raise ProbeError('Recheck has not started.')
+        try:
+            super().drain()
+            self._finish_recheck()
+        except BaseException:
+            self._mark_unknown(invalidate_terminal=True)
+            raise
+
+    def cancel(self):
+        if self.host is None or self.host._binding is None or self.host._terminal is not None:
+            return
+        self._cancel_requested = True
+        try:
+            self.host({'action': 'cancel', 'task_id': self.controller.task_id})
+        except BaseException:
+            self._mark_unknown()
+            raise
+
+    def tick(self):
+        if self.host is not None:
+            try:
+                super().tick()
+            except BaseException:
+                self._mark_unknown(invalidate_terminal=True)
+                raise
+
+    def close(self):
+        if self._closed:
+            return
+        try:
+            self._mark_unknown()
+        finally:
+            super().close()
 
 
 SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'criteria',
