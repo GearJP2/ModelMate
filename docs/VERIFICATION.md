@@ -1896,3 +1896,20 @@ ephemeral native workflow, including cancellation and a local disconnect
 guard. Live scoped deletion, retained recheck STOP, interactive Terminal
 timing and network-drop recovery remain open. No additional live request
 was made during this documentation update.
+
+## Workflow selection and preflight follow-up (2026-11-19)
+
+The offline `--suggest-models` preview resolves role and effort from the
+declared risk and checks, using explicit bindings. Auto, Ask to escalate and
+Approve plan use the controller's existing approval gates. Whole-plan approval
+displays the resolved selection for every step. Native startup checks the
+current catalog before creating the thread. Model suitability and quota savings
+are pending evaluation on real tasks.
+
+A synthetic App Server changed quota, account and catalog state after native
+workflow connection. The next attempt paused with the specific reason
+(`quota_exhausted`, `quota_unknown`, `account_changed`, or
+`catalog_unavailable`) and consumed no attempt slot or turn. Existing offline
+cases cover read-only sandbox mismatch and native workflow approval decline.
+The scoped user live approval-denial evidence above still applies to the
+version and path recorded there.

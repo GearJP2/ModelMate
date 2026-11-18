@@ -17,6 +17,7 @@ SERVER = r'''
 import json,sys
 trace,mode=sys.argv[1:]
 turn=0
+quota_reads=0
 catalog=[{'model':'synthetic-'+r,'defaultReasoningEffort':'low',
  'supportedReasoningEfforts':[{'reasoningEffort':'low'}]} for r in ('economy','standard','strong')]
 def emit(value):print(json.dumps(value),flush=True)
@@ -27,9 +28,14 @@ for line in sys.stdin:
  if method is None or 'id' not in req:continue
  if method=='initialize':result={}
  elif method=='account/read':result={'account':{'type':'apiKey' if mode=='api' else 'chatgpt'}}
- elif method=='model/list':result={'data':catalog}
- elif method=='account/rateLimits/read':result={'accountId':'synthetic','ordinaryUsageAllowed':mode!='quota',
-  'rateLimits':{'primary':{'usedPercent':10}}}
+ elif method=='model/list':
+  result={'data':None if mode=='catalog-after-connect' and quota_reads>=3 else catalog}
+ elif method=='account/rateLimits/read':
+  quota_reads+=1
+  result={'accountId':'different' if mode=='account-after-connect' and quota_reads>=3 else 'synthetic',
+   'ordinaryUsageAllowed':mode!='quota' and not (mode=='quota-after-connect' and quota_reads>=3),
+   'rateLimits':{'primary':{'usedPercent':10}}}
+  if mode=='unknown-after-connect' and quota_reads>=3:result.pop('ordinaryUsageAllowed')
  elif method=='thread/start':result={'thread':{'id':'thread','cwd':req['params']['cwd'],
   'ephemeral':req['params'].get('ephemeral',True),'modelProvider':'openai'},'approvalPolicy':'on-request','approvalsReviewer':'user',
   'sandbox':{'type':'workspaceWrite' if mode=='permissions' else 'readOnly'}}
@@ -99,6 +105,28 @@ class NativeWorkflowTests(unittest.TestCase):
                 with self.assertRaises(ProbeError):c.connect(self.controller, '/synthetic', POLICY)
                 self.assertFalse(any(r.get('method')=='turn/start' for r in self.records()))
                 c.close()
+
+    def test_mid_workflow_preflight_preserves_pause_reason_without_consuming_attempt(self):
+        for mode, reason in (
+            ('quota-after-connect', 'quota_exhausted'),
+            ('unknown-after-connect', 'quota_unknown'),
+            ('account-after-connect', 'account_changed'),
+            ('catalog-after-connect', 'catalog_unavailable'),
+        ):
+            with self.subTest(mode=mode):
+                self.trace.unlink(missing_ok=True)
+                controller = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)
+                backend = self.backend(mode)
+                try:
+                    host = backend.connect(controller, '/synthetic', POLICY)
+                    with self.assertRaisesRegex(ProbeError, reason):
+                        host({'action': 'next', 'task_id': controller.task_id})
+                    state = controller.snapshot()
+                    self.assertEqual((state['state'], state['reason']), ('PAUSED', reason))
+                    self.assertEqual(state['steps'][0]['attempts'], 0)
+                    self.assertFalse(any(row.get('method') == 'turn/start' for row in self.records()))
+                finally:
+                    backend.close()
 
     def test_declines_tool_request_and_pauses_without_accept(self):
         c = self.backend('approval'); self.start(c)

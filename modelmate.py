@@ -15,6 +15,12 @@ class ProbeError(Exception):
     pass
 
 
+class WorkflowPreflightPause(ProbeError):
+    def __init__(self, reason):
+        super().__init__('Workflow preflight paused: ' + reason)
+        self.reason = reason
+
+
 class Connection:
     allowed_methods = {"initialize", "account/read", "model/list", "account/rateLimits/read"}
 
@@ -999,7 +1005,9 @@ class WorkflowController:
         return self._updated()
 
     def pause(self, reason='user_pause'):
-        if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'connection_lost', 'unsupported_capability'):
+        if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'quota_stale', 'account_unknown',
+                          'account_changed', 'chatgpt_login_required', 'extra_credit_access', 'catalog_unavailable',
+                          'connection_lost', 'unsupported_capability'):
             raise ProbeError('Invalid pause reason.')
         if self.state in ('DONE', 'FAILED', 'CLARIFYING'):
             raise ProbeError('Cannot pause a terminal or unclarified task.')
@@ -1144,8 +1152,9 @@ class WorkflowHost:
             raise ProbeError('Workflow is not READY; no dispatch attempted.')
         try:
             data = self._fresh()
-        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
-            self.controller.pause('quota_unknown')
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            reason = exc.reason if isinstance(exc, WorkflowPreflightPause) else 'quota_unknown'
+            self.controller.pause(reason)
             self._signal()
             raise
         state = self.controller.snapshot()
@@ -3090,12 +3099,15 @@ class NativeWorkflowConnection(Connection):
         checked_at = time.monotonic()
         account = self.request('account/read', {'refreshToken': False}).get('account')
         if not isinstance(account, dict) or account.get('type') != 'chatgpt':
-            raise ProbeError('Workflow requires ChatGPT subscription login.')
+            raise WorkflowPreflightPause('chatgpt_login_required')
         quota = self.request('account/rateLimits/read')
-        catalog = read_models(self)
         decision = quota_decision(quota, checked_at, expected_account=self.account_id)
         if decision['state'] != 'allow':
-            raise ProbeError('Workflow preflight paused: ' + decision['reason'])
+            raise WorkflowPreflightPause(decision['reason'])
+        try:
+            catalog = read_models(self)
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise WorkflowPreflightPause('catalog_unavailable') from exc
         self.account_id = decision['account_id']
         if self.host is not None:
             self.host.catalog = copy.deepcopy(catalog)
