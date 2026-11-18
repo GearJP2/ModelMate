@@ -2,7 +2,7 @@
 
 Status: ledger, native transport, opt-in CLI and verifier implemented/offline-tested;
 synthetic native recheck happy path user LIVE_VERIFIED on 2026-11-19 at 732ac47.
-Known-binding terminal recovery is scoped live verified; scoped deletion is mock verified. Live deletion, active interruption and interactive Terminal timing remain pending.
+Known-binding terminal recovery is scoped live verified; scoped deletion is mock verified. Live deletion, retained recheck STOP and interactive Terminal timing remain pending. The separate native workflow cancellation probe passed live at `74dbba8`.
 User authorized this direction on
 2026-11-18 after the standalone policy probe produced negative evidence.
 Decision models/classifiers are outside the current scope.

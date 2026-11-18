@@ -1878,3 +1878,21 @@ running `--delete-session SESSION_ID`. Review the preview before confirming.
 For active interruption, use the existing opt-in `--probe-workflow MODEL`
 verifier and look for `cancel: passed` from an interrupted terminal turn.
 The probe can use up to four subscription turns.
+
+### Active native workflow cancellation — scoped LIVE_VERIFIED (2026-11-19)
+
+User Terminal output for `python3 verify.py --run-live --probe-workflow gpt-6.1-sol`
+at `74dbba8` reported phase `finished` and all six checks passed:
+`answerDisplay`, `contextRecall`, `approvalDenial`, `sentinelUnchanged`,
+`cancel` and `disconnectGuard`. The verifier awards `cancel: passed` only
+after observing an `interrupted` terminal status. Requested selection was
+`gpt-6.1-sol/low`, with `reportedModels: null`.
+
+- Runtime SHA-256: `260abf4f402d21f85ef060dee1caeeab16485d72e822de1c1355b94b5c2fe808`
+- Verifier SHA-256: `0ceabddf14423eff33f2f8e042495c77defa196b0e9ef59672849032fe00e620`
+
+Both hashes match the local source at `74dbba8`. Scope is the synthetic
+ephemeral native workflow, including cancellation and a local disconnect
+guard. Live scoped deletion, retained recheck STOP, interactive Terminal
+timing and network-drop recovery remain open. No additional live request
+was made during this documentation update.
