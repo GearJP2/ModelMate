@@ -4560,52 +4560,114 @@ def run_session_cleanup(session_id, input_stream, output):
             backend.close()
 
 
-def search_wikipedia(query, language):
-    """Fetch source candidates with only the explicitly supplied query."""
-    import html
+def read_search_json(host, path, method, body=None, *, source):
     import http.client
-    import re
-    from urllib.parse import urlencode
 
-    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
-    path = '/w/rest.php/v1/search/page?' + urlencode({'q': query, 'limit': 5})
+    headers = {'Accept': 'application/json', 'User-Agent': 'ModelMate/0.1 (https://github.com/GearJP2/ModelMate)'}
+    if body is not None:
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
     connection = http.client.HTTPSConnection(host, timeout=8)
     try:
-        connection.request('GET', path, headers={'Accept': 'application/json',
-            'User-Agent': 'ModelMate/0.1 (https://github.com/GearJP2/ModelMate)'})
+        connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         if response.status != 200:
-            raise ProbeError('Wikipedia search returned HTTP ' + str(response.status) + '.')
+            raise ProbeError(source + ' search returned HTTP ' + str(response.status) + '.')
         data = response.read(262145)
         if len(data) > 262144:
-            raise ProbeError('Wikipedia search response exceeded its size limit.')
+            raise ProbeError(source + ' search response exceeded its size limit.')
         try:
             payload = json.loads(data)
         except (ValueError, RecursionError) as exc:
-            raise ProbeError('Invalid Wikipedia search response.') from exc
-        pages = payload.get('pages') if isinstance(payload, dict) else None
-        if not isinstance(pages, list) or len(pages) > 5:
-            raise ProbeError('Invalid Wikipedia search results.')
-        results = []
-        for page in pages:
-            if not isinstance(page, dict):
-                raise ProbeError('Invalid Wikipedia search result.')
-            identifier, title, excerpt = (page.get(key) for key in ('id', 'title', 'excerpt'))
-            if (type(identifier) is not int or not 0 < identifier < 2 ** 63
-                    or not isinstance(title, str) or not title.strip() or not isinstance(excerpt, str)):
-                raise ProbeError('Invalid Wikipedia source metadata.')
-            snippet = html.unescape(re.sub(r'<[^<>]{0,128}>', '', excerpt))
-            results.append({'title': terminal_text(' '.join(title.split()))[:300],
-                            'excerpt': terminal_text(' '.join(snippet.split()))[:600],
-                            'url': 'https://' + host + '/?curid=' + str(identifier)})
-        return results
+            raise ProbeError('Invalid ' + source + ' search response.') from exc
+        if not isinstance(payload, dict):
+            raise ProbeError('Invalid ' + source + ' search response.')
+        return payload
     except (OSError, http.client.HTTPException) as exc:
-        raise ProbeError('Wikipedia search connection failed (' + diagnostic_code(exc) + ').') from None
+        raise ProbeError(source + ' search connection failed (' + diagnostic_code(exc) + ').') from None
     finally:
         connection.close()
 
 
+def search_text(value, limit):
+    import html
+    import re
+    plain = html.unescape(re.sub(r'<[^<>]{0,128}>', '', value))
+    return terminal_text(' '.join(plain.split()))[:limit]
+
+
+def search_wikipedia(query, language):
+    """Fetch source candidates with only the explicitly supplied query."""
+    from urllib.parse import urlencode
+
+    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
+    path = '/w/rest.php/v1/search/page?' + urlencode({'q': query, 'limit': 5})
+    pages = read_search_json(host, path, 'GET', source='Wikipedia').get('pages')
+    if not isinstance(pages, list) or len(pages) > 5:
+        raise ProbeError('Invalid Wikipedia search results.')
+    results = []
+    for page in pages:
+        if not isinstance(page, dict):
+            raise ProbeError('Invalid Wikipedia search result.')
+        identifier, title, excerpt = (page.get(key) for key in ('id', 'title', 'excerpt'))
+        if (type(identifier) is not int or not 0 < identifier < 2 ** 63
+                or not isinstance(title, str) or not title.strip() or not isinstance(excerpt, str)):
+            raise ProbeError('Invalid Wikipedia source metadata.')
+        results.append({'title': search_text(title, 300), 'excerpt': search_text(excerpt, 600),
+                        'url': 'https://' + host + '/?curid=' + str(identifier)})
+    return results
+
+
+def searxng_host(origin):
+    import re
+    from urllib.parse import urlsplit
+
+    try:
+        url = urlsplit(origin)
+        if (url.scheme == 'https' and url.path in ('', '/') and not url.query and not url.fragment
+                and re.fullmatch(r'[A-Za-z0-9.-]+(?::[0-9]+)?', url.netloc)
+                and url.port != 0):
+            return url.netloc
+    except ValueError:
+        pass
+    raise ProbeError('Provide the HTTPS origin of a trusted SearXNG instance, without credentials or a path.')
+
+
+def search_searxng(query, host):
+    from urllib.parse import urlencode, urlsplit
+
+    body = urlencode({'q': query, 'format': 'json'}).encode('ascii')
+    rows = read_search_json(host, '/search', 'POST', body, source='SearXNG').get('results')
+    if not isinstance(rows, list):
+        raise ProbeError('Invalid SearXNG search results. Check that JSON output is enabled.')
+    results = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        url, title, content = (row.get(key) for key in ('url', 'title', 'content'))
+        if (not isinstance(url, str) or len(url) > 4096 or not isinstance(title, str) or not title.strip()
+                or terminal_text(url) != url or any(c.isspace() for c in url)):
+            continue
+        try:
+            link = urlsplit(url)
+            if link.scheme not in ('http', 'https') or not link.hostname or link.username is not None:
+                continue
+        except ValueError:
+            continue
+        results.append({'title': search_text(title, 300),
+                        'excerpt': search_text(content, 600) if isinstance(content, str) else '',
+                        'url': url})
+        if len(results) == 5:
+            break
+    return results
+
+
 def run_wikipedia_search(input_stream, output, language):
+    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
+    return run_confirmed_search(input_stream, output, host, 'Wikipedia',
+                                lambda query: search_wikipedia(query, language))
+
+
+def run_confirmed_search(input_stream, output, host, source, search):
     import secrets
     import unicodedata
 
@@ -4620,7 +4682,7 @@ def run_wikipedia_search(input_stream, output, language):
             return binary.readline(limit * 4).decode('utf-8')
         return input_stream.readline(limit)
 
-    write('พิมพ์คำค้น Wikipedia หนึ่งบรรทัด แล้วกด Enter')
+    write('พิมพ์คำค้น ' + source + ' หนึ่งบรรทัด แล้วกด Enter')
     while True:
         try:
             line = read_line(1026)
@@ -4635,8 +4697,9 @@ def run_wikipedia_search(input_stream, output, language):
     if (not query or len(query) > 1024 or any(unicodedata.category(c).startswith('C') for c in query)):
         raise ProbeError('Invalid search query.')
     token = 'SEARCH ' + secrets.token_hex(4)
-    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
     write('คำค้นที่จะส่งไปยัง ' + host + ' · ' + json.dumps(query, ensure_ascii=False))
+    if source == 'SearXNG':
+        write('SearXNG อาจส่งคำค้นนี้ต่อให้เครื่องมือค้นหาที่ instance เปิดใช้')
     write('พิมพ์ ' + token + ' แล้ว Enter เพื่อส่งคำค้น หรือ CANCEL เพื่อยกเลิก')
     try:
         confirmation = read_line(128)
@@ -4646,9 +4709,9 @@ def run_wikipedia_search(input_stream, output, language):
     if not confirmation.endswith('\n') or confirmation.strip(' \t\r\n') != token:
         write('ยกเลิกการค้น')
         return 2
-    results = search_wikipedia(query, language)
+    results = search(query)
     if not results:
-        write('ไม่พบผลจาก Wikipedia')
+        write('ไม่พบผลจาก ' + source)
     for index, result in enumerate(results, 1):
         write(str(index) + '. ' + result['title'] + '\n   ' + result['excerpt'] + '\n   ' + result['url'])
     return 0
@@ -4662,6 +4725,8 @@ def main():
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--delete-session', metavar='SESSION_ID',
                        help='preview and confirm scoped native thread and metadata deletion; no model turns')
+    modes.add_argument('--search-web', metavar='HTTPS_ORIGIN',
+                       help='search a configured SearXNG instance with a separately confirmed query')
     modes.add_argument('--search-wikipedia', choices=('en', 'th'), metavar='{en,th}',
                        help='search Wikipedia with a separately entered and confirmed query; no model turns')
     modes.add_argument('--inspect-work-turn', metavar='SESSION_ID',
@@ -4715,11 +4780,15 @@ def main():
             message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
             print('ModelMate cleanup: ' + terminal_text(message), file=sys.stderr)
             return 1
-    if args.search_wikipedia:
+    if args.search_wikipedia or args.search_web is not None:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
-            parser.error('Wikipedia search only accepts its own confirmed query')
+            parser.error('Web search only accepts its own confirmed query')
         try:
-            return run_wikipedia_search(sys.stdin, sys.stdout, args.search_wikipedia)
+            if args.search_wikipedia:
+                return run_wikipedia_search(sys.stdin, sys.stdout, args.search_wikipedia)
+            host = searxng_host(args.search_web)
+            return run_confirmed_search(sys.stdin, sys.stdout, host, 'SearXNG',
+                                        lambda query: search_searxng(query, host))
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, UnicodeError) as exc:

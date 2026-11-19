@@ -2236,3 +2236,14 @@ sources after explicit confirmation. No model turn is involved in this
 path. This live transcript covers Thai Wikipedia lookup. The English
 endpoint, general-web integration, and cancellation privacy beyond the
 offline tests are outside this live result.
+
+### Confirmed general web search through SearXNG — MOCK_VERIFIED
+
+The user supplies a trusted HTTPS SearXNG origin. The same separate query
+confirmation accepts one UTF-8 line and submits only that text and the JSON
+format parameter to the configured instance. Redirects are rejected and
+source links are rendered as data. Tests cover cancellation without
+connection, exact encoding, rejected destinations and invalid result
+schemes. Live testing requires a configured instance that enables JSON.
+The agent's metadata-only catalog preflight still stopped before App Server
+initialization. No subscription turns were requested.
