@@ -10,7 +10,7 @@ for the particular path, client version and platform being shipped. See
 | G2 permissions and lifecycle | Scoped live native workflow denial, interruption, metadata inspection, recheck recovery and scoped deletion | Verify retained recheck STOP, varied permission failures and actual disconnect/recovery. |
 | G3 private search | Live Thai Wikipedia lookup and offline general search through a configured SearXNG endpoint | Live SearXNG instance validation. Hosted search remains disabled in work threads. |
 | G4 quota and billing | Offline admission and explicit recovery from exhausted or unknown quota. Live telemetry with observed account windows | Live exhausted/unknown admission paths and version-specific billing guarantees. |
-| G5 evaluation | Scored C1, C3, A1 and the two-step economy pilot. Two checkpoint display pairs graded with original and format-repaired outcomes. | Run the prepared saved-evidence pair. Expand independent task coverage and establish a defensible quota signal before estimating savings or enabling the trial rule by default. |
+| G5 evaluation | Scored C1, C3, A1 and the two-step economy pilot. Three checkpoint display pairs graded with original and format-repaired outcomes. | Expand independent task coverage and establish a defensible quota signal before estimating savings or enabling the trial rule by default. |
 | R13 installation | Standalone runtime on WSL2 with Python 3.11 and 3.12, including installation into a path containing spaces | Independent clean installation on a second environment and release packaging after required gates pass. |
 
 ## Run without subscription turns

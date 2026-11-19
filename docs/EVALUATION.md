@@ -457,3 +457,23 @@ A test that errors, cannot load, or is skipped reports `test_error`.
 A missing patch or verifier timeout reports `unavailable`. The report still
 includes the other arm's result. Capture stdout for the JSON report and
 stderr for verifier diagnostics and any output from the candidate code.
+
+### Live display-evidence pair
+
+Both arms used Codex CLI 0.170.0 with read-only tools, low reasoning effort,
+the same task wording and independent exports of the synthetic regression.
+The local grader ran the frozen nine-test verifier.
+
+| Requested model | Original delivery | After format repair | CLI-reported tokens |
+| --- | --- | --- | ---: |
+| gpt-6.2-sol | 9/9 passed | Not needed | 13,465 |
+| gpt-6.2-astra | Git rejected the diff | 9/9 passed | 7,593 |
+
+Both proposed restoring the result from the saved evidence with pending as
+the fallback. Format repair for the baseline took no extra model turn.
+The routed arm passed on first delivery and requested no Strong model. It
+used 5,872 more reported tokens in this pair. The counts are CLI telemetry,
+with no paired subscription quota measurements. Together with the earlier
+pairs, this supports keeping format repair ahead of escalation and keeping
+the display-only routing rule experimental. These cases cover one narrow
+area of one codebase.
