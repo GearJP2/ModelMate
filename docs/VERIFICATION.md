@@ -2220,3 +2220,9 @@ release gates.
 The transport uses the documented MediaWiki search-pages endpoint and
 public page identifiers for links.
 [MediaWiki REST API reference](https://www.mediawiki.org/wiki/API:REST_API/Reference/en#Search_pages)
+
+The user search smoke stopped with UnicodeDecodeError before the query preview.
+The search now decodes one UTF-8 line at a time. A malformed query can be
+re-entered and malformed confirmation cancels. Synthetic input reproduces
+both a bad paste line followed by a valid Thai query and a valid query line
+followed by invalid confirmation bytes. Neither malformed line is sent.

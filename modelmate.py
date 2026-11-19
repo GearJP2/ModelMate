@@ -4613,8 +4613,22 @@ def run_wikipedia_search(input_stream, output, language):
         output.write(message + '\n')
         output.flush()
 
+    def read_line(limit):
+        # Decode only the current line, even when a terminal paste contains later invalid bytes.
+        binary = getattr(input_stream, 'buffer', None)
+        if binary is not None:
+            return binary.readline(limit * 4).decode('utf-8')
+        return input_stream.readline(limit)
+
     write('พิมพ์คำค้น Wikipedia หนึ่งบรรทัด แล้วกด Enter')
-    line = input_stream.readline(1026)
+    while True:
+        try:
+            line = read_line(1026)
+            break
+        except UnicodeDecodeError as exc:
+            if not exc.object.endswith(b'\n'):
+                raise ProbeError('คำค้นอ่านเป็น UTF-8 ไม่ได้ กรุณาเปิดคำสั่งค้นใหม่') from None
+            write('คำค้นอ่านเป็น UTF-8 ไม่ได้ กรุณาพิมพ์คำค้นใหม่แล้วกด Enter')
     if not line.endswith('\n'):
         raise ProbeError('Search requires a complete query line of up to 1024 characters.')
     query = line.strip()
@@ -4624,7 +4638,11 @@ def run_wikipedia_search(input_stream, output, language):
     host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
     write('คำค้นที่จะส่งไปยัง ' + host + ' · ' + json.dumps(query, ensure_ascii=False))
     write('พิมพ์ ' + token + ' แล้ว Enter เพื่อส่งคำค้น หรือ CANCEL เพื่อยกเลิก')
-    confirmation = input_stream.readline(128)
+    try:
+        confirmation = read_line(128)
+    except UnicodeDecodeError:
+        write('ยกเลิกการค้น เพราะรหัสยืนยันอ่านเป็น UTF-8 ไม่ได้')
+        return 2
     if confirmation.rstrip('\r\n') != token or not confirmation.endswith('\n'):
         write('ยกเลิกการค้น')
         return 2

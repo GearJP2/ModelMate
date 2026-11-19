@@ -28,6 +28,26 @@ class WebPolicyTests(unittest.TestCase):
             transport.assert_called_once_with('sample & text', 'en')
             self.assertIn('https://en.wikipedia.org/?curid=7', output.getvalue())
 
+    def test_invalid_utf8_query_can_be_reentered_without_sending_corrupt_input(self):
+        source = io.TextIOWrapper(io.BytesIO(b'\xe0\n' + 'ภาษาไพทอน\nSEARCH deadbeef\n'.encode()),
+                                  encoding='utf-8')
+        with source, patch('secrets.token_hex', return_value='deadbeef'), patch(
+                'modelmate.search_wikipedia', return_value=[]) as transport:
+            output = io.StringIO()
+            self.assertEqual(run_wikipedia_search(source, output, 'th'), 0)
+            self.assertIn('คำค้นอ่านเป็น UTF-8 ไม่ได้', output.getvalue())
+            transport.assert_called_once_with('ภาษาไพทอน', 'th')
+
+    def test_invalid_confirmation_bytes_do_not_block_preview_or_send_query(self):
+        source = io.TextIOWrapper(io.BytesIO(b'Wikipedia\nSEARCH \xe0\n'), encoding='utf-8')
+        with source, patch('secrets.token_hex', return_value='deadbeef'), patch(
+                'modelmate.search_wikipedia') as transport:
+            output = io.StringIO()
+            self.assertEqual(run_wikipedia_search(source, output, 'en'), 2)
+            self.assertIn('en.wikipedia.org', output.getvalue())
+            self.assertIn('รหัสยืนยันอ่านเป็น UTF-8 ไม่ได้', output.getvalue())
+            transport.assert_not_called()
+
     def test_transport_ignores_response_links_and_never_follows_a_redirect(self):
         connection = Mock()
         response = connection.getresponse.return_value
