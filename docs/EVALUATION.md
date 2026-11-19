@@ -379,3 +379,8 @@ the warning removed and passed after restoring it. Keep the frozen routing
 rule for this pair and request Standard versus Strong at the same effort.
 Record first-delivery and format-normalized results separately as in the
 first pair.
+
+For an original patch rejected by Git, rerun the same grading command with
+`--repair-format` to add a missing final newline and recount the hunk lines
+in memory. Keep the original grading result. This option preserves the
+patch file and the proposed code edits.

@@ -61,16 +61,18 @@ def export_base(case_name, directory):
         (directory / "tests" / f"{module}.py").unlink()
 
 
-def grade(case_name, patch):
+def grade(case_name, patch, *, repair_format=False):
     fix, module, selector, _ = CASES[case_name]
     with tempfile.TemporaryDirectory(prefix="modelmate-checkpoint-grade-") as scratch:
         root = Path(scratch)
         export_base(case_name, root)
         if patch:
-            subprocess.run(
-                ["git", "apply", "--include=modelmate.py", "-"],
-                cwd=root, input=patch, check=True,
-            )
+            apply = ["git", "apply", "--include=modelmate.py"]
+            if repair_format:
+                apply.append("--recount")
+                if not patch.endswith(b"\n"):
+                    patch += b"\n"
+            subprocess.run([*apply, "-"], cwd=root, input=patch, check=True)
         verifier = f"tests/{module}.py"
         (root / verifier).write_bytes(git_output("show", f"{fix}:{verifier}"))
         return subprocess.run(
@@ -92,6 +94,8 @@ def main():
     grader.add_argument("patch", type=Path, help="reviewed patch against the case base")
     grader.add_argument("--trusted-patch", action="store_true", required=True,
                         help="confirm the patched Python code may execute locally")
+    grader.add_argument("--repair-format", action="store_true",
+                        help="add a final newline and recount diff hunk lines")
     args = parser.parse_args()
     case = CASES[args.case]
     try:
@@ -100,7 +104,7 @@ def main():
             export_base(args.case, args.workspace)
             print(case[3])
             return 0
-        return grade(args.case, args.patch.read_bytes())
+        return grade(args.case, args.patch.read_bytes(), repair_format=args.repair_format)
     except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as exc:
         print(f"Checkpoint pilot could not complete: {exc}", file=sys.stderr)
         return 2
