@@ -2130,3 +2130,13 @@ Synthetic tests exercised a latest turn with older history, mismatched turn
 or status, and ambiguous running bindings. A metadata-only live attempt on
 the workflow autosave smoke checkpoint stopped at App Server initialization
 in the agent environment. No model turn was requested.
+
+### Metadata-only native work-turn inspection — scoped LIVE_VERIFIED
+
+The user ran the inspection on the retained autosave smoke checkpoint with
+the runtime containing `ff95059`. The result was `terminal` /
+`completed`, with one historical passing check, zero failed or unknown
+checks, and `modelTurnsRequested: 0`. This confirms read-only inspection of
+that known completed native work turn. The historical count does not
+revalidate the current project files. The transcript did not include a
+runtime checksum.
