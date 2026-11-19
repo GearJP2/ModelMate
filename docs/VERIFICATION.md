@@ -2033,3 +2033,19 @@ App Server. Its printed summary contained one attempt, one timed terminal turn,
 matching token counters, and the configured comparable quota delta. Local
 `--doctor` for the live account again exited before initialization. No live
 turn was requested by this check.
+
+### One-turn workflow telemetry — scoped LIVE_VERIFIED
+
+The user ran the list/tuple smoke test with `--measure-quota` in a fresh
+scratch project. One requested `gpt-6.2-sol/low` attempt reached CHECKING.
+The summary included one timed terminal turn, a matching work-thread token
+snapshot with complete counters, and comparable primary and secondary quota
+windows. Both windows showed no visible change at the reported resolution.
+The CLI wall time included user wait and was reported separately from observed
+turn time. A second `/next` while CHECKING was rejected without dispatch.
+The user exited before entering the rubric, leaving the workflow paused.
+
+This covers live metric availability on one work turn. `reportedModels`
+remained null and unchanged displayed percentages do not establish zero
+quota use. No account-level percentages, reset timestamps, or session IDs
+are retained in this record.
