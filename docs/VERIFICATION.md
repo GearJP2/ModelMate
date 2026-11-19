@@ -2027,3 +2027,9 @@ duplicate terminal observations, account mismatch, resets, missing windows,
 and a matched pre/post window without an additional turn. The full offline
 suite passed 484 tests. No subscription turns were run and the telemetry
 fields have not been confirmed with a live account.
+
+The telemetry smoke command in EVALUATION.md also passed end-to-end with a fake
+App Server. Its printed summary contained one attempt, one timed terminal turn,
+matching token counters, and the configured comparable quota delta. Local
+`--doctor` for the live account again exited before initialization. No live
+turn was requested by this check.

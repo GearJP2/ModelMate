@@ -131,3 +131,28 @@ and note concurrent account use or quota resets. Use `turnElapsedSeconds` and
 An interrupted or resumed arm may have partial timing and a historical thread
 token total. A missing or unchanged window percentage cannot establish the
 arm's quota cost. The metadata read adds no model turn.
+
+### One-turn telemetry smoke test
+
+This check uses the short list/tuple example in a fresh scratch project.
+Run from any Bash working directory with ModelMate at the given path:
+
+```bash
+REPO="$HOME/Coding/Hobby/ModelMate"
+SMOKE="$(mktemp -d /tmp/modelmate-usage-smoke-XXXXXX)" &&
+mkdir "$SMOKE/project" &&
+(
+  cd "$SMOKE/project" &&
+  XDG_STATE_HOME="$SMOKE/state" python3 "$REPO/modelmate.py" \
+    --workflow "$REPO/examples/explain-lists.json" \
+    --role-model standard=gpt-6.2-sol \
+    --execute-workflow --measure-quota
+)
+```
+
+Enter `START` and then `/next` once. Wait for the answer and `CHECKING`
+before entering `/exit`. This exercises reporting and does not require
+rubric entry. Keep the `สถิติ workflow` line. Check that `attempts` and
+`timedTurns` are both 1 and the turn duration is present. Record whether
+the backend emits token counters and whether any quota windows are comparable.
+An observed delta of zero is valid and cannot establish zero usage.
