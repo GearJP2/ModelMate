@@ -178,3 +178,19 @@ duplicates after whitespace normalization. The case compares choices for a
 staged importer defect and does not test patch authorship. Retain the answer
 and summary from each arm. Quota window deltas can remain unchanged at the
 reported resolution.
+
+#### Measured C3 result
+
+Both completed arms answered D and scored 5/5 with one timed attempt each.
+
+| Arm | Requested model | Total tokens | Cached input subset | Observed turn seconds |
+| --- | --- | ---: | ---: | ---: |
+| Baseline | gpt-6.2-astra/low | 13,183 | 4,608 | 3.110 |
+| Routed | gpt-6.2-sol/low | 13,232 | 0 | 2.068 |
+
+The routed run reported 49 more tokens. The primary account window advanced
+only during baseline observation, while the secondary window showed no visible
+change across either observation. The cache difference, sequential run order
+and account-level reporting prevent attributing those window changes to a
+model or estimating quota savings. The user exited both completed turns
+before rubric entry, so arm quality comes from independent scoring.

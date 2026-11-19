@@ -2056,3 +2056,11 @@ contained token counters, one timed terminal turn, and two comparable quota
 windows. The initial routed session exited before dispatch and reported zero
 attempts and zero timed turns. It provides no paired measurement. Account
 usage values, reset timestamps, and session IDs are omitted.
+
+Measured C3 pair completed on runtime SHA-256
+`92c07e0cff2575b0ee7b972bd7c6ee30026de31b5c4222e24a8cc5e22bc30c2e`,
+matching the local runtime. The two gradeable turns passed the same five
+checks and returned token counters, turn timing and matched quota windows.
+The earlier zero-attempt routed session was excluded. See EVALUATION.md for
+the comparison and its limitations. Account usage values and reset
+timestamps are omitted.
