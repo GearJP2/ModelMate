@@ -316,3 +316,26 @@ comparing with strong-only. Log first and final verdict, strong requests,
 corrections and time to acceptance. Record quota observations when available.
 One case per set is enough to exercise the procedure. Estimates of quality or
 quota savings require more independent cases.
+
+Run the preparation and grading steps from the original checkout. Use a new
+workspace for each arm and save its unified diff outside that workspace.
+
+```sh
+scratch=$(mktemp -d)
+python3 examples/checkpoint-pilot.py prepare display "$scratch/display"
+# Save the candidate's modelmate.py diff as "$scratch/candidate.patch".
+python3 examples/checkpoint-pilot.py grade display "$scratch/candidate.patch" --trusted-patch
+```
+
+Use `resume` in place of `display` for the evaluation case. The grader
+applies changes to `modelmate.py` and restores the selected historical
+verifier from the fix revision. It runs candidate code under the caller's
+permissions. Review the patch and use an appropriately isolated environment
+before grading model-generated changes. Exit 0 means the test passed, exit 1
+means unittest reported a failure or error, and exit 2 covers preparation or
+execution errors caught by the wrapper. Inspect the test output to distinguish
+a regression from an unavailable verifier.
+
+Offline smoke run for both cases produced the expected assertion failures with
+an empty patch and a passing test with the historical fix. Each prepared
+workspace had no Git history.
