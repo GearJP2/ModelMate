@@ -2299,3 +2299,19 @@ explicit continue and a fresh allowed quota read, the next request sends one
 turn on the existing thread. The test traces cover each RPC and assert the
 thread and attempt counts. These checks exercise controller admission and do
 not measure provider quota behavior.
+
+### Scoped recovery and catalog checks on the current checkout
+
+At source `1565766`, the metadata-only workflow catalog check returned
+`ready` with `included_usage_available`, and found the requested
+`gpt-6.2-sol/low` selection available. The report recorded zero model turns.
+The command was `python3 -B modelmate.py --workflow examples/explain-lists.json
+--role-model standard=gpt-6.2-sol --check-catalog`, using Codex CLI 0.170.0.
+Runtime SHA-256 `35700a79821eb5c9f6faa7cc1159c1d0723ed7ec8c345eed06db307647338a38`.
+
+The recovery CLI suite also checks the race where the turn completes after
+the STOP prompt but before confirmation is processed. The fake App Server
+reports a completed turn on the binding recheck. The CLI records completion
+without sending an interrupt or starting another turn. Saved workflow checks
+and step counters are preserved. This new case is offline evidence. Live
+active STOP remains open.

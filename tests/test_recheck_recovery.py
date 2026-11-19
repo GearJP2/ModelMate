@@ -416,6 +416,16 @@ class RecheckRecoveryTests(unittest.TestCase):
         self.assertEqual(self.store.read(self.sid)['workflow']['rechecks'][-1]['kind'],'reconcile')
         self.assertFalse(any(r.get('method') in ('thread/start','turn/start','command/exec') for r in self.records()))
 
+    def test_cli_stop_reconciles_a_turn_that_finished_during_confirmation(self):
+        code, output = self.run_cli(b'STOP\n', mode='finished_before_stop')
+        self.assertEqual(code, 0, output)
+        flow = self.store.read(self.sid)['workflow']
+        self.assertEqual(flow['rechecks'][-1]['kind'], 'reconcile')
+        self.assertEqual(flow['rechecks'][-1]['status'], 'completed')
+        self.assertEqual(flow['steps'], self.before['workflow']['steps'])
+        self.assertFalse(any(row['method'] in ('turn/interrupt', 'thread/start', 'turn/start')
+                             for row in self.records()))
+
     def test_recovery_transport_cannot_start_or_resume_inference(self):
         backend=object.__new__(RecheckRecoveryConnection);backend.send=Mock()
         for method in ('thread/start','turn/start','thread/resume','model/list','command/exec'):
