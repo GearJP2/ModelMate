@@ -903,10 +903,19 @@ class WorkflowController:
             raise ProbeError('Invalid or stale workflow attempt.')
         return self._active
 
-    def finish_attempt(self, attempt_id, status):
+    def finish_attempt(self, attempt_id, status, *, tool_observations=None):
         attempt = self._attempt(attempt_id)
         if attempt['status'] != 'running' or status not in ('completed', 'failed', 'interrupted'):
             raise ProbeError('Invalid attempt terminal event.')
+        if tool_observations:
+            if status != 'completed':
+                raise ProbeError('Tool evidence requires a completed turn.')
+            evidence = {index: self._check_evidence(attempt, index, origin='tool',
+                result='unknown', exit_code=observed['exit_code'],
+                reference='executor command item ' + observed['item_id'],
+                finding='Observed host-bound native command completion; no stdout/stderr retained.')
+                for index, observed in tool_observations.items()}
+            attempt['checks'].update(evidence)
         attempt['status'] = status
         if status == 'completed':
             self.state, self.reason = 'CHECKING', None
@@ -920,22 +929,27 @@ class WorkflowController:
             self.state, self.reason = 'FAILED', 'execution_failed'
         return self._updated()
 
-    def record_check(self, attempt_id, check_index, *, origin, result='unknown', exit_code=None,
-                     reference, finding):
-        """Host adapters supply observed exit codes or verified findings, not parsed model assertions."""
+    def _check_evidence(self, attempt, check_index, *, origin, result, exit_code, reference, finding):
         import uuid
-        attempt = self._attempt(attempt_id)
         checks = self._plan['steps'][self._index]['checks']
-        if (self.state != 'CHECKING' or attempt['status'] != 'completed'
-                or type(check_index) is not int or not 0 <= check_index < len(checks)
+        if (type(check_index) is not int or not 0 <= check_index < len(checks)
                 or check_index in attempt['checks']):
             raise ProbeError('Invalid, duplicate or out-of-phase check.')
         kind = checks[check_index]['kind']
         verified = workflow_check_result(kind, origin, result, exit_code, reference, finding)
-        evidence = {'id': uuid.uuid4().hex, 'step_id': attempt['step_id'], 'attempt_id': attempt_id,
-            'check_index': check_index, 'kind': kind, 'origin': origin, 'result': verified,
-            'exit_code': exit_code, 'reference': reference, 'finding': finding,
-            'timestamp': datetime.now(timezone.utc).isoformat()}
+        return {'id': uuid.uuid4().hex, 'step_id': attempt['step_id'], 'attempt_id': attempt['id'],
+                'check_index': check_index, 'kind': kind, 'origin': origin, 'result': verified,
+                'exit_code': exit_code, 'reference': reference, 'finding': finding,
+                'timestamp': datetime.now(timezone.utc).isoformat()}
+
+    def record_check(self, attempt_id, check_index, *, origin, result='unknown', exit_code=None,
+                     reference, finding):
+        """Host adapters supply observed exit codes or verified findings, not parsed model assertions."""
+        attempt = self._attempt(attempt_id)
+        if self.state != 'CHECKING' or attempt['status'] != 'completed':
+            raise ProbeError('Invalid, duplicate or out-of-phase check.')
+        evidence = self._check_evidence(attempt, check_index, origin=origin, result=result,
+            exit_code=exit_code, reference=reference, finding=finding)
         attempt['checks'][check_index] = evidence
         self._updated()
         return copy.deepcopy(evidence)
@@ -1245,7 +1259,8 @@ class WorkflowHost:
                         raise ProbeError('Conflicting executor terminal events.')
                     return False
                 self._terminal = status
-                self.controller.finish_attempt(self._binding['attempt_id'], status)
+                self.controller.finish_attempt(self._binding['attempt_id'], status,
+                    tool_observations=self._observations if status == 'completed' else None)
                 self._deadline = None
                 if status != 'completed':
                     self._binding = None
@@ -1310,14 +1325,9 @@ class WorkflowHost:
         if (self._binding is None or self._terminal != 'completed' or state['state'] != 'CHECKING'
                 or active is None or active['id'] != self._binding['attempt_id']):
             raise ProbeError('No confirmed completed attempt ready for checks.')
-        for index, observed in sorted(self._observations.items()):
-            if index not in active['checks']:
-                self.controller.record_check(active['id'], index, origin='tool', exit_code=observed['exit_code'],
-                    reference='executor command item ' + observed['item_id'],
-                    finding='Observed host-bound native command completion; no stdout/stderr retained.')
         checks = state['plan']['steps'][state['step_index']]['checks']
         missing = [i + 1 for i, check in enumerate(checks)
-                   if check['kind'] in ('test', 'lint') and i not in self._observations and i not in active['checks']]
+                   if check['kind'] in ('test', 'lint') and i not in active['checks']]
         for number in missing:
             self.controller.record_check(active['id'], number - 1, origin='tool', exit_code=None,
                 reference='No matching native command completion',
@@ -1794,9 +1804,18 @@ class ChatShell:
             self.write('Recheck: ' + status + ' · รอบ ' + str(operation['cycle'] + 1)
                        + ' · reservation ' + str(operation['number']) + '/3'
                        + ' · exit code ' + str(code))
+        if state['state'] == 'READY' and self.workflow_action is not None and not self.recheck_active():
+            self.write('ใช้ /next เพื่อเริ่มขั้นปัจจุบัน')
         if state['state'] == 'CHECKING':
             if active is not None:
-                self.write('Backend จบแล้ว; ใช้ /check เพื่อประเมินผล (manual/rubric ต้อง /verify ก่อน)')
+                checks = state['plan']['steps'][state['step_index']]['checks']
+                pending_manual = [str(i + 1) for i, check in enumerate(checks)
+                                  if check['kind'] in ('manual', 'rubric') and i not in active['checks']]
+                if pending_manual:
+                    self.write('ใช้ /verify CHECK_NUMBER pass|fail|unknown สำหรับข้อ '
+                               + ', '.join(pending_manual) + ' แล้วใช้ /check')
+                else:
+                    self.write('Backend จบแล้ว ใช้ /check เพื่อประเมินผลขั้นนี้')
             elif state['step_index'] == len(state['steps']):
                 self.write('ขั้นงานผ่านแล้ว; ยืนยันเกณฑ์ด้วย /finish เช่น /finish 1=1.1 โดยเลือก ref ที่รองรับเกณฑ์จริง')
         if request is not None and self.pending is not None:

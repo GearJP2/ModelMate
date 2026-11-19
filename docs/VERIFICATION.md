@@ -2064,3 +2064,13 @@ checks and returned token counters, turn timing and matched quota windows.
 The earlier zero-attempt routed session was excluded. See EVALUATION.md for
 the comparison and its limitations. Account usage values and reset
 timestamps are omitted.
+
+### Workflow tool evidence autosave — MOCK_VERIFIED
+
+A completed, exactly matched native command observation is now committed
+with its terminal work attempt. The CLI can exit before `/check` without
+losing that checkpoint evidence. The saved step still awaits evaluation.
+Tests cover durable evidence through exit, duplicate terminal delivery,
+the separation of observed and accepted evidence, and a queued check cleared
+by cancel even if a completed terminal event arrives afterward. Resume still
+treats saved evidence as historical. No live inference was requested.

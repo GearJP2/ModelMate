@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 
-from modelmate import NativeWorkflowConnection, WorkflowController, ProbeError, run_chat, ChatShell
+from modelmate import NativeWorkflowConnection, WorkflowController, ProbeError, run_chat, ChatShell, SessionStore
 from test_routing import CATALOG, PLAN, POLICY
 
 SERVER = r'''
@@ -46,10 +46,10 @@ for line in sys.stdin:
   turn+=1
   if mode=='disconnect':sys.exit(0)
   item={'id':'check','type':'commandExecution','command':'python3 -m unittest','cwd':'/synthetic',
-   'status':'completed','exitCode':1 if mode=='fail' else 0}
+   'status':'completed','exitCode':1 if mode in ('fail','text-only-fail') else 0}
   for event in ('item/started','item/completed'):
    emit({'method':event,'params':{'threadId':'thread','turnId':str(turn),'item':item}})
-  if mode in ('text','text-only'):
+  if mode in ('text','text-only','text-only-fail'):
    emit({'method':'item/agentMessage/delta','params':{'threadId':'thread','turnId':str(turn),
     'itemId':'answer','delta':'SYNTHETIC_ANSWER'}})
    for thread_id,turn_id in (('foreign',str(turn)),('thread','foreign'),('thread',str(turn)),('thread',str(turn))):
@@ -63,7 +63,7 @@ for line in sys.stdin:
      'tokenUsage':{'last':value,'total':value}}})
   if mode=='approval':emit({'id':'approval','method':'item/commandExecution/requestApproval',
    'params':{'threadId':'thread','turnId':str(turn),'itemId':'tool','command':'write','cwd':'/synthetic'}})
-  elif mode!='text-only':emit({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':str(turn),'status':'completed'}}})
+  elif mode not in ('text-only','text-only-fail'):emit({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':str(turn),'status':'completed'}}})
   result={'turn':{} if mode=='missing-id' else {'id':str(turn)}}
  elif method=='turn/interrupt':result={}
  else:raise RuntimeError(method)
@@ -105,6 +105,28 @@ class NativeWorkflowTests(unittest.TestCase):
         self.assertEqual(start['approvalPolicy'], 'on-request')
         self.assertTrue(start['ephemeral'])
         self.assertEqual(start['config']['web_search'], 'disabled')
+
+    def test_terminal_tool_evidence_survives_exit_before_check(self):
+        project = self.trace.parent
+        backend = self.backend()
+        with SessionStore(project, project / 'state') as store:
+            host = backend.connect(self.controller, project, POLICY, store=store)
+            host.configure_check(0, command='python3 -m unittest', cwd='/synthetic')
+            host({'action': 'next', 'task_id': self.controller.task_id})
+            self.assertEqual(store.read(backend.session_id)['workflow']['active_attempt']['checks'], [])
+            backend.drain()
+            saved = store.read(backend.session_id)['workflow']
+            evidence, = saved['active_attempt']['checks']
+            self.assertEqual((evidence['origin'], evidence['result'], evidence['exit_code']), ('tool', 'pass', 0))
+            self.assertEqual(saved['state'], 'CHECKING')
+            duplicate = {'method': 'turn/completed', 'params': {
+                'threadId': 'thread', 'turn': {'id': '1', 'status': 'completed'}}}
+            self.assertFalse(host.observe_native(duplicate))
+            host({'action': 'cancel', 'task_id': self.controller.task_id})
+            backend.close()
+            after_exit = store.read(backend.session_id)['workflow']
+            self.assertEqual(after_exit['active_attempt']['checks'], [evidence])
+            self.assertEqual(after_exit['step_index'], 0)
 
     def test_summary_uses_only_matching_native_token_events(self):
         backend = self.backend('metrics')
@@ -304,7 +326,7 @@ finally:backend.close()
         self.assertNotIn('LATE_ANSWER', output.getvalue())
 
     def test_reused_message_id_displays_again_in_next_turn(self):
-        c = self.backend('text-only')
+        c = self.backend('text-only-fail')
         host = c.connect(self.controller, '/synthetic', POLICY)
         host.configure_check(0, command='python3 -m unittest', cwd='/synthetic')
         output = io.StringIO()
@@ -317,9 +339,6 @@ finally:backend.close()
             c.drain()
             self.assertEqual(output.getvalue().count('SYNTHETIC_ANSWER'), number)
             if number == 1:
-                active = self.controller.snapshot()['active_attempt']
-                self.controller.record_check(active['id'], 0, origin='tool', exit_code=1,
-                                             reference='synthetic failure', finding='observed failed result')
                 host({'action':'check','task_id':self.controller.task_id})
 
     def test_queue_is_bounded(self):
