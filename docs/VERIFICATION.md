@@ -1986,3 +1986,10 @@ Both attempts reached CHECKING. The workflow was paused on exit before
 rubric entry for the second step. Two attempts and zero rechecks were
 reported. Runtime SHA-256 matched the C1 runtime. The economy pilot baseline,
 backend-reported models, and attributable quota observations are still open.
+
+Economy pilot baseline partial result: the user requested one
+`gpt-6.2-astra/low` turn for the registered test. The turn reached CHECKING
+and the displayed answer reported a successful command. The user exited
+before `/check`. Local checkpoint inspection confirmed a completed attempt
+with zero recorded checks and no review attempt. The claim is insufficient
+for the native test criterion. The paired result remains open.
