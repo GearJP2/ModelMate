@@ -69,7 +69,18 @@ def export_base(case_name, directory):
     revision = fix if regression else fix + "^"
     archive = git_output("archive", revision)
     with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
-        bundle.extractall(directory, filter="data")
+        members = bundle.getmembers()
+        for member in members:
+            path = Path(member.name)
+            if (path.is_absolute() or ".." in path.parts
+                    or not (member.isfile() or member.isdir())):
+                raise ValueError(f"Unsupported archive entry: {member.name!r}")
+        # Both callers supply a new directory. Only regular files and directories
+        # are admitted, so no archive entry can redirect subsequent extraction.
+        if hasattr(tarfile, "data_filter"):
+            bundle.extractall(directory, members=members, filter="data")
+        else:
+            bundle.extractall(directory, members=members)
 
     if regression:
         runtime = directory / "modelmate.py"
