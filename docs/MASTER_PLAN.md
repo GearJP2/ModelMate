@@ -215,7 +215,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual resume and synthetic tool recheck happy paths scoped LIVE_VERIFIED; native workflow cancellation scoped LIVE_VERIFIED; synthetic two-root scoped cleanup LIVE_VERIFIED | จำเป็น |
-| P13 | Web privacy boundary | P03, P09 | BLOCKED for hosted search until per-query consent and context isolation are verified | จำเป็น |
+| P13 | Web privacy boundary | P03, P09 | IN_PROGRESS: dedicated Wikipedia search MOCK_VERIFIED; general web and hosted search gates remain | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
 | P16 | End-to-end / evaluation / release | P01–P15 | TODO | จำเป็น |

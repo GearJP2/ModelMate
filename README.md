@@ -41,9 +41,9 @@
 | Recovery ของ recheck ที่มี native IDs ครบ | มีผลทดสอบสดการอ่าน terminal status; หลักฐานเดิมยังเป็นประวัติ |
 | สามโหมด `auto` / `ask_to_escalate` / `approve_plan` | มี policy สำหรับ explicit workflow; ทุกโหมดยังต้องสั่ง `/next` |
 | ตัวช่วยเลือกโมเดลรายขั้น | `--suggest-models` เสนอ role และ effort จาก risk และ checks ในแผน; ยังรอผลเปรียบเทียบงานจริง |
-| ค้นเว็บพร้อมขออนุญาตใช้ข้อมูลส่วนตัว | ยังไม่เปิด |
+| ค้นแหล่งอ้างอิงพร้อมยืนยันคำค้น | `--search-wikipedia en\|th` รองรับ Wikipedia แบบแยกจากแชต มีผลทดสอบออฟไลน์ |
 
-รายละเอียดสถานะและงานที่เหลืออยู่ใน [Master plan](docs/MASTER_PLAN.md)
+รายละเอียดสถานะอยู่ใน [Master plan](docs/MASTER_PLAN.md) และ [Release checklist](docs/RELEASE_CHECKLIST.md)
 
 <a id="quick-start"></a>
 ## Quick start

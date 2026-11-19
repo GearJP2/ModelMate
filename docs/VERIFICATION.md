@@ -2200,3 +2200,23 @@ cases cover ready, unavailable model, exhausted quota, and API-key login.
 No thread, model turn, or ModelMate session is created. The check reports
 catalog support and account quota as observed; it does not prove dispatch
 or reserve quota.
+
+### Dedicated Wikipedia query privacy — MOCK_VERIFIED
+
+The standalone search takes a query from its own input, previews it with the
+destination, and requires a fresh exact confirmation before one HTTPS request.
+Offline tests cover refusal, EOF, stale input, exact query encoding, redirect
+rejection, untrusted result content and source URLs. Work threads and their
+native search settings are outside this path. An agent-side public lookup
+failed at DNS before reaching Wikipedia. This evidence covers Wikipedia lookup
+only. The broader search requirement remains open.
+
+The release smoke installed only the runtime as an executable in a clean
+scratch directory with spaces on Linux x86_64 under WSL2 (Python 3.12.0).
+Help, explicit offline plan preview, and cancelled search worked without
+creating ModelMate session state. See RELEASE_CHECKLIST.md for remaining
+release gates.
+
+The transport uses the documented MediaWiki search-pages endpoint and
+public page identifiers for links.
+[MediaWiki REST API reference](https://www.mediawiki.org/wiki/API:REST_API/Reference/en#Search_pages)

@@ -4560,6 +4560,82 @@ def run_session_cleanup(session_id, input_stream, output):
             backend.close()
 
 
+def search_wikipedia(query, language):
+    """Fetch source candidates with only the explicitly supplied query."""
+    import html
+    import http.client
+    import re
+    from urllib.parse import urlencode
+
+    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
+    path = '/w/rest.php/v1/search/page?' + urlencode({'q': query, 'limit': 5})
+    connection = http.client.HTTPSConnection(host, timeout=8)
+    try:
+        connection.request('GET', path, headers={'Accept': 'application/json',
+            'User-Agent': 'ModelMate/0.1 (https://github.com/GearJP2/ModelMate)'})
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ProbeError('Wikipedia search returned HTTP ' + str(response.status) + '.')
+        data = response.read(262145)
+        if len(data) > 262144:
+            raise ProbeError('Wikipedia search response exceeded its size limit.')
+        try:
+            payload = json.loads(data)
+        except (ValueError, RecursionError) as exc:
+            raise ProbeError('Invalid Wikipedia search response.') from exc
+        pages = payload.get('pages') if isinstance(payload, dict) else None
+        if not isinstance(pages, list) or len(pages) > 5:
+            raise ProbeError('Invalid Wikipedia search results.')
+        results = []
+        for page in pages:
+            if not isinstance(page, dict):
+                raise ProbeError('Invalid Wikipedia search result.')
+            identifier, title, excerpt = (page.get(key) for key in ('id', 'title', 'excerpt'))
+            if (type(identifier) is not int or not 0 < identifier < 2 ** 63
+                    or not isinstance(title, str) or not title.strip() or not isinstance(excerpt, str)):
+                raise ProbeError('Invalid Wikipedia source metadata.')
+            snippet = html.unescape(re.sub(r'<[^<>]{0,128}>', '', excerpt))
+            results.append({'title': terminal_text(' '.join(title.split()))[:300],
+                            'excerpt': terminal_text(' '.join(snippet.split()))[:600],
+                            'url': 'https://' + host + '/?curid=' + str(identifier)})
+        return results
+    except (OSError, http.client.HTTPException) as exc:
+        raise ProbeError('Wikipedia search connection failed (' + diagnostic_code(exc) + ').') from None
+    finally:
+        connection.close()
+
+
+def run_wikipedia_search(input_stream, output, language):
+    import secrets
+    import unicodedata
+
+    def write(message):
+        output.write(message + '\n')
+        output.flush()
+
+    write('พิมพ์คำค้น Wikipedia หนึ่งบรรทัด แล้วกด Enter')
+    line = input_stream.readline(1026)
+    if not line.endswith('\n'):
+        raise ProbeError('Search requires a complete query line of up to 1024 characters.')
+    query = line.strip()
+    if (not query or len(query) > 1024 or any(unicodedata.category(c).startswith('C') for c in query)):
+        raise ProbeError('Invalid search query.')
+    token = 'SEARCH ' + secrets.token_hex(4)
+    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
+    write('คำค้นที่จะส่งไปยัง ' + host + ' · ' + json.dumps(query, ensure_ascii=False))
+    write('พิมพ์ ' + token + ' แล้ว Enter เพื่อส่งคำค้น หรือ CANCEL เพื่อยกเลิก')
+    confirmation = input_stream.readline(128)
+    if confirmation.rstrip('\r\n') != token or not confirmation.endswith('\n'):
+        write('ยกเลิกการค้น')
+        return 2
+    results = search_wikipedia(query, language)
+    if not results:
+        write('ไม่พบผลจาก Wikipedia')
+    for index, result in enumerate(results, 1):
+        write(str(index) + '. ' + result['title'] + '\n   ' + result['excerpt'] + '\n   ' + result['url'])
+    return 0
+
+
 def main():
     import argparse
     import sys
@@ -4568,6 +4644,8 @@ def main():
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--delete-session', metavar='SESSION_ID',
                        help='preview and confirm scoped native thread and metadata deletion; no model turns')
+    modes.add_argument('--search-wikipedia', choices=('en', 'th'), metavar='{en,th}',
+                       help='search Wikipedia with a separately entered and confirmed query; no model turns')
     modes.add_argument('--inspect-work-turn', metavar='SESSION_ID',
                        help='inspect the last saved workflow turn; no inference or checkpoint changes')
     modes.add_argument('--recover-recheck', metavar='SESSION_ID',
@@ -4618,6 +4696,17 @@ def main():
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
             print('ModelMate cleanup: ' + terminal_text(message), file=sys.stderr)
+            return 1
+    if args.search_wikipedia:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Wikipedia search only accepts its own confirmed query')
+        try:
+            return run_wikipedia_search(sys.stdin, sys.stdout, args.search_wikipedia)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, UnicodeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+            print('ModelMate search: ' + terminal_text(message), file=sys.stderr)
             return 1
     if args.inspect_work_turn:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
