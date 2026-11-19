@@ -4643,7 +4643,7 @@ def run_wikipedia_search(input_stream, output, language):
     except UnicodeDecodeError:
         write('ยกเลิกการค้น เพราะรหัสยืนยันอ่านเป็น UTF-8 ไม่ได้')
         return 2
-    if confirmation.rstrip('\r\n') != token or not confirmation.endswith('\n'):
+    if not confirmation.endswith('\n') or confirmation.strip(' \t\r\n') != token:
         write('ยกเลิกการค้น')
         return 2
     results = search_wikipedia(query, language)

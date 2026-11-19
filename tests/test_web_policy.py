@@ -10,7 +10,7 @@ from modelmate import ProbeError, main, run_wikipedia_search, search_wikipedia
 
 class WebPolicyTests(unittest.TestCase):
     def test_eof_refusal_or_stale_confirmation_never_sends_query(self):
-        for confirmation in ('', 'SEARCH deadbeef', 'SEARCH stale\n', 'CANCEL\n'):
+        for confirmation in ('', 'SEARCH deadbeef', 'SEARCH stale\n', 'SEARCH deadbeef extra\n', 'CANCEL\n'):
             with self.subTest(confirmation=confirmation), patch('secrets.token_hex', return_value='deadbeef'):
                 with patch('modelmate.search_wikipedia') as transport:
                     output = io.StringIO()
@@ -23,7 +23,7 @@ class WebPolicyTests(unittest.TestCase):
         with patch('secrets.token_hex', return_value='deadbeef'), patch('modelmate.search_wikipedia',
                 return_value=[{'title': 'Source', 'excerpt': 'Public excerpt', 'url': 'https://en.wikipedia.org/?curid=7'}]) as transport:
             output = io.StringIO()
-            source = io.StringIO('  sample & text  \nSEARCH deadbeef\nprivate history\n')
+            source = io.StringIO('  sample & text  \n SEARCH deadbeef \t\nprivate history\n')
             self.assertEqual(run_wikipedia_search(source, output, 'en'), 0)
             transport.assert_called_once_with('sample & text', 'en')
             self.assertIn('https://en.wikipedia.org/?curid=7', output.getvalue())
