@@ -81,6 +81,27 @@ def export_base(case_name, directory):
         (directory / "tests" / f"{module}.py").unlink()
 
 
+EVIDENCE_BADGE_TEST = """
+    def test_saved_fail_and_unknown_badges(self):
+        for exit_code, label in ((1, 'fail'), (None, 'unknown')):
+            with self.subTest(label=label):
+                store, sid = self.create()
+                controller = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)
+                with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY,
+                                    controller=controller):
+                    dispatch = controller.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)
+                    controller.finish_attempt(
+                        dispatch['dispatch']['attempt_id'], 'completed',
+                        tool_observations={0: {'item_id': 'check', 'exit_code': exit_code}},
+                    )
+                    controller.pause()
+                before = self.snapshot()
+                self.assertIn(f'[{label}] test:', self.inspect(sid))
+                self.assertEqual(before, self.snapshot())
+
+"""
+
+
 def grade(case_name, patch, *, repair_format=False):
     fix, module, selector, _ = CASES[case_name]
     with tempfile.TemporaryDirectory(prefix="modelmate-checkpoint-grade-") as scratch:
@@ -94,7 +115,13 @@ def grade(case_name, patch, *, repair_format=False):
                     patch += b"\n"
             subprocess.run([*apply, "-"], cwd=root, input=patch, check=True)
         verifier = f"tests/{module}.py"
-        (root / verifier).write_bytes(git_output("show", f"{fix}:{verifier}"))
+        verifier_source = git_output("show", f"{fix}:{verifier}").decode("utf-8")
+        if case_name == "display-evidence":
+            anchor = "    def test_saved_done_is_only_historical_evidence("
+            if verifier_source.count(anchor) != 1:
+                raise ValueError("Expected one insertion point in the pinned verifier.")
+            verifier_source = verifier_source.replace(anchor, EVIDENCE_BADGE_TEST + anchor)
+        (root / verifier).write_text(verifier_source, encoding="utf-8")
         return subprocess.run(
             [sys.executable, "-B", "-c",
              "import sys, unittest; sys.path.insert(0, 'tests'); unittest.main(module=None)",

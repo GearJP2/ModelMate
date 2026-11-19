@@ -436,8 +436,8 @@ arguments as `display-unknown`. This synthetic case forces every check badge
 to display `[pending]` in the historical renderer. The task states the literal
 badge names. The hidden local-inspection suite checks the saved pass badge for
 both completed and paused workflows, pending checks, saved workflow status,
-and read-only inspection. Inspect the proposed diff for the fail and unknown
-badges as well, since the pinned suite does not assert those two badge strings.
-The empty patch failed two assertions and the reference restoration passed
-all eight tests. The previous display-unknown case also reproduced its
+and read-only inspection. For this case the grader adds a hidden test covering
+saved fail and unknown badges and checks that inspection leaves the checkpoint
+untouched. The empty patch failed four assertions, including both new badge
+checks, and the reference restoration passed all nine tests. The previous display-unknown case also reproduced its
 expected empty-patch failure and eight passing reference checks.
