@@ -195,16 +195,25 @@ and account-level reporting prevent attributing those window changes to a
 model or estimating quota savings. The user exited both completed turns
 before rubric entry, so arm quality comes from independent scoring.
 
-For repeated paired runs, pass `--metrics-jsonl FILE` to each live pilot arm.
-Use separate files for the baseline and routed arms to preserve their labels.
-These files store the same timing and token counters shown in the summary,
-with no account quota observations. Keep any quota comparisons separately,
-using only the observations approved for that evaluation.
-
-Compare a pair of saved metrics records offline:
+For a future paired run, set the output paths once, in the shell where
+`PILOT` and `PAIR` were prepared:
 
 ```bash
-python3 examples/routing-pilot.py compare baseline.jsonl routed.jsonl
+PILOT="$HOME/Coding/Hobby/ModelMate/examples/routing-pilot.py"
+BASELINE_LOG="$PAIR/baseline.jsonl"
+ROUTED_LOG="$PAIR/routed.jsonl"
+```
+
+Append `--metrics-jsonl "$BASELINE_LOG"` to that pair's baseline launch
+and `--metrics-jsonl "$ROUTED_LOG"` to the routed launch. The launcher
+writes each file when its started workflow exits. Earlier runs without
+the flag have only their Terminal summaries. Keep any quota observations
+separately because the JSONL files contain timing and token counters.
+
+Once both files exist, compare the pair offline from any working directory:
+
+```bash
+python3 "$PILOT" compare "$BASELINE_LOG" "$ROUTED_LOG"
 ```
 
 When a file contains multiple runs, select the intended record with
