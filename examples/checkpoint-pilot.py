@@ -26,6 +26,15 @@ CASES = {
         "is unknown. Restore the Thai warning, including the instruction against "
         "automatic replay. Preserve the completed-attempt message and read-only behavior.",
     ),
+    "display-evidence": (
+        "e43bb08",
+        "test_local_inspection",
+        None,
+        "Read-only checkpoint inspection shows [pending] even for saved check "
+        "results. Show saved results with their literal tags [pass], [fail], "
+        "or [unknown], and use [pending] only for a check without saved evidence. "
+        "Keep the saved workflow status and the historical-data notice.",
+    ),
     "resume": (
         "f64ff7b",
         "test_native_resume",
@@ -41,23 +50,34 @@ def git_output(*args):
     return subprocess.check_output(["git", *args], cwd=REPO)
 
 
+DISPLAY_REGRESSIONS = {
+    "display-unknown": (
+        "            else:\n"
+        "                write('มี attempt ค้างใน checkpoint; ผลปัจจุบันยังไม่ทราบ ห้าม replay อัตโนมัติ')\n",
+        "",
+    ),
+    "display-evidence": (
+        "write('  [' + checked.get(number, {}).get('result', 'pending') + '] '",
+        "write('  [pending] '",
+    ),
+}
+
+
 def export_base(case_name, directory):
     fix, module, _, _ = CASES[case_name]
-    revision = fix if case_name == "display-unknown" else fix + "^"
+    regression = DISPLAY_REGRESSIONS.get(case_name)
+    revision = fix if regression else fix + "^"
     archive = git_output("archive", revision)
     with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
         bundle.extractall(directory, filter="data")
 
-
-    if case_name == "display-unknown":
-        # Simulate a display regression while retaining the completed-attempt branch.
+    if regression:
         runtime = directory / "modelmate.py"
         source = runtime.read_text(encoding="utf-8")
-        warning = ("            else:\n"
-                   "                write('มี attempt ค้างใน checkpoint; ผลปัจจุบันยังไม่ทราบ ห้าม replay อัตโนมัติ')\n")
-        if source.count(warning) != 1:
-            raise ValueError("Expected one unknown-attempt warning in the base revision.")
-        runtime.write_text(source.replace(warning, ""), encoding="utf-8")
+        original, replacement = regression
+        if source.count(original) != 1:
+            raise ValueError(f"Expected one mutation target for {case_name}.")
+        runtime.write_text(source.replace(original, replacement), encoding="utf-8")
         (directory / "tests" / f"{module}.py").unlink()
 
 

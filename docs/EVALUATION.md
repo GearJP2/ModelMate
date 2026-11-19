@@ -428,3 +428,16 @@ Keep human code corrections separate from format repair.
 Use the existing selection rule in production while the trial rule is
 evaluated. The next comparison should use a fresh display task so the two
 previous cases remain evidence about the original prompts and verifier.
+
+### Saved evidence display evaluation
+
+Use `prepare display-evidence` and `grade display-evidence` with the same
+arguments as `display-unknown`. This synthetic case forces every check badge
+to display `[pending]` in the historical renderer. The task states the literal
+badge names. The hidden local-inspection suite checks the saved pass badge for
+both completed and paused workflows, pending checks, saved workflow status,
+and read-only inspection. Inspect the proposed diff for the fail and unknown
+badges as well, since the pinned suite does not assert those two badge strings.
+The empty patch failed two assertions and the reference restoration passed
+all eight tests. The previous display-unknown case also reproduced its
+expected empty-patch failure and eight passing reference checks.
