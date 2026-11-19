@@ -384,3 +384,28 @@ For an original patch rejected by Git, rerun the same grading command with
 `--repair-format` to add a missing final newline and recount the hunk lines
 in memory. Keep the original grading result. This option preserves the
 patch file and the proposed code edits.
+
+### Live display-unknown pair
+
+The user ran Codex CLI 0.170.0 on separate exports, with read-only tools
+and low reasoning effort for both requested models.
+
+| Requested model | Original patch | Local inspection suite after format repair | CLI-reported tokens |
+| --- | --- | --- | ---: |
+| gpt-6.2-sol | Rejected as corrupt | 7/8 passed | 22,828 |
+| gpt-6.2-astra | Rejected as corrupt | 7/8 passed | 8,754 |
+
+Both proposed a Thai unknown-outcome warning and explicitly advised against
+automatic replay. Both failed the same existing assertion, which requires the
+literal phrase `ผลปัจจุบันยังไม่ทราบ`. The prompt requested that the warning
+be restored but did not specify that phrase. Keep both original verdicts.
+Manual review found both proposed messages communicate the requested warning.
+For future cases, expose required literal wording in the task, or define a
+separate semantic check in advance when equivalent wording is acceptable.
+
+Across the two display pairs, neither model delivered an applicable raw diff.
+After format repair the smaller model matched the larger model's test verdict
+on both cases, while its reported token count was higher in both. These
+observations support handling patch format separately from escalation. They do
+not establish subscription quota savings or justify enabling the trial routing
+rule as a default.
