@@ -1826,6 +1826,8 @@ class ChatShell:
             else:
                 self.write('โมเดลที่เสนอ: ' + json.dumps(request['selection']) + ' · ' + request['reason'])
             self.write('/approve ' + request['token'] + ' · /decline ' + request['token'] + ' · /pause ' + request['token'])
+            if self.workflow_action is not None:
+                self.write('อนุมัติและเริ่มขั้นนี้ในคำสั่งเดียว: /approve ' + request['token'] + ' --next')
         elif self.pending is not None:
             token = self.pending['token']
             self.write('/continue ' + token + ' · /revise ' + token + ' · /pause ' + token)
@@ -2030,10 +2032,18 @@ class ChatShell:
                 if values:
                     self.workflow.change_mode(values[0])
             else:
-                if len(values) != 1 or self.pending is None or values[0] != self.pending['token']:
+                start_now = cmd == '/approve' and len(values) == 2 and values[1] == '--next'
+                if ((len(values) != 1 and not start_now) or self.pending is None
+                        or values[0] != self.pending['token']):
                     raise ProbeError('Invalid or stale workflow choice token.')
                 if self.pending['kind'] == 'workflow_model' and cmd in ('/approve', '/decline', '/pause'):
+                    if start_now and self.workflow_action is None:
+                        raise ProbeError('Workflow executor is unavailable; no attempt consumed or dispatched.')
                     self.workflow.answer_model(values[0], cmd[1:])
+                    if start_now:
+                        self.workflow_action({'action': 'next', 'task_id': self.workflow.task_id})
+                        if isinstance(self.workflow_action, WorkflowHost):
+                            return
                 elif self.pending['kind'] == 'workflow_pause' and cmd in ('/continue', '/revise', '/pause'):
                     self.workflow.answer_pause(values[0], {'/continue': 'continue', '/revise': 'revise_scope', '/pause': 'pause'}[cmd])
                 else:
@@ -2069,7 +2079,7 @@ class ChatShell:
                            '/confirm-delete TOKEN /acknowledge TOKEN /cancel /exit\n'
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
                 if self.workflow is not None:
-                    self.write('/workflow /next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
+                    self.write('/workflow /next /approve TOKEN --next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · /approve TOKEN อย่างเดียวจะรอ /next')
                     if self.recheck_backend is not None:
                         self.write('/recheck STEP.CHECK /confirm-recheck TOKEN /recheck-budget STEP.CHECK continue|revise_scope|pause')
             elif cmd == '/status':
@@ -4040,8 +4050,12 @@ def inspect_local_sessions(project, output, session_id=None):
         write('บันทึกเมื่อ: ' + record['updated_at'])
         if checkpoint['reason']:
             write('เหตุผล: ' + checkpoint['reason'])
-        if checkpoint['active_attempt'] is not None:
-            write('มี attempt ค้างใน checkpoint; ผลปัจจุบันยังไม่ทราบ ห้าม replay อัตโนมัติ')
+        active = checkpoint['active_attempt']
+        if active is not None:
+            if active['status'] == 'completed':
+                write('Turn จบตาม checkpoint และยังรอประเมินผลขั้นนี้')
+            else:
+                write('มี attempt ค้างใน checkpoint; ผลปัจจุบันยังไม่ทราบ ห้าม replay อัตโนมัติ')
         if checkpoint.get('rechecks'):
             rechecks = validate_recheck_ledger(checkpoint['rechecks'], workflow_saved_evidence(checkpoint))
             write('Recheck reservations: ' + str(len(rechecks)) + ' · unresolved: '

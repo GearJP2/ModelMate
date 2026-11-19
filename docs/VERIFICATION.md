@@ -2074,3 +2074,31 @@ Tests cover durable evidence through exit, duplicate terminal delivery,
 the separation of observed and accepted evidence, and a queued check cleared
 by cancel even if a completed terminal event arrives afterward. Resume still
 treats saved evidence as historical. No live inference was requested.
+
+The Terminal smoke path also checks `/approve TOKEN --next`, which explicitly
+starts the approved step after fresh preflight. The synthetic CLI reached
+CHECKING with one turn. After exiting before `/check`, offline
+`--show-workflow` displayed the recorded passing test in the paused
+checkpoint. Invalid and reused tokens did not dispatch. The agent-side
+`--doctor` retry exited before initialize. A live user smoke remains open.
+
+Run from the ModelMate checkout with a fresh state directory:
+
+```bash
+(
+  cd "$HOME/Coding/Hobby/ModelMate" &&
+  export XDG_STATE_HOME="$(mktemp -d)" &&
+  python3 modelmate.py --workflow examples/check-model-policy.json \
+    --check-commands examples/check-model-policy.commands.json \
+    --workflow-mode approve_plan --role-model standard=gpt-6.2-sol \
+    --execute-workflow &&
+  SESSION_ID="$(python3 modelmate.py --sessions |
+    awk 'length($1)==32 && $1 ~ /^[0-9a-f]+$/ { id=$1; n++ } END { if(n==1) print id; else exit 1 }')" &&
+  python3 modelmate.py --show-workflow "$SESSION_ID"
+)
+```
+
+Enter START, then `/next`, then the displayed `/approve TOKEN --next` line.
+Wait until CHECKING and then exit without entering `/check`.
+The final offline listing should contain `[pass] test`. Only the
+approved turn uses a subscription turn.

@@ -191,7 +191,7 @@ Recovery รองรับเฉพาะ recheck ที่บันทึก n
 เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/check`, `/mode`
 และคำตอบตาม token เช่น `/approve`, `/decline`, `/continue`, `/revise`, `/pause`
 แสดงแผน โมเดลที่เสนอ ขั้นปัจจุบัน จำนวนรอบ ผลตรวจ และจำนวนหลักฐานของแต่ละเกณฑ์
-การอนุมัติไม่เริ่มงานเอง; `/next` ส่งคำขอไปยัง trusted host ซึ่งต้องตรวจ quota/catalog/model gates
+`/approve TOKEN` บันทึกการอนุมัติ ส่วน `/next` ส่งคำขอไปยัง trusted host เพื่อตรวจ quota/catalog/model gates
 ถ้าไม่มี host จะไม่ใช้ attempt slot หรือส่งงานใด ๆ `/cancel` และ `/exit` ขณะ active
 จะขอหยุดและรอ controller terminal event; ยืนยันไม่ได้ภายใน deadline จะออกโดยระบุ outcome unknown
 UI ไม่รับคำยืนยันผลตรวจจากข้อความโมเดล และไม่ให้ model approval แทน tool approval
@@ -391,6 +391,9 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 และ cwd ที่ลงทะเบียนไว้ลง checkpoint พร้อมสถานะ CHECKING ทันที
 จึงยังเปิดดูหลักฐานเดิมได้หากออกก่อนกด `/check` ส่วนหลักฐานจาก session เดิม
 ยังต้องตรวจใหม่ตามกฎของ resume
+เมื่อหน้าจอขออนุมัติโมเดล ใช้ `/approve TOKEN --next` เพื่ออนุมัติและขอเริ่มขั้น
+ปัจจุบันในคำสั่งเดียว ระบบตรวจโควตาและ catalog ใหม่ก่อนส่ง turn
+ส่วน `/approve TOKEN` เพียงอย่างเดียวจะบันทึกการอนุมัติและรอ `/next`
 หมายเลข check เริ่มที่ 1 ในขั้นปัจจุบัน ใช้ `/check` เพื่อประเมินและไปขั้นถัดไป
 หาก fail จะใช้ correction budget เดิม; unknown/missing ไม่ถือว่าผ่าน
 `1.1` หมายถึงขั้น 1 check 1 ตาม `ref` ที่แสดง ใช้ได้หลัง `/check` ยอมรับขั้นนั้นแล้ว

@@ -107,6 +107,21 @@ class WorkflowUITests(unittest.TestCase):
         self.assertTrue(shell.active)
         self.assertEqual(c.snapshot()['steps'][0]['attempts'], 1)
 
+    def test_approve_with_next_dispatches_once_for_current_token(self):
+        shell, controller, output, actions = self.shell(self.controller('strong'))
+        shell.line('/next')
+        token = shell.pending['token']
+        self.assertIn('/approve ' + token + ' --next', output.getvalue())
+        shell.line('/approve stale --next')
+        shell.line('/approve ' + token + ' --other')
+        self.assertEqual(controller.state, 'AWAITING_MODEL_APPROVAL')
+        self.assertEqual(controller.snapshot()['steps'][0]['attempts'], 0)
+        shell.line('/approve ' + token + ' --next')
+        self.assertEqual(controller.state, 'RUNNING')
+        shell.line('/approve ' + token + ' --next')
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(controller.snapshot()['steps'][0]['attempts'], 1)
+
     def test_mode_change_expires_old_grants_and_tokens_and_preserves_budget(self):
         shell, c, _, actions = self.shell(self.controller('strong'))
         shell.line('/next');old = shell.pending['token']
