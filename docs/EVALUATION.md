@@ -270,3 +270,49 @@ corrections in the CLI session and stops at acceptance. When a prior
 attempt was made in another session, the comparison tool suppresses this
 timing delta. Earlier pilots that exited before final assessment retain
 their independent grades and have no in-workflow acceptance time.
+
+## Historical workflow checkpoint cases (P16)
+
+The first real-task pilot uses ModelMate's own checkpoint history. Both cases
+ask for a focused checkpoint bug fix with an existing offline acceptance test.
+The cases differ in impact. One changes the displayed status. The other must
+preserve persisted data across a rejected resume.
+
+| Set | Base revision | Task shown to the model | Independent acceptance check |
+| --- | --- | --- | --- |
+| Rule development | `e43bb08^` | A paused workflow whose backend turn has completed still shows its current step as running in checkpoint inspection. Show that step as checking and retain the saved check evidence. Preserve the paused workflow status. | `test_local_inspection.LocalInspectionTests.test_paused_completed_attempt_displays_as_checking_with_saved_evidence` from `e43bb08` |
+| Evaluation | `f64ff7b^` | A rejected native workflow resume can rewrite the saved checkpoint. Preserve the checkpoint byte for byte on rejection, while keeping the current rejection checks and behavior for successful resumes. | `test_native_resume.NativeResumeTests.test_recovery_refuses_project_active_ephemeral_permission_and_turn_mismatch` from `f64ff7b` |
+
+### Offline acceptance evidence
+
+For each case, export the fix revision with `git archive`. In that temporary
+tree, run the indicated test with `PYTHONPATH=.:tests python3 -B -m unittest
+TEST_SELECTOR`, first with `modelmate.py` from the parent and then with
+`modelmate.py` from the fix revision. The same test and supporting files are
+used for both runs.
+
+- `e43bb08^` failed the CHECKING assertion and `e43bb08` passed.
+- `f64ff7b^` failed the byte comparison in all nine rejection scenarios and
+  `f64ff7b` passed.
+
+These are verifier checks. No model has attempted either historical task as
+part of this pilot.
+
+### Paired evaluation
+
+Give each arm a fresh export of the same base revision and the same task text.
+Keep repository history, the fix revision and the updated verifier outside the
+agent workspace. Apply the candidate diff to a fresh evaluator tree and grade
+it independently. Record pass, fail or unknown for each attempt. Use unknown
+when the harness cannot run the verifier. Preserve the repo's tool permissions
+and obtain explicit authorization before live inference.
+
+Use the rule-development case to draft and freeze a routing rule before running
+the evaluation case. The starting hypothesis is to try a smaller model on
+display-only defects with an offline verifier. Persisted checkpoint changes
+form a separate scope and require their own evidence before lowering the
+starting model. Use the existing escalation mode and count all attempts when
+comparing with strong-only. Log first and final verdict, strong requests,
+corrections and time to acceptance. Record quota observations when available.
+One case per set is enough to exercise the procedure. Estimates of quality or
+quota savings require more independent cases.
