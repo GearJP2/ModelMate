@@ -366,3 +366,16 @@ error calls for local syntax validation before considering model escalation.
 The resume case sits outside the display-only scope and can check that the
 rule does not lower the model for that case. A separate unseen display case
 is needed to test whether the proposed downgrade generalizes.
+
+### Additional display evaluation case
+
+Use `prepare display-unknown` and `grade display-unknown` with the same
+arguments as `display`. This case removes the unknown-outcome warning from
+the historical checkpoint renderer at `e43bb08`. It is a synthetic
+regression based on existing behavior. The prepared workspace omits the
+local-inspection verifier. The evaluator restores it from the pinned
+revision and runs the entire local-inspection suite. The suite failed with
+the warning removed and passed after restoring it. Keep the frozen routing
+rule for this pair and request Standard versus Strong at the same effort.
+Record first-delivery and format-normalized results separately as in the
+first pair.
