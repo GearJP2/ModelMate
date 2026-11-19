@@ -4064,9 +4064,11 @@ def inspect_local_sessions(project, output, session_id=None):
                 write('Recheck ' + str(index + 1) + ': ' + operation['status'] + ' · retained native IDs '
                       + json.dumps({'thread': operation['thread_id'], 'turn': operation['turn_id']}, ensure_ascii=True))
         for index, (step, proposal) in enumerate(zip(checkpoint['steps'], plan['steps'])):
-            write(str(index + 1) + '. ' + proposal['objective'] + ' · ' + step['state']
+            step_state = ('CHECKING' if active is not None and active['step_id'] == step['id']
+                          and active['status'] == 'completed' else step['state'])
+            write(str(index + 1) + '. ' + proposal['objective'] + ' · ' + step_state
                   + ' · รอบ ' + str(step['cycle'] + 1) + ' · attempt ' + str(step['attempts']) + '/3')
-            latest = checkpoint['active_attempt']
+            latest = active
             if latest is None or latest['step_id'] != step['id']:
                 latest = next((item for item in reversed(checkpoint['history'])
                                if 'checks' in item and item['step_id'] == step['id']), None)

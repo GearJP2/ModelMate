@@ -78,6 +78,20 @@ class LocalInspectionTests(unittest.TestCase):
             self.assertNotIn(forbidden, text)
         self.assertEqual(before, self.snapshot())
 
+    def test_paused_completed_attempt_displays_as_checking_with_saved_evidence(self):
+        store, sid = self.create()
+        controller = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)
+        with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY, controller=controller):
+            aid = controller.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)['dispatch']['attempt_id']
+            controller.finish_attempt(aid, 'completed', tool_observations={0: {'item_id': 'check', 'exit_code': 0}})
+            controller.pause()
+        before = self.snapshot()
+        text = self.inspect(sid)
+        self.assertIn('สถานะที่บันทึก: PAUSED', text)
+        self.assertIn('· CHECKING ·', text)
+        self.assertIn('[pass] test:', text)
+        self.assertEqual(before, self.snapshot())
+
     def test_saved_done_is_only_historical_evidence(self):
         store, sid = self.create()
         controller = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)

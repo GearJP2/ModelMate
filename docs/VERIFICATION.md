@@ -2102,3 +2102,18 @@ Enter START, then `/next`, then the displayed `/approve TOKEN --next` line.
 Wait until CHECKING and then exit without entering `/check`.
 The final offline listing should contain `[pass] test`. Only the
 approved turn uses a subscription turn.
+
+### Tool evidence autosave and approval shortcut — scoped LIVE_VERIFIED
+
+The user ran the one-turn smoke against the checkout containing `fd6c982`.
+`/approve TOKEN --next` dispatched one requested `gpt-6.2-sol/low` turn.
+The matched native test displayed a passing result before any `/check`.
+A follow-up `/next` while CHECKING was rejected. After `/exit`, offline
+`--show-workflow` displayed the passing evidence in the paused checkpoint.
+The workflow had not evaluated that step. The transcript exposed an
+inconsistent offline step label, corrected to CHECKING in the follow-up.
+No runtime checksum was supplied with the user transcript.
+
+The corrected viewer was checked offline on that same live smoke checkpoint.
+It printed the overall PAUSED state, the step's CHECKING state, and the saved
+passing test. The full offline suite passed 487 tests.
