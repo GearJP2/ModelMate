@@ -656,6 +656,7 @@ class WorkflowController:
         self._account_id = None
         self._coverage = {}
         self._stale_evidence = set()
+        self._accepted_at = None
         self._rechecks = []
         self._current_rechecks = set()
         self._recheck_fault = False
@@ -1016,7 +1017,10 @@ class WorkflowController:
         else:
             self.state, self.reason = 'DONE', None
         self._coverage = copy.deepcopy(coverage)
-        return self._updated()
+        updated = self._updated()
+        if self.state == 'DONE':
+            self._accepted_at = time.monotonic()
+        return updated
 
     def pause(self, reason='user_pause'):
         if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'quota_stale', 'account_unknown',
@@ -4124,6 +4128,29 @@ def workflow_statistics(controller, started_at, *, now=None):
     attempts = [event for event in state['history'] if 'checks' in event]
     if state['active_attempt'] is not None:
         attempts.append(state['active_attempt'])
+    first_attempts = {}
+    for attempt in attempts:
+        first_attempts.setdefault(attempt['step_id'], attempt)
+    first_pass = dict.fromkeys(('passed', 'failed', 'unknown'), 0)
+    for step, proposal in zip(state['steps'], state['plan']['steps']):
+        first = first_attempts.get(step['id'])
+        if first is None:
+            continue
+        results = [check['result'] for check in first['checks'].values()]
+        if first is state['active_attempt'] or first['status'] != 'completed':
+            outcome = 'unknown'
+        elif 'fail' in results:
+            outcome = 'failed'
+        elif len(results) == len(proposal['checks']) and all(result == 'pass' for result in results):
+            outcome = 'passed'
+        else:
+            outcome = 'unknown'
+        first_pass[outcome] += 1
+    assessed = first_pass['passed'] + first_pass['failed']
+    accepted_at = controller._accepted_at
+    time_to_acceptance = (round(accepted_at - started_at, 3)
+                          if state['state'] == 'DONE' and accepted_at is not None
+                          and started_at <= accepted_at <= now else None)
     selections = []
     for attempt in attempts:
         if attempt['selection'] not in selections:
@@ -4135,7 +4162,9 @@ def workflow_statistics(controller, started_at, *, now=None):
     return {'state': state['state'], 'elapsedSeconds': round(now - started_at, 3),
             'includesUserWait': True, 'attempts': len(attempts), 'attemptsScope': 'workflow_total',
             'elapsedScope': 'current_cli_session', 'requestedSelections': selections,
-            'recheckAttempts': len(rechecks),
+            'recheckAttempts': len(rechecks), 'firstPassSteps': first_pass,
+            'firstPassRate': first_pass['passed'] / assessed if assessed else None,
+            'timeToAcceptanceSeconds': time_to_acceptance,
             'reportedModels': None, 'tokenUsage': None}
 
 
@@ -4147,7 +4176,7 @@ def append_workflow_metrics(path, stats):
     fields = ('state', 'elapsedSeconds', 'includesUserWait', 'attempts', 'attemptsScope',
               'elapsedScope', 'requestedSelections', 'recheckAttempts', 'reportedModels',
               'tokenUsage', 'tokenUsageScope', 'turnElapsedSeconds', 'timedTurns',
-              'workTurnMeasurements')
+              'workTurnMeasurements', 'firstPassSteps', 'firstPassRate', 'timeToAcceptanceSeconds')
     report = {'schemaVersion': 1, **{name: stats.get(name) for name in fields}}
     line = (json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')) + '\n').encode()
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,

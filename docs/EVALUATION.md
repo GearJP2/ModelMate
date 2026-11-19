@@ -261,3 +261,219 @@ shorter. The secondary window showed no visible change for either arm;
 there was no comparable primary window reported by the routed arm.
 The cache differed and the runs were sequential. The two observations
 do not establish a quota saving or a general latency advantage.
+
+Compare `firstPassSteps` and `firstPassRate` for workflows that recorded
+their checks. Unknown first attempts are shown separately. To compare
+`timeToAcceptanceSeconds`, run both arms to DONE and record their rubric
+and criterion coverage before exit. The timer includes user wait and
+corrections in the CLI session and stops at acceptance. When a prior
+attempt was made in another session, the comparison tool suppresses this
+timing delta. Earlier pilots that exited before final assessment retain
+their independent grades and have no in-workflow acceptance time.
+
+## Historical workflow checkpoint cases (P16)
+
+The first real-task pilot uses ModelMate's own checkpoint history. Both cases
+ask for a focused checkpoint bug fix with an existing offline acceptance test.
+The cases differ in impact. One changes the displayed status. The other must
+preserve persisted data across a rejected resume.
+
+| Set | Base revision | Task shown to the model | Independent acceptance check |
+| --- | --- | --- | --- |
+| Rule development | `e43bb08^` | A paused workflow whose backend turn has completed still shows its current step as running in checkpoint inspection. Show that step as checking and retain the saved check evidence. Preserve the paused workflow status. | `test_local_inspection.LocalInspectionTests.test_paused_completed_attempt_displays_as_checking_with_saved_evidence` from `e43bb08` |
+| Evaluation | `f64ff7b^` | A rejected native workflow resume can rewrite the saved checkpoint. Preserve the checkpoint byte for byte on rejection, while keeping the current rejection checks and behavior for successful resumes. | `test_native_resume.NativeResumeTests.test_recovery_refuses_project_active_ephemeral_permission_and_turn_mismatch` from `f64ff7b` |
+
+### Offline acceptance evidence
+
+For each case, export the fix revision with `git archive`. In that temporary
+tree, run the indicated test with `PYTHONPATH=.:tests python3 -B -m unittest
+TEST_SELECTOR`, first with `modelmate.py` from the parent and then with
+`modelmate.py` from the fix revision. The same test and supporting files are
+used for both runs.
+
+- `e43bb08^` failed the CHECKING assertion and `e43bb08` passed.
+- `f64ff7b^` failed the byte comparison in all nine rejection scenarios and
+  `f64ff7b` passed.
+
+These are verifier checks. No model has attempted either historical task as
+part of this pilot.
+
+### Paired evaluation
+
+Give each arm a fresh export of the same base revision and the same task text.
+Keep repository history, the fix revision and the updated verifier outside the
+agent workspace. Apply the candidate diff to a fresh evaluator tree and grade
+it independently. Record pass, fail or unknown for each attempt. Use unknown
+when the harness cannot run the verifier. Preserve the repo's tool permissions
+and obtain explicit authorization before live inference.
+
+Use the rule-development case to draft and freeze a routing rule before running
+the evaluation case. The starting hypothesis is to try a smaller model on
+display-only defects with an offline verifier. Persisted checkpoint changes
+form a separate scope and require their own evidence before lowering the
+starting model. Use the existing escalation mode and count all attempts when
+comparing with strong-only. Log first and final verdict, strong requests,
+corrections and time to acceptance. Record quota observations when available.
+One case per set is enough to exercise the procedure. Estimates of quality or
+quota savings require more independent cases.
+
+Run the preparation and grading steps from the original checkout. Use a new
+workspace for each arm and save its unified diff outside that workspace.
+
+```sh
+scratch=$(mktemp -d)
+python3 examples/checkpoint-pilot.py prepare display "$scratch/display"
+# Save the candidate's modelmate.py diff as "$scratch/candidate.patch".
+python3 examples/checkpoint-pilot.py grade display "$scratch/candidate.patch" --trusted-patch
+```
+
+Use `resume` in place of `display` for the evaluation case. The grader
+applies changes to `modelmate.py` and restores the selected historical
+verifier from the fix revision. It runs candidate code under the caller's
+permissions. Review the patch and use an appropriately isolated environment
+before grading model-generated changes. Exit 0 means the test passed, exit 1
+means an assertion failed, and exit 2 covers patch rejection, test errors,
+skipped tests or an unavailable verifier. Inspect the test output for the
+specific cause.
+
+Offline smoke run for both cases produced the expected assertion failures with
+an empty patch and a passing test with the historical fix. Each prepared
+workspace had no Git history.
+
+### First live display pair
+
+The user ran Codex CLI 0.170.0 with read-only tools and low reasoning effort
+against separate exports of the display base. Both models proposed changing
+the displayed step state for the matching completed attempt while keeping
+the saved checkpoint and evidence intact.
+
+| Requested model | Original patch | Regression check after format repair | CLI-reported tokens |
+| --- | --- | --- | ---: |
+| gpt-6.2-sol | Rejected as corrupt | Pass | 31,561 |
+| gpt-6.2-astra | Rejected as corrupt | Pass | 8,825 |
+
+The original patch files lacked a trailing newline. Adding it and using
+`git apply --recount` in fresh base exports allowed both patches to apply.
+The grader verified regenerated diffs without changing either proposed code
+edit. Count both original deliveries as failed and both format-repaired
+changes as passing. No additional model turn was used for the repair. Token
+counts alone cannot establish subscription quota savings.
+
+Freeze the candidate rule for the next evaluation. Start with Standard for
+display-only checkpoint changes that have independent offline verification.
+Keep the existing selection for persisted state changes. A patch formatting
+error calls for local syntax validation before considering model escalation.
+The resume case sits outside the display-only scope and can check that the
+rule does not lower the model for that case. A separate unseen display case
+is needed to test whether the proposed downgrade generalizes.
+
+### Additional display evaluation case
+
+Use `prepare display-unknown` and `grade display-unknown` with the same
+arguments as `display`. This case removes the unknown-outcome warning from
+the historical checkpoint renderer at `e43bb08`. It is a synthetic
+regression based on existing behavior. The prepared workspace omits the
+local-inspection verifier. The evaluator restores it from the pinned
+revision and runs the entire local-inspection suite. The suite failed with
+the warning removed and passed after restoring it. Keep the frozen routing
+rule for this pair and request Standard versus Strong at the same effort.
+Record first-delivery and format-normalized results separately as in the
+first pair.
+
+For an original patch rejected by Git, rerun the same grading command with
+`--repair-format` to add a missing final newline and recount the hunk lines
+in memory. Keep the original grading result. This option preserves the
+patch file and the proposed code edits.
+
+### Live display-unknown pair
+
+The user ran Codex CLI 0.170.0 on separate exports, with read-only tools
+and low reasoning effort for both requested models.
+
+| Requested model | Original patch | Local inspection suite after format repair | CLI-reported tokens |
+| --- | --- | --- | ---: |
+| gpt-6.2-sol | Rejected as corrupt | 7/8 passed | 22,828 |
+| gpt-6.2-astra | Rejected as corrupt | 7/8 passed | 8,754 |
+
+Both proposed a Thai unknown-outcome warning and explicitly advised against
+automatic replay. Both failed the same existing assertion, which requires the
+literal phrase `ผลปัจจุบันยังไม่ทราบ`. The prompt requested that the warning
+be restored but did not specify that phrase. Keep both original verdicts.
+Manual review found both proposed messages communicate the requested warning.
+For future cases, expose required literal wording in the task, or define a
+separate semantic check in advance when equivalent wording is acceptable.
+
+Across the two display pairs, neither model delivered an applicable raw diff.
+After format repair the smaller model matched the larger model's test verdict
+on both cases, while its reported token count was higher in both. These
+observations support handling patch format separately from escalation. They do
+not establish subscription quota savings or justify enabling the trial routing
+rule as a default.
+
+### Verify the wording mismatch offline
+
+On temporary copies of the two live patches, replace only the warning text
+with `ผลปัจจุบันยังไม่ทราบ ห้ามรันซ้ำอัตโนมัติ`. Grade each copy with
+`--repair-format`. Both passed 8/8. This is a human correction after the
+initial delivery and does not change either live verdict.
+
+For the next independent case, write down what the verifier checks before
+running either arm. If a UI string is a compatibility requirement, put the
+required literal in the task. For a warning that allows equivalent wording,
+verify the branch and regression behavior with tests and assess the two
+message requirements independently of model identity. Record raw patch
+applicability, applicability after format repair, and the acceptance verdict.
+Keep human code corrections separate from format repair.
+
+Use the existing selection rule in production while the trial rule is
+evaluated. The next comparison should use a fresh display task so the two
+previous cases remain evidence about the original prompts and verifier.
+
+### Saved evidence display evaluation
+
+Use `prepare display-evidence` and `grade display-evidence` with the same
+arguments as `display-unknown`. This synthetic case forces every check badge
+to display `[pending]` in the historical renderer. The task states the literal
+badge names. The hidden local-inspection suite checks the saved pass badge for
+both completed and paused workflows, pending checks, saved workflow status,
+and read-only inspection. For this case the grader adds a hidden test covering
+saved fail and unknown badges and checks that inspection leaves the checkpoint
+untouched. The empty patch failed four assertions, including both new badge
+checks, and the reference restoration passed all nine tests. The previous display-unknown case also reproduced its
+expected empty-patch failure and eight passing reference checks.
+
+After reviewing both candidate diffs, grade them together offline.
+
+```sh
+python3 examples/checkpoint-pilot.py grade-pair display-evidence \
+  "$scratch/gpt-6.2-sol.patch" "$scratch/gpt-6.2-astra.patch" --trusted-patch
+```
+
+The JSON report lists the routed arm first. It keeps the original delivery
+verdict and retries format repair only when Git rejected the original. Exit 0
+means both original deliveries passed, 1 means one or both did not pass,
+and 2 means a test error or unavailable grader for at least one arm.
+A test that errors, cannot load, or is skipped reports `test_error`.
+A missing patch or verifier timeout reports `unavailable`. The report still
+includes the other arm's result. Capture stdout for the JSON report and
+stderr for verifier diagnostics and any output from the candidate code.
+
+### Live display-evidence pair
+
+Both arms used Codex CLI 0.170.0 with read-only tools, low reasoning effort,
+the same task wording and independent exports of the synthetic regression.
+The local grader ran the frozen nine-test verifier.
+
+| Requested model | Original delivery | After format repair | CLI-reported tokens |
+| --- | --- | --- | ---: |
+| gpt-6.2-sol | 9/9 passed | Not needed | 13,465 |
+| gpt-6.2-astra | Git rejected the diff | 9/9 passed | 7,593 |
+
+Both proposed restoring the result from the saved evidence with pending as
+the fallback. Format repair for the baseline took no extra model turn.
+The routed arm passed on first delivery and requested no Strong model. It
+used 5,872 more reported tokens in this pair. The counts are CLI telemetry,
+with no paired subscription quota measurements. Together with the earlier
+pairs, this supports keeping format repair ahead of escalation and keeping
+the display-only routing rule experimental. These cases cover one narrow
+area of one codebase.

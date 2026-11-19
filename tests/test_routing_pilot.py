@@ -45,11 +45,24 @@ class PilotComparisonTests(unittest.TestCase):
         result = self.cli()
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
-        self.assertEqual(report['routedMinusBaseline'], {'workTurnSeconds': -0.6,
+        self.assertEqual(report['routedMinusBaseline'], {'workTurnSeconds': -0.6, 'timeToAcceptanceSeconds': None,
             'reportedWorkThreadTokens': -10, 'reportedCachedInputTokens': -20})
         self.assertEqual(report['routed']['cliWallSecondsIncludingUserWait'], 60)
         self.assertEqual(report['baseline']['observedModelReroutes'], [])
         self.assertEqual(report['routed']['observedModelReroutes'], [transition])
+
+    def test_acceptance_comparison_requires_both_completed_workflows(self):
+        baseline = dict(self.measured(100, 20, 2.3), state='DONE', timeToAcceptanceSeconds=30)
+        routed = dict(self.measured(90, 0, 1.7), state='DONE', timeToAcceptanceSeconds=27)
+        self.write(self.baseline, baseline)
+        self.write(self.routed, routed)
+        result = self.cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['routedMinusBaseline']['timeToAcceptanceSeconds'], -3)
+        self.write(self.routed, dict(routed, state='PAUSED'))
+        result = self.cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(json.loads(result.stdout)['routedMinusBaseline']['timeToAcceptanceSeconds'])
 
     def test_ambiguous_selection_requires_row_and_resumed_partial_metrics_stay_unknown(self):
         complete = self.measured(100, 20, 2.3)

@@ -119,3 +119,9 @@ path ที่มีภาษาไทย/ช่องว่าง และร�
 ใช้ PATH ที่มี Python แต่ไม่มี Codex ตรวจ help/offline preview/alias quoting
 และข้อความ missing-Codex ของ doctor, manual live และ workflow entry points
 ไม่เรียกโมเดลและไม่แก้ `.bashrc` หรือ binary ที่ติดตั้งจริงของผู้ใช้
+
+ตรวจติดตั้งแบบแยกจาก checkout บน WSL2 ด้วย system Python 3.11.2
+โดยวาง `sr` ใน path ภาษาไทยที่มีช่องว่างและเรียกจากโปรเจกต์ว่าง
+ไฟล์ที่ติดตั้งตรงกับต้นฉบับทุกไบต์ เปิด help, plan preview และ session listing
+ได้โดยไม่สร้าง state และ doctor แสดงวิธีแก้เมื่อไม่มี Codex ใน PATH
+รอบนี้เพิ่มหลักฐานสำหรับ Python อีกเวอร์ชันบน WSL2 เดิม

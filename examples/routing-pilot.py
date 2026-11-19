@@ -289,6 +289,9 @@ def comparison_metrics(report):
                                  for transition in turn['modelReroutes']] if isinstance(turns, list) else [],
         'allRecordedWorkTurnsCompletedHere': complete,
         'workTurnSeconds': number(report.get('turnElapsedSeconds')) if complete else None,
+        'timeToAcceptanceSeconds': number(report.get('timeToAcceptanceSeconds'))
+        if complete and report.get('state') == 'DONE' else None,
+        'firstPassRate': report.get('firstPassRate'), 'firstPassSteps': report.get('firstPassSteps'),
         'cliWallSecondsIncludingUserWait': number(report.get('elapsedSeconds'))
         if report.get('elapsedScope') == 'current_cli_session' and report.get('includesUserWait') is True else None,
         'reportedWorkThreadTokens': number(total.get('totalTokens')) if tokens_comparable else None,
@@ -299,7 +302,7 @@ def comparison_metrics(report):
 def compare(baseline_path, routed_path, baseline_row, routed_row):
     baseline = comparison_metrics(read_metrics_row(baseline_path, baseline_row))
     routed = comparison_metrics(read_metrics_row(routed_path, routed_row))
-    fields = ('workTurnSeconds', 'reportedWorkThreadTokens', 'reportedCachedInputTokens')
+    fields = ('workTurnSeconds', 'timeToAcceptanceSeconds', 'reportedWorkThreadTokens', 'reportedCachedInputTokens')
     deltas = {key: round(routed[key] - baseline[key], 3)
               if routed[key] is not None and baseline[key] is not None else None for key in fields}
     print(json.dumps({'baseline': baseline, 'routed': routed, 'routedMinusBaseline': deltas},

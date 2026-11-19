@@ -2,6 +2,7 @@
 """Opt-in live Codex checks: handoff, scratch permissions and session lifecycle."""
 import argparse
 import copy
+from contextlib import closing
 import hashlib
 import io
 import json
@@ -778,23 +779,33 @@ RECHECK_PROBE_KEYS = ('initialToolEvidence', 'durableResume', 'restoredEvidenceG
                       'consentGate', 'nativeRecheck', 'finalCheckpoint', 'sentinelUnchanged')
 
 
-def probe_rechecks(model, timeout):
+RECHECK_STOP_KEYS = ('initialToolEvidence', 'durableResume', 'restoredEvidenceGate',
+                     'consentGate', 'activeRecheckObserved', 'nativeRecheckStopped',
+                     'finalCheckpoint', 'sentinelUnchanged')
+
+
+def probe_rechecks(model, timeout, *, stop=False):
     """At most two synthetic model turns; retain native threads and scratch metadata."""
     directory = Path(tempfile.mkdtemp(prefix='modelmate-recheck-'))
     project = directory / 'project'; project.mkdir(mode=0o700)
     sentinel = project / 'sentinel.txt'; sentinel.write_text('synthetic sentinel\n')
     connection = child = store = None
-    result = dict.fromkeys(RECHECK_PROBE_KEYS, 'unverified')
+    stop_attempted = False
+    result = dict.fromkeys(RECHECK_STOP_KEYS if stop else RECHECK_PROBE_KEYS, 'unverified')
     result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None, scratchRetained=True,
         runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
         verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         scope='At most two synthetic model turns with native command evidence across reconnect. '
               'Not crash/network recovery, scoped thread deletion, all permission paths, '
               'a no-tools boundary, interactive Terminal timing or backend dispatch telemetry.')
+    if stop:
+        result['scope'] = ('At most two synthetic model turns. STOP targets only the retained recheck '
+                           'created by this probe. Native threads and scratch are retained.')
     policy = {role: model for role in ('economy', 'standard', 'strong')}
     catalog = [{'model': model, 'defaultReasoningEffort': 'low',
                 'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}]
-    spec = {'command': 'printf MM-' + secrets.token_hex(16), 'cwd': str(project)}
+    prefix = 'sleep 8 && ' if stop else ''
+    spec = {'command': prefix + 'printf MM-' + secrets.token_hex(16), 'cwd': str(project)}
     raw = json.dumps({'version': 1, 'goal': 'Synthetic durable tool recheck verification',
         'clarifications': [], 'success_criteria': ['Registered synthetic command succeeds'],
         'steps': [{'kind': 'review', 'objective': 'Run the registered verification command once in its exact cwd. '
@@ -866,6 +877,38 @@ def probe_rechecks(model, timeout):
             result['recheckReservations'] = len(operations)
             if operations:result['recheckPhase'] = operations[-1]['phase']
             return result
+        if stop:
+            result['phase'] = 'retained_active_stop'
+            # The work connection still holds the writer lock. Keep the child
+            # transport open until recovery observes a terminal event.
+            with closing(RecheckRecoveryConnection(command, timeout)) as recovery:
+                report = recovery.inspect_recheck(store, sid)
+                result['observedBeforeStop'] = report.get('status') or report['state']
+                if report['state'] != 'active':
+                    if report['state'] == 'terminal':
+                        child.close()
+                        child = None
+                    return result
+                result['activeRecheckObserved'] = 'passed'
+                stop_attempted = True
+                report = recovery.interrupt_recheck(store, sid, report)
+                result['observedAfterStop'] = report.get('status') or report['state']
+                if report['state'] != 'terminal' or report['status'] != 'interrupted':
+                    return result
+                result['nativeRecheckStopped'] = 'passed'
+                child.close()
+                child = None
+                store.record_recheck_recovery(sid, report)
+                saved = store.read(sid)
+                flow = saved['workflow']
+                operations = validate_recheck_ledger(flow['rechecks'], workflow_saved_evidence(flow))
+                reconciled = (flow['steps'] == original['steps'] and saved['thread_id'] == tid
+                              and saved['turn_id'] == work_turn and len(operations) == 1
+                              and operations[0]['status'] == 'interrupted'
+                              and operations[0]['exit_code'] is None)
+                result['finalCheckpoint'] = 'passed' if reconciled else 'failed'
+            result['phase'] = 'finished'
+            return result
         child.host.timeout = timeout
         status = wait_workflow(child, timeout)
         operation = child.operation()
@@ -892,7 +935,8 @@ def probe_rechecks(model, timeout):
             if backend is None:continue
             try:
                 host = backend.host
-                if host is not None and host._binding is not None and host._terminal is None:
+                if (host is not None and host._binding is not None and host._terminal is None
+                        and not (backend is child and stop_attempted)):
                     if backend is child:backend.cancel()
                     else:host({'action': 'cancel', 'task_id': host.controller.task_id})
                     wait_workflow(backend, 5)
@@ -1012,10 +1056,14 @@ def main():
                         help='two synthetic durable workflow turns across reconnect; scratch/thread retained')
     parser.add_argument('--probe-rechecks', metavar='MODEL',
                         help='at most two synthetic native tool turns across reconnect; scratch/threads retained')
+    parser.add_argument('--stop-retained-recheck', action='store_true',
+                        help='explicitly stop only the synthetic recheck created by --probe-rechecks')
     parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
                         help='metadata-only recovery on an isolated copy of a completed --probe-rechecks scratch; no inference')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
+    if args.stop_retained_recheck and not (args.run_live and args.probe_rechecks):
+        parser.error('--stop-retained-recheck requires --run-live and --probe-rechecks')
     if args.probe_recheck_recovery:
         if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
                                 args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks)):
@@ -1038,9 +1086,10 @@ def main():
     connection = None
     try:
         if args.probe_rechecks:
-            result = probe_rechecks(args.probe_rechecks, args.timeout)
+            result = probe_rechecks(args.probe_rechecks, args.timeout, stop=args.stop_retained_recheck)
             print(json.dumps(result, indent=2))
-            return 0 if all(result.get(key) == 'passed' for key in RECHECK_PROBE_KEYS) else 1
+            keys = RECHECK_STOP_KEYS if args.stop_retained_recheck else RECHECK_PROBE_KEYS
+            return 0 if all(result.get(key) == 'passed' for key in keys) else 1
         if args.probe_workflow_resume:
             result = probe_workflow_resume(args.probe_workflow_resume, args.timeout)
             print(json.dumps(result, indent=2))

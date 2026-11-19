@@ -2278,3 +2278,66 @@ was excluded. Runtime SHA-256
 `35b5ab2598f64839e5f034dddbd593626c7877ced4ede3d8147af3f669065b24`
 matched the checkout. See EVALUATION.md for aggregate token and timing
 measurements. Account utilization and reset timestamps are omitted.
+
+### First-pass outcome and acceptance time — MOCK_VERIFIED
+
+Workflow metrics derive first-pass counts from evaluated first attempts.
+Pending, interrupted, and unassessed attempts are tracked as unknown.
+A subsequent successful retry does not erase the original failure.
+Acceptance time is captured on DONE and excludes time spent in the CLI
+after acceptance. Synthetic tests verified pending, failed-then-passed,
+and durable CLI report cases. No new inference was requested.
+
+### Offline quota admission and explicit recovery
+
+The fake App Server exercises exhausted quota and missing admission evidence
+at catalog preview, native workflow connect, and the preflight before dispatch.
+The preview issues only metadata RPCs. Initial connect blocks before thread
+creation. A preflight denial after connect leaves the attempt count at zero.
+In the transient cases a second request while paused sends no turn. After an
+explicit continue and a fresh allowed quota read, the next request sends one
+turn on the existing thread. The test traces cover each RPC and assert the
+thread and attempt counts. These checks exercise controller admission and do
+not measure provider quota behavior.
+
+### Scoped recovery and catalog checks on the current checkout
+
+At source `1565766`, the metadata-only workflow catalog check returned
+`ready` with `included_usage_available`, and found the requested
+`gpt-6.2-sol/low` selection available. The report recorded zero model turns.
+The command was `python3 -B modelmate.py --workflow examples/explain-lists.json
+--role-model standard=gpt-6.2-sol --check-catalog`, using Codex CLI 0.170.0.
+Runtime SHA-256 `35700a79821eb5c9f6faa7cc1159c1d0723ed7ec8c345eed06db307647338a38`.
+
+The recovery CLI suite also checks the race where the turn completes after
+the STOP prompt but before confirmation is processed. The fake App Server
+reports a completed turn on the binding recheck. The CLI records completion
+without sending an interrupt or starting another turn. Saved workflow checks
+and step counters are preserved. This new case is offline evidence. Live
+active STOP remains open.
+
+### Scoped live STOP probe attempts
+
+Codex CLI 0.170.0, runtime SHA-256
+`35700a79821eb5c9f6faa7cc1159c1d0723ed7ec8c345eed06db307647338a38`.
+Two opt-in synthetic runs each reached the retained recheck phase with
+initial tool evidence, resume, stale evidence and consent checks passing.
+The first observation was terminal after closing the source connections
+(verifier SHA-256 `28c87e463f922b8f982506dd156f838a2efccc3ae6e242230a1d9a1d68ed6f5e`).
+The second observed an interrupted terminal status before the recovery STOP,
+with the source connections open and a bounded delay in the command
+(verifier SHA-256 `8fd41db162e3ca09ebcdbe5208419cd6d1f3d8944d9f8a38a603d40b72bd7602`).
+Neither run observed an active binding at that point. This leaves live
+retained STOP unverified. Both sentinels remained unchanged.
+
+### Live recovery CLI on retained interrupted recheck
+
+At source `3b8042e` with Codex CLI 0.170.0, the production
+`--recover-recheck` command was exercised with EOF on the retained synthetic
+scratch from the first STOP probe. Recovery observed a terminal interrupted
+turn for the known binding and returned 0. The checkpoint gained one
+reconcile event with neither an exit code nor a command item. Its original
+attempt count and sentinel were preserved. No model turn was requested.
+The other scratch already held an interrupted finish event, and the same
+CLI returned 0 with nothing unresolved. This verifies reconciliation and
+the already-resolved path, while active STOP remains open.
