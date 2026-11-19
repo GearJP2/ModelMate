@@ -156,3 +156,25 @@ rubric entry. Keep the `สถิติ workflow` line. Check that `attempts` an
 `timedTurns` are both 1 and the turn duration is present. Record whether
 the backend emits token counters and whether any quota windows are comparable.
 An observed delta of zero is valid and cannot establish zero usage.
+
+### Measured de-duplication pair (C3)
+
+Run the baseline first for this pair. From any Bash working directory:
+
+```bash
+PILOT="$HOME/Coding/Hobby/ModelMate/examples/routing-pilot.py"
+PAIR="$(python3 "$PILOT" prepare --case dedupe)" &&
+python3 "$PILOT" run "$PAIR" baseline \
+  --standard gpt-6.2-sol --strong gpt-6.2-astra --execute
+```
+
+Enter `START` and `/next` once. Wait for the letter and CHECKING, then
+`/exit`. Run the same command with `routed` in place of `baseline` from
+the same shell, keeping the same pair path. This case uses Auto for both arms,
+and the launcher enables quota measurement for both. Use
+`python3 "$PILOT" score --case dedupe LETTER` to score each answer. It tests
+five fixed cases using trusted candidate expressions, including ordering and
+duplicates after whitespace normalization. The case compares choices for a
+staged importer defect and does not test patch authorship. Retain the answer
+and summary from each arm. Quota window deltas can remain unchanged at the
+reported resolution.

@@ -20,10 +20,37 @@ CHOICES = {
 }
 CRITERION = 'The chosen loop expression returns the first matching index, including the last element, or -1.'
 
+DEDUPE_CRITERION = 'Return the first occurrence of each distinct nonempty row in original order.'
+DEDUPE_GOAL = 'Choose a stable de-duplication fix for the importer'
+DEDUPE_CHOICES = {
+    'A': lambda rows: sorted(set(rows)),
+    'B': lambda rows: list(rows),
+    'C': lambda rows: list(dict.fromkeys(reversed(rows)))[::-1],
+    'D': lambda rows: list(dict.fromkeys(rows)),
+}
+
+
+def dedupe_plan(role):
+    objective = (
+        'Choose the correct expression and reply with exactly one letter A, B, C or D. '
+        'Use only this prompt. Do not call tools or access files. An importer strips whitespace '
+        'from each input string and drops empty strings before forming cleaned. '
+        'Replace the return expression so the importer keeps the first occurrence of each '
+        'distinct string in the original order. A: sorted(set(cleaned)). B: list(cleaned). '
+        'C: list(dict.fromkeys(reversed(cleaned)))[::-1]. D: list(dict.fromkeys(cleaned)).'
+    )
+    return {'version': 1, 'goal': DEDUPE_GOAL, 'clarifications': [],
+            'success_criteria': [DEDUPE_CRITERION], 'steps': [{
+                'kind': 'implement', 'objective': objective, 'role': role, 'effort': 'low',
+                'risk': 'normal', 'reason': 'A deterministic checker grades the choice after the turn.',
+                'checks': [{'kind': 'rubric', 'criterion': DEDUPE_CRITERION}],
+            }]}
+
 
 def prepare(case):
     scratch = Path(tempfile.mkdtemp(prefix='modelmate-routing-pilot-'))
     runtime = scratch / 'modelmate.py'
+    (scratch / 'case.txt').write_text(case + '\n', encoding='utf-8')
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'modelmate.py', runtime)
     objective = (
         'Choose the repair for this Python function and answer with exactly one letter A, B, C or D. '
@@ -48,6 +75,8 @@ def prepare(case):
                 }]}
         if case == 'economy':
             plan = prepare_economy(project, role)
+        elif case == 'dedupe':
+            plan = dedupe_plan(role)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
@@ -100,8 +129,15 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     runtime = scratch / 'modelmate.py'
     state = scratch / arm / 'state'
     checks = project / 'checks.json'
-    mode = 'ask_to_escalate' if checks.is_file() else 'approve_plan'
-    args = [sys.executable, str(runtime), '--workflow', str(project / 'plan.json'),
+    plan_path = project / 'plan.json'
+    case_file = scratch / 'case.txt'
+    dedupe = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() == 'dedupe'
+    mode = 'approve_plan'
+    if checks.is_file():
+        mode = 'ask_to_escalate'
+    elif dedupe:
+        mode = 'auto'
+    args = [sys.executable, str(runtime), '--workflow', str(plan_path),
             '--workflow-mode', mode, '--role-model', 'standard=' + standard,
             '--role-model', 'strong=' + strong]
     if checks.is_file():
@@ -112,7 +148,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
         args.append('--suggest-models')
     if execute:
         args.append('--execute-workflow')
-    if measure_quota:
+    if measure_quota or (execute and dedupe):
         args.append('--measure-quota')
     print('Runtime SHA-256 ' + hashlib.sha256(runtime.read_bytes()).hexdigest(), flush=True)
     return subprocess.run(args, cwd=project, env=dict(os.environ, XDG_STATE_HOME=str(state))).returncode
@@ -142,11 +178,28 @@ def score(answer):
     return 0 if all(results.values()) else 1
 
 
+def score_dedupe(answer):
+    candidate = DEDUPE_CHOICES.get(answer.strip())
+    if candidate is None:
+        raise ValueError('The answer must be exactly one letter A, B, C or D.')
+    cases = [
+        ('empty', [], []),
+        ('blanks', ['', ' ', '\t'], []),
+        ('first occurrence order', ['z', 'a', 'z'], ['z', 'a']),
+        ('duplicates after normalization', [' b', 'a', 'b ', '', 'a '], ['b', 'a']),
+        ('distinct rows', ['z', 'b', 'a'], ['z', 'b', 'a']),
+    ]
+    results = {name: candidate([row for value in values if (row := value.strip())]) == expected
+               for name, values, expected in cases}
+    print(json.dumps(results, sort_keys=True))
+    return 0 if all(results.values()) else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -157,6 +210,7 @@ def main():
     launch.add_argument('--measure-quota', action='store_true', help='include observed live quota-window changes')
     grade = actions.add_parser('score', help='score the letter from the turn with trusted local cases')
     grade.add_argument('answer')
+    grade.add_argument('--case', choices=('c1', 'dedupe'), default='c1')
     args = parser.parse_args()
     try:
         if args.action == 'prepare':
@@ -164,7 +218,7 @@ def main():
             return 0
         if args.action == 'run':
             return run(args.scratch, args.arm, args.standard, args.strong, args.execute, args.economy, args.measure_quota)
-        return score(args.answer)
+        return score_dedupe(args.answer) if args.case == 'dedupe' else score(args.answer)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
 
