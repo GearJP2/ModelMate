@@ -111,3 +111,13 @@ turns. Record failures as observed without automatically retrying.
 
 This case exercises native test evidence and model switching on a staged
 fixture. It measures neither patch authorship nor attributable quota usage.
+
+### Two-step result
+
+Both arms passed the observed native test and independent review criterion.
+The routed arm used one economy request and one strong request. The baseline
+used two strong requests, with its review dispatched after resuming the same
+session. Both used low effort, two attempts and zero rechecks for the graded
+pair. The result covers routing and approval on this staged fixture. Quota
+savings remain unmeasured. See [VERIFICATION.md](VERIFICATION.md) for the
+earlier incomplete baseline attempts and evidence scope.

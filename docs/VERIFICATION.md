@@ -2001,3 +2001,16 @@ the offline experimental workflow resume preview. Its first-step tool
 evidence is historical on resume. The experiment can still grade that
 observed test outcome and a subsequent review separately, without using a
 new test turn to mark the restored workflow DONE.
+
+Economy pilot paired live result: the baseline resumed its existing checkpoint
+and dispatched only its outstanding review after fresh model approval.
+The baseline's recorded native test passed before resume. Both review
+suggestions independently detected the final-element regression, while the
+three original cases passed with and without that regression. Each graded
+arm used two attempts with zero rechecks. The routed arm requested
+`gpt-6-luna/low` then `gpt-6.2-astra/low`; the baseline requested
+`gpt-6.2-astra/low` twice. Both exited before final rubric entry.
+Earlier incomplete baseline attempts remain separate from the graded pair.
+Model and token telemetry were null. The baseline review ran after a
+reconnect, and its prior test was historical on resume. No inference-time
+or quota comparison is supported by these observations.
