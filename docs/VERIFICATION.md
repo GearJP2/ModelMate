@@ -2329,3 +2329,15 @@ with the source connections open and a bounded delay in the command
 (verifier SHA-256 `8fd41db162e3ca09ebcdbe5208419cd6d1f3d8944d9f8a38a603d40b72bd7602`).
 Neither run observed an active binding at that point. This leaves live
 retained STOP unverified. Both sentinels remained unchanged.
+
+### Live recovery CLI on retained interrupted recheck
+
+At source `3b8042e` with Codex CLI 0.170.0, the production
+`--recover-recheck` command was exercised with EOF on the retained synthetic
+scratch from the first STOP probe. Recovery observed a terminal interrupted
+turn for the known binding and returned 0. The checkpoint gained one
+reconcile event with neither an exit code nor a command item. Its original
+attempt count and sentinel were preserved. No model turn was requested.
+The other scratch already held an interrupted finish event, and the same
+CLI returned 0 with nothing unresolved. This verifies reconciliation and
+the already-resolved path, while active STOP remains open.
