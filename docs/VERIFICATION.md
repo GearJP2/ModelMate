@@ -2226,3 +2226,13 @@ The search now decodes one UTF-8 line at a time. A malformed query can be
 re-entered and malformed confirmation cancels. Synthetic input reproduces
 both a bad paste line followed by a valid Thai query and a valid query line
 followed by invalid confirmation bytes. Neither malformed line is sent.
+
+### Thai Wikipedia search — scoped LIVE_VERIFIED
+
+The user ran the search after the input fixes through `c11c0d4`. The CLI
+trimmed leading whitespace from a public Thai query, previewed the exact
+outbound query and Thai Wikipedia destination, and returned five cited
+sources after explicit confirmation. No model turn is involved in this
+path. This live transcript covers Thai Wikipedia lookup. The English
+endpoint, general-web integration, and cancellation privacy beyond the
+offline tests are outside this live result.
