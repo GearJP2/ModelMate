@@ -184,3 +184,14 @@ with completed native status and zero requested model turns. The source remained
 unchanged and only the owned successful metadata copy was removed. See
 [VERIFICATION.md](VERIFICATION.md) for exact hashes and limits. Active-stop recovery
 and missing-binding discovery remain unverified. Scoped deletion has offline coverage and a live two-root confirmation.
+
+### Opt-in active STOP probe
+
+Run `python3 verify.py --run-live --probe-rechecks MODEL --stop-retained-recheck`
+to exercise the recovery API against the synthetic recheck created in that run.
+The flag explicitly authorizes the probe to interrupt that recheck. The probe
+uses at most two model turns and a registered local command with a fixed
+eight-second delay. It observes the native binding while the child transport
+is still open and requires a confirmed interrupted terminal status before
+recording recovery. The probe retains its scratch directory and native threads.
+Interactive Terminal behavior is covered separately by offline tests.

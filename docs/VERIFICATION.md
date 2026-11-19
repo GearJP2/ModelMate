@@ -2315,3 +2315,17 @@ reports a completed turn on the binding recheck. The CLI records completion
 without sending an interrupt or starting another turn. Saved workflow checks
 and step counters are preserved. This new case is offline evidence. Live
 active STOP remains open.
+
+### Scoped live STOP probe attempts
+
+Codex CLI 0.170.0, runtime SHA-256
+`35700a79821eb5c9f6faa7cc1159c1d0723ed7ec8c345eed06db307647338a38`.
+Two opt-in synthetic runs each reached the retained recheck phase with
+initial tool evidence, resume, stale evidence and consent checks passing.
+The first observation was terminal after closing the source connections
+(verifier SHA-256 `28c87e463f922b8f982506dd156f838a2efccc3ae6e242230a1d9a1d68ed6f5e`).
+The second observed an interrupted terminal status before the recovery STOP,
+with the source connections open and a bounded delay in the command
+(verifier SHA-256 `8fd41db162e3ca09ebcdbe5208419cd6d1f3d8944d9f8a38a603d40b72bd7602`).
+Neither run observed an active binding at that point. This leaves live
+retained STOP unverified. Both sentinels remained unchanged.

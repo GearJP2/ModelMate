@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from modelmate import NativeWorkflowConnection, NativeRecheckConnection, ChatShell, ProbeError, WorkflowController
-from verify import probe_rechecks, RECHECK_PROBE_KEYS, main
+from verify import probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, main
 
 
 SERVER = r'''
@@ -160,6 +160,22 @@ class RecheckProbeTests(unittest.TestCase):
         with patch('sys.argv',['verify.py','--run-live','--probe-rechecks','synthetic']), \
              patch('sys.stdout',new_callable=io.StringIO),patch('verify.probe_rechecks',return_value=partial):
             self.assertEqual(main(),1)
+
+    def test_retained_stop_requires_opt_in_and_observed_active_interruption(self):
+        args = ['verify.py', '--probe-rechecks', 'synthetic', '--stop-retained-recheck']
+        with patch('sys.argv', args), patch('sys.stderr', new_callable=io.StringIO), \
+             patch('verify.probe_rechecks') as probe, self.assertRaises(SystemExit) as error:
+            main()
+        self.assertEqual(error.exception.code, 2)
+        probe.assert_not_called()
+
+        result = dict.fromkeys(RECHECK_STOP_KEYS, 'passed')
+        result['activeRecheckObserved'] = 'unverified'
+        with patch('sys.argv', args + ['--run-live']), \
+             patch('sys.stdout', new_callable=io.StringIO), \
+             patch('verify.probe_rechecks', return_value=result) as probe:
+            self.assertEqual(main(), 1)
+        probe.assert_called_once_with('synthetic', 120, stop=True)
 
 
 if __name__=='__main__':unittest.main()
