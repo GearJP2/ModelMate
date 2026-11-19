@@ -55,6 +55,19 @@ class WorkflowUITests(unittest.TestCase):
         self.assertEqual(actions, [])
         self.assertEqual(c.snapshot()['steps'][0]['attempts'], 0)
 
+    def test_status_summarizes_chat_time_and_counts_without_rendering_full_plan(self):
+        shell, controller, output, actions = self.shell()
+        output.seek(0)
+        output.truncate()
+        shell.line('/status')
+        summary = output.getvalue()
+        self.assertIn('READY · ask_to_escalate · เสร็จ 0/1 ขั้น', summary)
+        self.assertIn('วินาทีรวมเวลารอ · 0 attempts · 0 rechecks', summary)
+        self.assertIn('/next', summary)
+        self.assertNotIn(PLAN['success_criteria'][0], summary)
+        self.assertEqual(actions, [])
+        self.assertEqual(controller.snapshot()['steps'][0]['attempts'], 0)
+
     def test_missing_host_blocks_next_without_consuming_budget(self):
         shell, c, out, _ = self.shell(connected=False)
         shell.line('/next')
@@ -93,6 +106,21 @@ class WorkflowUITests(unittest.TestCase):
         self.assertEqual(len(actions), 2)
         self.assertTrue(shell.active)
         self.assertEqual(c.snapshot()['steps'][0]['attempts'], 1)
+
+    def test_approve_with_next_dispatches_once_for_current_token(self):
+        shell, controller, output, actions = self.shell(self.controller('strong'))
+        shell.line('/next')
+        token = shell.pending['token']
+        self.assertIn('/approve ' + token + ' --next', output.getvalue())
+        shell.line('/approve stale --next')
+        shell.line('/approve ' + token + ' --other')
+        self.assertEqual(controller.state, 'AWAITING_MODEL_APPROVAL')
+        self.assertEqual(controller.snapshot()['steps'][0]['attempts'], 0)
+        shell.line('/approve ' + token + ' --next')
+        self.assertEqual(controller.state, 'RUNNING')
+        shell.line('/approve ' + token + ' --next')
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(controller.snapshot()['steps'][0]['attempts'], 1)
 
     def test_mode_change_expires_old_grants_and_tokens_and_preserves_budget(self):
         shell, c, _, actions = self.shell(self.controller('strong'))

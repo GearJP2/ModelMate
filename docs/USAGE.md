@@ -191,7 +191,7 @@ Recovery รองรับเฉพาะ recheck ที่บันทึก n
 เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/check`, `/mode`
 และคำตอบตาม token เช่น `/approve`, `/decline`, `/continue`, `/revise`, `/pause`
 แสดงแผน โมเดลที่เสนอ ขั้นปัจจุบัน จำนวนรอบ ผลตรวจ และจำนวนหลักฐานของแต่ละเกณฑ์
-การอนุมัติไม่เริ่มงานเอง; `/next` ส่งคำขอไปยัง trusted host ซึ่งต้องตรวจ quota/catalog/model gates
+`/approve TOKEN` บันทึกการอนุมัติ ส่วน `/next` ส่งคำขอไปยัง trusted host เพื่อตรวจ quota/catalog/model gates
 ถ้าไม่มี host จะไม่ใช้ attempt slot หรือส่งงานใด ๆ `/cancel` และ `/exit` ขณะ active
 จะขอหยุดและรอ controller terminal event; ยืนยันไม่ได้ภายใน deadline จะออกโดยระบุ outcome unknown
 UI ไม่รับคำยืนยันผลตรวจจากข้อความโมเดล และไม่ให้ model approval แทน tool approval
@@ -237,6 +237,25 @@ thread/descendants ก่อน `/confirm-delete TOKEN` ยืนยันคร
 หากยืนยัน remote deletion ได้แล้วแต่ลบ metadata ไม่สำเร็จ ให้ `/delete ID` อีกครั้ง
 จะเก็บกวาดเฉพาะ metadata โดยไม่ส่ง remote delete ซ้ำ
 หลังเปิดโปรแกรมใหม่ ใช้ live chat ใหม่แล้ว `/delete ID` จัดการรายการที่ลบค้างได้
+
+สำหรับ manual chat หรือ workflow ที่บันทึกไว้ รันจากโปรเจกต์เดิม:
+
+```bash
+python3 modelmate.py --delete-session SESSION_ID
+```
+
+คำสั่งนี้ใช้ App Server อ่านข้อมูลโดยไม่เปิดแชตหรือเริ่ม model turn
+สำหรับ workflow ที่มี rechecks รายการ preview แสดง work thread, native recheck
+threads ที่ผูกใน ledger และ descendants ของแต่ละ root รวม archived threads
+พิมพ์ `DELETE TOKEN` ตามที่แสดงแล้วกด Enter หรือใช้ `CANCEL` เพื่อยกเลิก
+หากพบ thread ที่ active, ต่างโปรเจกต์, มี session อื่นถือ binding เดียวกัน
+หรือ binding ไม่ครบ ระบบจะพักก่อนลบ สำหรับ recheck ที่กำลังทำงานและมี binding ครบ
+ใช้ `--recover-recheck SESSION_ID` และยืนยัน `STOP` แยกจากการลบ
+
+โปรแกรมบันทึกผลตอบรับแยกแต่ละ root และลบ metadata เมื่อทุก root ได้รับการยืนยัน
+หากขอบเขตเปลี่ยนหลังลบได้บางส่วน ให้ขอ preview ใหม่สำหรับส่วนที่เหลือ
+หากผล RPC ลบ recheck หรือ work root ใน workflow ดังกล่าวไม่ชัดเจน
+ระบบจะเก็บ checkpoint และให้ตรวจสถานะใน Codex ก่อนดำเนินการต่อ
 
 ข้อจำกัด: scan ขอบเขตลบแบบมีเพดาน รวม archived subagents; หากอ่านไม่ครบจะไม่ลบ
 หาก descendant มี ModelMate metadata แยก ต้องลบ descendant นั้นก่อน
@@ -368,6 +387,13 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 
 รอคำตอบและ terminal event ก่อน `/verify` ตรวจคำตอบเองก่อนระบุ `pass`
 `/verify` รับเฉพาะ manual/rubric checks; ค่าที่รับคือ pass/fail/unknown
+เมื่อ Codex ยืนยันว่า turn จบ โปรแกรมบันทึกผล test/lint ที่ตรวจว่าตรงกับคำสั่ง
+และ cwd ที่ลงทะเบียนไว้ลง checkpoint พร้อมสถานะ CHECKING ทันที
+จึงยังเปิดดูหลักฐานเดิมได้หากออกก่อนกด `/check` ส่วนหลักฐานจาก session เดิม
+ยังต้องตรวจใหม่ตามกฎของ resume
+เมื่อหน้าจอขออนุมัติโมเดล ใช้ `/approve TOKEN --next` เพื่ออนุมัติและขอเริ่มขั้น
+ปัจจุบันในคำสั่งเดียว ระบบตรวจโควตาและ catalog ใหม่ก่อนส่ง turn
+ส่วน `/approve TOKEN` เพียงอย่างเดียวจะบันทึกการอนุมัติและรอ `/next`
 หมายเลข check เริ่มที่ 1 ในขั้นปัจจุบัน ใช้ `/check` เพื่อประเมินและไปขั้นถัดไป
 หาก fail จะใช้ correction budget เดิม; unknown/missing ไม่ถือว่าผ่าน
 `1.1` หมายถึงขั้น 1 check 1 ตาม `ref` ที่แสดง ใช้ได้หลัง `/check` ยอมรับขั้นนั้นแล้ว
@@ -375,6 +401,15 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 เลือกเฉพาะหลักฐานที่รองรับเกณฑ์จริง UUID เดิมยังใช้ได้ แต่ไม่ต้องคัดลอกแล้ว
 ไม่อนุญาตให้โมเดลจบงานเอง
 การออกจาก CLI สำเร็จไม่ได้แปลว่างานผ่านเกณฑ์ ต้องดูสถานะ DONE แยกต่างหาก
+
+เพิ่ม `--suggest-models` ตอนเปิดแผนใหม่เพื่อให้ controller เสนอ role และ effort
+จาก risk และ checks ที่ระบุไว้ในแผน โดยไม่เรียกโมเดลเพิ่ม
+ขั้น implement ความเสี่ยงปกติที่ตรวจได้ด้วย test/lint ทุกข้อเริ่มที่ economy/low
+ขั้นความเสี่ยงสูงที่ยังไม่ได้ระบุ strong ใช้ standard/medium
+ขั้นอื่นเริ่มที่ standard/low และตัวเลือก strong ที่ระบุในแผนจะถูกเก็บไว้
+ตรวจ preview เพื่อดูข้อเสนอและเหตุผลก่อนเปิด workflow ผลตรวจจริงเป็นตัวบอกคุณภาพ
+เมื่อเริ่มงาน โปรแกรมตรวจว่า catalog รองรับตัวเลือก และใช้กฎอนุมัติของโหมดที่เลือก
+Approve plan จะแสดง model และ effort ของทุกขั้นก่อนขออนุมัติ
 
 ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
 ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
@@ -392,6 +427,9 @@ The explicit command-check happy path has user-supplied live evidence recorded i
 docs/VERIFICATION.md, including its version limitations. Classifier/auto routing,
 broader permission paths, private-web isolation and broader recovery remain gated.
 
+
+ระหว่างทำงาน `/status` แสดงสถานะ จำนวนขั้นที่เสร็จ จำนวน attempts และ rechecks
+พร้อมเวลาในแชตรวมเวลารอ ใช้ `/workflow` เมื่อต้องการดูแผน เกณฑ์ตรวจ หรือรหัสตอบอนุมัติ
 
 ตอนจบ explicit workflow session จะแสดง `สถิติ workflow` เป็น JSON: elapsedSeconds
 รวมเวลารอผู้ใช้, จำนวน attempts, requestedSelections และ state ส่วน reportedModels
@@ -560,3 +598,100 @@ python3 verify.py --probe-recheck-recovery SCRATCH
 ตัวตรวจจำลอง checkpoint ที่ขาด terminal event ในสำเนาแยก อ่าน native metadata เดิม
 ไม่ขอหยุด ไม่เรียกโมเดล และไม่แก้ต้นฉบับ สำเนาจะถูกลบเฉพาะเมื่อผ่านทั้งหมด
 หากไม่ผ่านจะเก็บสำเนาไว้พร้อมแสดง path; native threads เดิมยังอยู่
+
+### วัด usage ของ workflow
+
+Summary ตอนออกจาก native workflow แสดง `turnElapsedSeconds` สำหรับ turn
+ของ work thread ที่เห็นสถานะสุดท้าย และ `timedTurns` เป็นจำนวน turn ที่วัดได้
+ตัวเลขนี้วัดตั้งแต่ส่งคำขอจน client รับ terminal event รวมเวลาเครื่องมือและการส่งข้อมูล
+ส่วน `elapsedSeconds` เป็นเวลาของ CLI session รวมเวลาที่ผู้ใช้รอหรือกรอกคำสั่ง
+
+`tokenUsage` คือ snapshot ล่าสุดจาก event ที่ตรงกับ work thread และ turn
+ที่ส่งใน CLI session นี้ โดย `total` เป็นยอดสะสมตามที่ Codex รายงานใน thread
+เดิมซึ่งอาจรวมประวัติก่อน resume และ `last` เป็นค่าที่ Codex รายงานล่าสุด
+ตัวเลข cached/reasoning แสดงแยกตามข้อมูลที่ส่งมา โดยไม่บวกซ้ำเข้ายอดรวม
+เวลาของ recheck thread แยกไม่ถูกรวมในเวลาที่วัดของ work thread
+หากไม่มีข้อมูลจาก Codex ค่าที่เกี่ยวข้องจะแสดงเป็น null
+
+เพิ่ม `--measure-quota` คู่กับ `--execute-workflow` เพื่อเก็บ quota ก่อน turn
+แรกและอ่าน metadata อีกครั้งก่อนปิด หากเป็นบัญชีและ bucket เดียวกัน มี
+window duration และ reset เดียวกันที่ยังไม่ถึงเวลา reset โปรแกรมแสดงผลต่างเป็น
+percentage points ใน `quotaWindowChanges` ข้อมูลที่เทียบไม่ได้แสดงเป็น null
+ผลต่างเป็นการเปลี่ยนแปลงระดับบัญชีในช่วงที่สังเกต และอาจรวมการใช้งานจาก client อื่น
+
+### ดูสถานะ native ของ work turn ที่บันทึกไว้
+
+จาก project เดิมและ state directory เดิม ใช้:
+
+```bash
+python3 modelmate.py --inspect-work-turn SESSION_ID
+```
+
+คำสั่งนี้อ่าน checkpoint และถาม Codex เฉพาะสถานะของ work thread และ turn
+ล่าสุดที่ตรงกับ binding ที่บันทึกไว้ โดยไม่เปิด turn และไม่แก้ checkpoint
+ค่า `historicalChecks` นับผลตรวจที่เก็บไว้ใน attempt นั้น
+ผล `terminal` ยืนยันสถานะของ turn เดิม ส่วนผลเทสต์สำหรับไฟล์ปัจจุบันต้องตรวจใหม่
+เมื่อ binding ไม่ครบ ประวัติไม่ตรง หรือ checkpoint ค้างเป็น running โปรแกรมจะรายงาน
+`unverified` และไม่เดาว่า turn เก่าคือ attempt ปัจจุบัน
+
+`workTurnMeasurements` แสดงผลแยกตามขั้น รอบ และ attempt ที่ส่งใน CLI session นี้
+แต่ละรายการมีโมเดลที่ร้องขอ สถานะและเวลาเมื่อเห็น terminal event และ
+`lastReportedTokens` จาก snapshot ล่าสุดที่ตรงกับ turn นั้น ค่านี้เป็นชุด
+`last` ที่ Codex ส่งมา โดยเฉพาะ turn ที่เรียกเครื่องมืออาจมีหลาย model responses
+จึงไม่ใช่ token รวมทั้ง turn หากไม่มีเหตุการณ์ที่ตรงกัน ค่าจะเป็น null
+ผลสรุปยังเก็บ `tokenUsage.total` ของ thread ตามที่ Codex ส่งมาแยกต่างหาก
+
+เพิ่ม `--metrics-jsonl FILE` คู่กับ `--execute-workflow` เพื่อบันทึกสรุปหนึ่ง
+บรรทัดเมื่อจบ CLI session ที่เริ่มแล้ว ใช้ไฟล์เดิมหลายรอบเพื่อสะสมข้อมูลได้
+ไฟล์ใหม่สร้างด้วยสิทธิ์ 0600 ไฟล์เดิมต้องเป็นไฟล์ปกติที่ผู้ใช้เป็นเจ้าของและ
+ไม่เปิดสิทธิ์ให้ผู้อื่น ข้อมูลในไฟล์ประกอบด้วยสถานะ เวลา จำนวน attempts
+โมเดลที่ร้องขอ และ token counters โดยไม่มี prompt, คำตอบ, session ID หรือ
+quota window ของบัญชี ถ้าบันทึกไม่ได้ Terminal ยังแสดงสรุปตามปกติ
+
+หาก Codex ส่งเหตุการณ์เปลี่ยนโมเดลของ work turn โปรแกรมแสดงคู่
+`fromModel` และ `toModel` ใน `workTurnMeasurements[].modelReroutes`
+และรวมไว้ใน JSONL เมื่อเปิดบันทึก ค่า `requestedSelection` ยังแสดงโมเดล
+และ effort ที่ร้องขอ ส่วน `reportedModels` อาจเป็น null เพราะเหตุการณ์
+เปลี่ยนโมเดลเพียงอย่างเดียวไม่บอกโมเดลที่ประมวลผลทุก response
+
+### ตรวจ catalog และโควตาก่อนเริ่ม workflow
+
+```bash
+python3 "$HOME/Coding/Hobby/ModelMate/modelmate.py" \
+  --workflow "$HOME/Coding/Hobby/ModelMate/examples/explain-lists.json" \
+  --role-model standard=gpt-6.2-sol --check-catalog
+```
+
+`--check-catalog` ใช้กับ preview ของแผนใหม่และใช้ร่วมกับ
+`--suggest-models` ได้ โปรแกรมตรวจ ChatGPT login, สถานะโควตา และ
+model/effort ที่ขอสำหรับ baseline และทุกขั้น โดยไม่สร้าง thread หรือเปิด turn
+ผล `ready` หมายถึงผ่านการตรวจ ณ เวลาที่อ่านข้อมูล
+ผล `paused` (exit 2) จะแสดงเหตุผลหรือขั้นที่เลือก model/effort ไม่ได้
+ตอนเริ่มงานจริง ระบบยังอ่านโควตาและ catalog ใหม่อีกครั้ง
+
+### ค้นแหล่งอ้างอิงจาก Wikipedia
+
+```bash
+python3 "$HOME/Coding/Hobby/ModelMate/modelmate.py" --search-wikipedia th
+```
+
+พิมพ์คำค้นเมื่อโปรแกรมถาม จากนั้นตรวจคำค้นและปลายทางบนหน้าจอ
+แล้วพิมพ์ `SEARCH` พร้อมรหัสที่แสดง หรือ `CANCEL` เพื่อยกเลิก
+คำสั่งนี้เปิดแยกจาก workflow ส่งเฉพาะคำค้นที่ยืนยันไปยัง Wikipedia
+และแสดงชื่อ ข้อความตัวอย่าง และลิงก์บทความ ใช้ `en` เพื่อค้น Wikipedia
+ภาษาอังกฤษได้ ข้อความตัวอย่างเป็นข้อมูลจากแหล่งค้นหา ส่วนการใช้เป็นหลักฐาน
+ควรเปิดบทความและตรวจแหล่งที่อ้างในบทความอีกครั้ง
+
+### ค้นเว็บทั่วไปผ่าน SearXNG
+
+```bash
+python3 modelmate.py --search-web https://YOUR-SEARXNG-HOST
+```
+
+แทนปลายทางด้วย HTTPS origin ของ SearXNG ที่คุณดูแลหรือเชื่อถือและเปิด JSON
+search format ไว้ โปรแกรมแสดงปลายทางและคำค้นก่อนยืนยัน ครั้งที่ยืนยันจะส่ง
+คำค้นผ่าน POST ไปยัง `/search` และแสดงผลลัพธ์พร้อมลิงก์ต้นทาง
+SearXNG อาจส่งคำค้นต่อให้เครื่องมือค้นหาที่ instance เปิดใช้
+ModelMate อ่านเฉพาะคำค้นที่คุณป้อนในคำสั่งนี้ และจะไม่เปิดลิงก์ผลลัพธ์เอง
+เมื่อ JSON ถูกปิดหรือเซิร์ฟเวอร์เปลี่ยนปลายทาง การค้นจะหยุดและแจ้งข้อผิดพลาด
+[เอกสาร Search API](https://docs.searxng.org/dev/search_api.html)

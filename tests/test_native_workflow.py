@@ -1,4 +1,5 @@
 """Native protocol integration against a synthetic subprocess, never a live model."""
+import copy
 import io
 import json
 import os
@@ -10,13 +11,15 @@ import tempfile
 import time
 import unittest
 
-from modelmate import NativeWorkflowConnection, WorkflowController, ProbeError, run_chat, ChatShell
+from modelmate import NativeWorkflowConnection, WorkflowController, ProbeError, run_chat, ChatShell, SessionStore
 from test_routing import CATALOG, PLAN, POLICY
 
 SERVER = r'''
-import json,sys
+import json,sys,time
 trace,mode=sys.argv[1:]
+quota_reset=int(time.time())+3600
 turn=0
+quota_reads=0
 catalog=[{'model':'synthetic-'+r,'defaultReasoningEffort':'low',
  'supportedReasoningEfforts':[{'reasoningEffort':'low'}]} for r in ('economy','standard','strong')]
 def emit(value):print(json.dumps(value),flush=True)
@@ -27,9 +30,16 @@ for line in sys.stdin:
  if method is None or 'id' not in req:continue
  if method=='initialize':result={}
  elif method=='account/read':result={'account':{'type':'apiKey' if mode=='api' else 'chatgpt'}}
- elif method=='model/list':result={'data':catalog}
- elif method=='account/rateLimits/read':result={'accountId':'synthetic','ordinaryUsageAllowed':mode!='quota',
-  'rateLimits':{'primary':{'usedPercent':10}}}
+ elif method=='model/list':
+  result={'data':None if mode=='catalog-after-connect' and quota_reads>=3 else catalog}
+ elif method=='account/rateLimits/read':
+  quota_reads+=1
+  result={'accountId':'different' if mode=='account-after-connect' and quota_reads>=3 else 'synthetic',
+   'ordinaryUsageAllowed':mode!='quota' and not (mode=='quota-after-connect' and quota_reads>=3),
+   'rateLimits':{'primary':{'usedPercent':10}}}
+  if mode=='unknown-after-connect' and quota_reads>=3:result.pop('ordinaryUsageAllowed')
+  if mode=='metrics':result['rateLimits']['primary'].update(
+   usedPercent=10+turn,windowDurationMins=300,resetsAt=quota_reset)
  elif method=='thread/start':result={'thread':{'id':'thread','cwd':req['params']['cwd'],
   'ephemeral':req['params'].get('ephemeral',True),'modelProvider':'openai'},'approvalPolicy':'on-request','approvalsReviewer':'user',
   'sandbox':{'type':'workspaceWrite' if mode=='permissions' else 'readOnly'}}
@@ -37,18 +47,30 @@ for line in sys.stdin:
   turn+=1
   if mode=='disconnect':sys.exit(0)
   item={'id':'check','type':'commandExecution','command':'python3 -m unittest','cwd':'/synthetic',
-   'status':'completed','exitCode':1 if mode=='fail' else 0}
+   'status':'completed','exitCode':1 if mode in ('fail','text-only-fail') else 0}
   for event in ('item/started','item/completed'):
    emit({'method':event,'params':{'threadId':'thread','turnId':str(turn),'item':item}})
-  if mode in ('text','text-only'):
+  if mode in ('text','text-only','text-only-fail'):
    emit({'method':'item/agentMessage/delta','params':{'threadId':'thread','turnId':str(turn),
     'itemId':'answer','delta':'SYNTHETIC_ANSWER'}})
    for thread_id,turn_id in (('foreign',str(turn)),('thread','foreign'),('thread',str(turn)),('thread',str(turn))):
     emit({'method':'item/completed','params':{'threadId':thread_id,'turnId':turn_id,
      'item':{'id':'answer','type':'agentMessage','text':'SYNTHETIC_ANSWER all tests passed DONE' if (thread_id,turn_id)==('thread',str(turn)) else 'FOREIGN_ANSWER'}}})
+  if mode=='metrics':
+   event={'method':'model/rerouted','params':{'threadId':'thread','turnId':str(turn),
+    'fromModel':req['params']['model'],'toModel':'synthetic-fallback','reason':'synthetic'}}
+   for observation in (event,event,dict(event,params=dict(event['params'],threadId='foreign',toModel='other')),
+                       dict(event,params=dict(event['params'],turnId='unknown',toModel='other')),
+                       dict(event,params=dict(event['params'],toModel='invalid model'))):
+    emit(observation)
+   total={'inputTokens':9,'cachedInputTokens':3,'outputTokens':2,'reasoningOutputTokens':1,'totalTokens':11}
+   for thread_id, turn_id, value in [('thread',str(turn),total),('other',str(turn),dict(total,totalTokens=99)),
+                                     ('thread','old',dict(total,totalTokens=99))]:
+    emit({'method':'thread/tokenUsage/updated','params':{'threadId':thread_id,'turnId':turn_id,
+     'tokenUsage':{'last':value,'total':{k:n*turn for k,n in value.items()}}}})
   if mode=='approval':emit({'id':'approval','method':'item/commandExecution/requestApproval',
    'params':{'threadId':'thread','turnId':str(turn),'itemId':'tool','command':'write','cwd':'/synthetic'}})
-  elif mode!='text-only':emit({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':str(turn),'status':'completed'}}})
+  elif mode not in ('text-only','text-only-fail'):emit({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':str(turn),'status':'completed'}}})
   result={'turn':{} if mode=='missing-id' else {'id':str(turn)}}
  elif method=='turn/interrupt':result={}
  else:raise RuntimeError(method)
@@ -91,6 +113,68 @@ class NativeWorkflowTests(unittest.TestCase):
         self.assertTrue(start['ephemeral'])
         self.assertEqual(start['config']['web_search'], 'disabled')
 
+    def test_terminal_tool_evidence_survives_exit_before_check(self):
+        project = self.trace.parent
+        backend = self.backend()
+        with SessionStore(project, project / 'state') as store:
+            host = backend.connect(self.controller, project, POLICY, store=store)
+            host.configure_check(0, command='python3 -m unittest', cwd='/synthetic')
+            host({'action': 'next', 'task_id': self.controller.task_id})
+            self.assertEqual(store.read(backend.session_id)['workflow']['active_attempt']['checks'], [])
+            backend.drain()
+            saved = store.read(backend.session_id)['workflow']
+            evidence, = saved['active_attempt']['checks']
+            self.assertEqual((evidence['origin'], evidence['result'], evidence['exit_code']), ('tool', 'pass', 0))
+            self.assertEqual(saved['state'], 'CHECKING')
+            duplicate = {'method': 'turn/completed', 'params': {
+                'threadId': 'thread', 'turn': {'id': '1', 'status': 'completed'}}}
+            self.assertFalse(host.observe_native(duplicate))
+            host({'action': 'cancel', 'task_id': self.controller.task_id})
+            backend.close()
+            after_exit = store.read(backend.session_id)['workflow']
+            self.assertEqual(after_exit['active_attempt']['checks'], [evidence])
+            self.assertEqual(after_exit['step_index'], 0)
+
+    def test_summary_uses_only_matching_native_token_events(self):
+        backend = self.backend('metrics')
+        backend.measure_quota = True
+        self.start(backend)
+        backend.drain()
+        summary = backend.workflow_measurements()
+        self.assertEqual(summary['timedTurns'], 1)
+        self.assertGreaterEqual(summary['turnElapsedSeconds'], 0)
+        self.assertEqual(summary['tokenUsage']['total']['totalTokens'], 11)
+        self.assertEqual(summary['tokenUsage']['last']['cachedInputTokens'], 3)
+        self.assertEqual(summary['tokenUsage']['last']['reasoningOutputTokens'], 1)
+        self.assertEqual(summary['quotaWindowChanges'][0]['deltaPercentagePoints'], 1)
+        turn, = summary['workTurnMeasurements']
+        self.assertEqual((turn['step'], turn['cycle'], turn['attempt'], turn['terminalStatus']), (1, 1, 1, 'completed'))
+        self.assertEqual(turn['requestedSelection'], {'model': POLICY['standard'], 'effort': 'low'})
+        self.assertEqual(turn['lastReportedTokens']['totalTokens'], 11)
+        self.assertEqual(turn['modelReroutes'], [{'fromModel': POLICY['standard'], 'toModel': 'synthetic-fallback'}])
+        self.assertEqual(sum(row.get('method') == 'turn/start' for row in self.records()), 1)
+
+    def test_per_turn_measurements_include_roles_without_summing_last_snapshots(self):
+        plan = copy.deepcopy(PLAN)
+        plan['steps'].append(dict(plan['steps'][0], role='strong'))
+        controller = WorkflowController(json.dumps(plan), CATALOG, POLICY, 'auto')
+        backend = self.backend('metrics')
+        host = backend.connect(controller, '/synthetic', POLICY)
+        for index in range(2):
+            host.configure_check(0, step_index=index, command='python3 -m unittest', cwd='/synthetic')
+        for _ in range(2):
+            host({'action': 'next', 'task_id': controller.task_id})
+            backend.drain()
+            host({'action': 'check', 'task_id': controller.task_id})
+        summary = backend.workflow_measurements()
+        self.assertEqual(summary['timedTurns'], 2)
+        turns = summary['workTurnMeasurements']
+        self.assertEqual([row['step'] for row in turns], [1, 2])
+        self.assertEqual([row['requestedSelection']['model'] for row in turns],
+                         [POLICY['standard'], POLICY['strong']])
+        self.assertEqual([row['lastReportedTokens']['totalTokens'] for row in turns], [11, 11])
+        self.assertEqual(summary['tokenUsage']['total']['totalTokens'], 22)
+
     def test_auth_quota_and_permission_mismatch_start_no_turn(self):
         for mode in ('api','quota','permissions'):
             with self.subTest(mode=mode):
@@ -99,6 +183,28 @@ class NativeWorkflowTests(unittest.TestCase):
                 with self.assertRaises(ProbeError):c.connect(self.controller, '/synthetic', POLICY)
                 self.assertFalse(any(r.get('method')=='turn/start' for r in self.records()))
                 c.close()
+
+    def test_mid_workflow_preflight_preserves_pause_reason_without_consuming_attempt(self):
+        for mode, reason in (
+            ('quota-after-connect', 'quota_exhausted'),
+            ('unknown-after-connect', 'quota_unknown'),
+            ('account-after-connect', 'account_changed'),
+            ('catalog-after-connect', 'catalog_unavailable'),
+        ):
+            with self.subTest(mode=mode):
+                self.trace.unlink(missing_ok=True)
+                controller = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)
+                backend = self.backend(mode)
+                try:
+                    host = backend.connect(controller, '/synthetic', POLICY)
+                    with self.assertRaisesRegex(ProbeError, reason):
+                        host({'action': 'next', 'task_id': controller.task_id})
+                    state = controller.snapshot()
+                    self.assertEqual((state['state'], state['reason']), ('PAUSED', reason))
+                    self.assertEqual(state['steps'][0]['attempts'], 0)
+                    self.assertFalse(any(row.get('method') == 'turn/start' for row in self.records()))
+                finally:
+                    backend.close()
 
     def test_declines_tool_request_and_pauses_without_accept(self):
         c = self.backend('approval'); self.start(c)
@@ -121,6 +227,10 @@ class NativeWorkflowTests(unittest.TestCase):
                 with self.assertRaises(ProbeError):
                     c.host({'action':'next','task_id':self.controller.task_id})
                 self.assertEqual(sum(r.get('method')=='turn/start' for r in self.records()), 1)
+                measured, = c.workflow_measurements()['workTurnMeasurements']
+                self.assertIsNone(measured['terminalStatus'])
+                self.assertIsNone(measured['elapsedSeconds'])
+                self.assertIsNone(measured['lastReportedTokens'])
                 c.close()
 
     def test_direct_dispatch_requires_reservation_and_cannot_repeat_attempt(self):
@@ -253,7 +363,7 @@ finally:backend.close()
         self.assertNotIn('LATE_ANSWER', output.getvalue())
 
     def test_reused_message_id_displays_again_in_next_turn(self):
-        c = self.backend('text-only')
+        c = self.backend('text-only-fail')
         host = c.connect(self.controller, '/synthetic', POLICY)
         host.configure_check(0, command='python3 -m unittest', cwd='/synthetic')
         output = io.StringIO()
@@ -266,9 +376,6 @@ finally:backend.close()
             c.drain()
             self.assertEqual(output.getvalue().count('SYNTHETIC_ANSWER'), number)
             if number == 1:
-                active = self.controller.snapshot()['active_attempt']
-                self.controller.record_check(active['id'], 0, origin='tool', exit_code=1,
-                                             reference='synthetic failure', finding='observed failed result')
                 host({'action':'check','task_id':self.controller.task_id})
 
     def test_queue_is_bounded(self):

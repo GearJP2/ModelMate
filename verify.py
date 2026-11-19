@@ -360,7 +360,7 @@ def probe_sessions(model, timeout):
         connection.session_command('/delete', [])
         proposal = connection.delete_proposal
         if (proposal is None or proposal['record']['id'] != session_id
-                or proposal['tree'] != [{'thread_id': thread_id, 'project': str(project)}]):
+                or proposal['tree'] != [{'thread_id': thread_id, 'project': str(project), 'delete_root': thread_id}]):
             raise ProbeError('Deletion scope is not exactly the harness-created scratch thread.')
         phase = 'delete'
         connection.session_command('/confirm-delete', [proposal['token']])

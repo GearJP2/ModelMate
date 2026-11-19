@@ -92,9 +92,11 @@ class CheckCommandTests(unittest.TestCase):
         def drive(_input,_output,**kwargs):
             host=kwargs['workflow_action'];c=kwargs['workflow'];backend=kwargs['backend']
             host({'action':'next','task_id':c.task_id});backend.drain()
-            self.assertEqual(c.snapshot()['active_attempt']['checks'],{})
+            observed=c.snapshot()['active_attempt']['checks'][0]
+            self.assertEqual(c.snapshot()['steps'][0]['evidence'],[])
             host({'action':'check','task_id':c.task_id})
             evidence=c.snapshot()['steps'][0]['evidence'][0]
+            self.assertEqual(evidence,observed)
             self.assertEqual((evidence['origin'],evidence['result'],evidence['exit_code']),('tool','pass',0))
             c.finish_task({0:[evidence['id']]})
             return 0
@@ -182,7 +184,7 @@ class CheckCommandTests(unittest.TestCase):
             self.assertIsNone(shell._workflow_check_attempt)
             backend.drain()
             self.assertEqual(c.snapshot()['steps'][0]['evidence'],[])
-            self.assertEqual(c.snapshot()['active_attempt']['checks'],{})
+            self.assertEqual(c.snapshot()['active_attempt']['checks'][0]['result'],'pass')
             return 0
         self.run_file(drive=drive)
 

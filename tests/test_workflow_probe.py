@@ -68,7 +68,8 @@ class WorkflowProbeTests(unittest.TestCase):
         original = WorkflowVerificationConnection
         def factory(command, timeout):
             self.assertIn('forced_login_method="chatgpt"', command)
-            return original([sys.executable,'-u','-c',SERVER,str(self.trace),mode], timeout)
+            # Exercise the short turn deadline without racing fake-server process startup.
+            return original([sys.executable,'-u','-c',SERVER,str(self.trace),mode], max(2, timeout))
         with patch('verify.WorkflowVerificationConnection',side_effect=factory), \
              patch('verify.tempfile.mkdtemp',return_value=str(self.scratch)), \
              patch('sys.stderr',new_callable=io.StringIO):

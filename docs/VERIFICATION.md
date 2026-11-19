@@ -1851,3 +1851,430 @@ It does not verify active interruption, missing-binding discovery, crash/network
 recovery, current command evidence or scoped deletion. Recovery is not thereby
 release-ready. Next eligible task: scoped native-thread cleanup with preview and
 explicit confirmation. Documentation-only update; git diff --check passed.
+
+## P12 scoped native cleanup — MOCK_VERIFIED (2026-11-19)
+
+`python3 modelmate.py --delete-session SESSION_ID` previews one local session's
+work root, ledger-bound recheck roots and spawned descendants across both native
+listings. It opens no model turn. The existing chat deletion uses the same scope
+and receipts. Exact confirmation with Enter is required. A fresh snapshot and
+account check precede deletion; known active, foreign or ambiguously bound
+threads block it. Acknowledged roots and any uncertain in-flight root are kept
+in schema-v4 cleanup metadata until cleanup can be finalized. Legacy work-root
+receipts are preserved. Work files are outside the deletion operation.
+
+Targeted `test_recheck_recovery.py` passed 26 tests. Full offline discovery passed
+475 tests, including independent roots, archived descendants, EOF, exact
+confirmation, uncertain partial success, older receipts, and no inference
+requests. All four Python entry points compile and `git diff --check` passed.
+
+Installed Codex CLI `0.170.0` exited before answering a metadata-only
+`initialize` attempt in the agent environment. No native deletion or inference
+was attempted. Scoped deletion and active interruption remain live verification
+gates. For cleanup, use the original successful synthetic recheck scratch in a
+normal authenticated Terminal. Set `XDG_STATE_HOME` to its `state` directory,
+run from its `project` directory, and use `--sessions` to get the local ID before
+running `--delete-session SESSION_ID`. Review the preview before confirming.
+For active interruption, use the existing opt-in `--probe-workflow MODEL`
+verifier and look for `cancel: passed` from an interrupted terminal turn.
+The probe can use up to four subscription turns.
+
+### Active native workflow cancellation — scoped LIVE_VERIFIED (2026-11-19)
+
+User Terminal output for `python3 verify.py --run-live --probe-workflow gpt-6.1-sol`
+at `74dbba8` reported phase `finished` and all six checks passed:
+`answerDisplay`, `contextRecall`, `approvalDenial`, `sentinelUnchanged`,
+`cancel` and `disconnectGuard`. The verifier awards `cancel: passed` only
+after observing an `interrupted` terminal status. Requested selection was
+`gpt-6.1-sol/low`, with `reportedModels: null`.
+
+- Runtime SHA-256: `260abf4f402d21f85ef060dee1caeeab16485d72e822de1c1355b94b5c2fe808`
+- Verifier SHA-256: `0ceabddf14423eff33f2f8e042495c77defa196b0e9ef59672849032fe00e620`
+
+Both hashes match the local source at `74dbba8`. Scope is the synthetic
+ephemeral native workflow, including cancellation and a local disconnect
+guard. Live scoped deletion, retained recheck STOP, interactive Terminal
+timing and network-drop recovery remain open. No additional live request
+was made during this documentation update.
+
+## Workflow selection and preflight follow-up (2026-11-19)
+
+The offline `--suggest-models` preview resolves role and effort from the
+declared risk and checks, using explicit bindings. Auto, Ask to escalate and
+Approve plan use the controller's existing approval gates. Whole-plan approval
+displays the resolved selection for every step. Native startup checks the
+current catalog before creating the thread. Model suitability and quota savings
+are pending evaluation on real tasks.
+
+A synthetic App Server changed quota, account and catalog state after native
+workflow connection. The next attempt paused with the specific reason
+(`quota_exhausted`, `quota_unknown`, `account_changed`, or
+`catalog_unavailable`) and consumed no attempt slot or turn. Existing offline
+cases cover read-only sandbox mismatch and native workflow approval decline.
+The scoped user live approval-denial evidence above still applies to the
+version and path recorded there.
+
+### Scoped native deletion — scoped LIVE_VERIFIED (2026-11-19)
+
+The user ran `--delete-session SESSION_ID` in the original successful synthetic
+recheck scratch. The preview listed exactly two roots in that project, the work
+thread and the independently bound recheck thread. Entering only `DELETE`
+cancelled the first attempt. On a fresh preview, the exact new confirmation
+produced the success message. The runtime reaches that message after it receives
+a native delete acknowledgement for each root and removes local metadata.
+
+A follow-up local `--sessions` check returned no saved session, and the verifier's
+sentinel check passed. The follow-up checkout was `1fa2ce8`. The user transcript
+did not include a runtime checksum or an independent post-delete native listing.
+This evidence covers the successful two-root scope. Active rejection, archived
+descendants and uncertain partial deletion remain offline-tested in this path.
+
+### C1 paired routing pilot — MOCK_VERIFIED (2026-11-19)
+
+The two offline previews resolved their respective standard/low and strong/low
+bindings without creating session state. Five fixed boundary cases distinguish
+the accepted answer from the other three candidates. Synthetic App Server runs
+through the Terminal launcher approved each plan, dispatched exactly one turn
+per arm at the expected requested selection and reached DONE. The offline
+suite passed 479 tests. No subscription turns were requested. The user-run pair
+and its comparison remain pending. See EVALUATION.md for commands and scope.
+
+C1 partial live result: the user-run routed arm requested `gpt-6.2-sol/low`
+once, reached CHECKING, and displayed a response that passed all five cases
+in the local scorer. The user exited before recording the rubric in the
+workflow, so its saved state is PAUSED. The initial baseline session exited
+after approval and before dispatch, with zero attempts. The launcher printed
+runtime SHA-256 `f6446317165ef09446736fbf7598d0ac5cee0b61fb3a98ad204eda55c10b1209`.
+Paired scoring remains pending. Requested model is recorded without reported
+dispatch telemetry or token usage.
+
+C1 baseline follow-up: the user requested `gpt-6.2-astra/low` once, then
+entered `/exit` while RUNNING before an answer appeared. Read-only inspection
+of the local workflow checkpoint found the attempt's terminal status recorded
+as `interrupted`. The task remained paused with no gradeable answer. Keep this
+interruption separate from the earlier zero-attempt exit and from any subsequent
+baseline run. The routed score remains 5/5. The pair has no baseline score yet.
+
+C1 paired live result: the completed baseline run requested
+`gpt-6.2-astra/low`, reached CHECKING and displayed the same answer as the
+completed routed run. The independent scorer passed all five cases for each
+arm. Both completed runs recorded one attempt, zero rechecks, and PAUSED
+after exit before rubric entry. Earlier baseline exits remain recorded
+separately. Both reports used the same runtime SHA-256, which matches the
+checkout. `reportedModels` and `tokenUsage` were null. Recorded wall times
+were 75.337 seconds (routed) and 43.694 seconds (baseline), including user
+wait. The pair provides no attributable inference-time or quota comparison.
+
+### Two-step economy pilot — MOCK_VERIFIED
+
+Both offline previews and both copies of the supplied unittest fixture passed.
+A fake App Server exercised the actual Terminal workflow and recorded
+economy/low then strong/low for the routed arm, and strong/low twice for the
+baseline. Both reached DONE with observed first-step test evidence and
+separate consent for each strong step. The full existing offline suite passed
+479 tests. An agent-side `--doctor` attempt exited before the App Server
+initialized; no live turn was requested. The paired live result remains open.
+
+Economy pilot routed live result: the user requested `gpt-6-luna/low` once
+for the registered native test and recorded a passing tool check via
+`/check`. The review requested `gpt-6.2-astra/low` only after explicit
+model approval and a separate dispatch command. A missing-token approval
+was rejected before that consent. The review's proposed final-index test
+was independently verified against the staged function and a variant that
+skips the final element. The three original cases passed against both.
+Both attempts reached CHECKING. The workflow was paused on exit before
+rubric entry for the second step. Two attempts and zero rechecks were
+reported. Runtime SHA-256 matched the C1 runtime. The economy pilot baseline,
+backend-reported models, and attributable quota observations are still open.
+
+Economy pilot baseline partial result: the user requested one
+`gpt-6.2-astra/low` turn for the registered test. The turn reached CHECKING
+and the displayed answer reported a successful command. The user exited
+before `/check`. Local checkpoint inspection confirmed a completed attempt
+with zero recorded checks and no review attempt. The claim is insufficient
+for the native test criterion. The paired result remains open.
+
+Economy pilot baseline follow-up: the user captured a passing native tool
+check for step one using one `gpt-6.2-astra/low` attempt. Exit occurred
+between the two steps, before the review dispatch. The saved session passed
+the offline experimental workflow resume preview. Its first-step tool
+evidence is historical on resume. The experiment can still grade that
+observed test outcome and a subsequent review separately, without using a
+new test turn to mark the restored workflow DONE.
+
+Economy pilot paired live result: the baseline resumed its existing checkpoint
+and dispatched only its outstanding review after fresh model approval.
+The baseline's recorded native test passed before resume. Both review
+suggestions independently detected the final-element regression, while the
+three original cases passed with and without that regression. Each graded
+arm used two attempts with zero rechecks. The routed arm requested
+`gpt-6-luna/low` then `gpt-6.2-astra/low`; the baseline requested
+`gpt-6.2-astra/low` twice. Both exited before final rubric entry.
+Earlier incomplete baseline attempts remain separate from the graded pair.
+Model and token telemetry were null. The baseline review ran after a
+reconnect, and its prior test was historical on resume. No inference-time
+or quota comparison is supported by these observations.
+
+### Native workflow usage measurements — MOCK_VERIFIED
+
+Generated the App Server JSON schemas with installed Codex CLI 0.170.0.
+The workflow summary reads matching `thread/tokenUsage/updated` snapshots
+and counts observed terminal work turns once. It reports thread totals
+as supplied and does not sum repeated counters or infer a reported model.
+The opt-in quota read compares known windows for the same account. Synthetic
+coverage exercises foreign and incomplete token updates, interrupted and
+duplicate terminal observations, account mismatch, resets, missing windows,
+and a matched pre/post window without an additional turn. The full offline
+suite passed 484 tests. No subscription turns were run and the telemetry
+fields have not been confirmed with a live account.
+
+The telemetry smoke command in EVALUATION.md also passed end-to-end with a fake
+App Server. Its printed summary contained one attempt, one timed terminal turn,
+matching token counters, and the configured comparable quota delta. Local
+`--doctor` for the live account again exited before initialization. No live
+turn was requested by this check.
+
+### One-turn workflow telemetry — scoped LIVE_VERIFIED
+
+The user ran the list/tuple smoke test with `--measure-quota` in a fresh
+scratch project. One requested `gpt-6.2-sol/low` attempt reached CHECKING.
+The summary included one timed terminal turn, a matching work-thread token
+snapshot with complete counters, and comparable primary and secondary quota
+windows. Both windows showed no visible change at the reported resolution.
+The CLI wall time included user wait and was reported separately from observed
+turn time. A second `/next` while CHECKING was rejected without dispatch.
+The user exited before entering the rubric, leaving the workflow paused.
+
+This covers live metric availability on one work turn. `reportedModels`
+remained null and unchanged displayed percentages do not establish zero
+quota use. No account-level percentages, reset timestamps, or session IDs
+are retained in this record.
+
+Measured C3 partial live result: the baseline requested `gpt-6.2-astra/low`
+once and its answer passed all five de-duplication cases. The live summary
+contained token counters, one timed terminal turn, and two comparable quota
+windows. The initial routed session exited before dispatch and reported zero
+attempts and zero timed turns. It provides no paired measurement. Account
+usage values, reset timestamps, and session IDs are omitted.
+
+Measured C3 pair completed on runtime SHA-256
+`92c07e0cff2575b0ee7b972bd7c6ee30026de31b5c4222e24a8cc5e22bc30c2e`,
+matching the local runtime. The two gradeable turns passed the same five
+checks and returned token counters, turn timing and matched quota windows.
+The earlier zero-attempt routed session was excluded. See EVALUATION.md for
+the comparison and its limitations. Account usage values and reset
+timestamps are omitted.
+
+### Workflow tool evidence autosave — MOCK_VERIFIED
+
+A completed, exactly matched native command observation is now committed
+with its terminal work attempt. The CLI can exit before `/check` without
+losing that checkpoint evidence. The saved step still awaits evaluation.
+Tests cover durable evidence through exit, duplicate terminal delivery,
+the separation of observed and accepted evidence, and a queued check cleared
+by cancel even if a completed terminal event arrives afterward. Resume still
+treats saved evidence as historical. No live inference was requested.
+
+The Terminal smoke path also checks `/approve TOKEN --next`, which explicitly
+starts the approved step after fresh preflight. The synthetic CLI reached
+CHECKING with one turn. After exiting before `/check`, offline
+`--show-workflow` displayed the recorded passing test in the paused
+checkpoint. Invalid and reused tokens did not dispatch. The agent-side
+`--doctor` retry exited before initialize. A live user smoke remains open.
+
+Run from the ModelMate checkout with a fresh state directory:
+
+```bash
+(
+  cd "$HOME/Coding/Hobby/ModelMate" &&
+  export XDG_STATE_HOME="$(mktemp -d)" &&
+  python3 modelmate.py --workflow examples/check-model-policy.json \
+    --check-commands examples/check-model-policy.commands.json \
+    --workflow-mode approve_plan --role-model standard=gpt-6.2-sol \
+    --execute-workflow &&
+  SESSION_ID="$(python3 modelmate.py --sessions |
+    awk 'length($1)==32 && $1 ~ /^[0-9a-f]+$/ { id=$1; n++ } END { if(n==1) print id; else exit 1 }')" &&
+  python3 modelmate.py --show-workflow "$SESSION_ID"
+)
+```
+
+Enter START, then `/next`, then the displayed `/approve TOKEN --next` line.
+Wait until CHECKING and then exit without entering `/check`.
+The final offline listing should contain `[pass] test`. Only the
+approved turn uses a subscription turn.
+
+### Tool evidence autosave and approval shortcut — scoped LIVE_VERIFIED
+
+The user ran the one-turn smoke against the checkout containing `fd6c982`.
+`/approve TOKEN --next` dispatched one requested `gpt-6.2-sol/low` turn.
+The matched native test displayed a passing result before any `/check`.
+A follow-up `/next` while CHECKING was rejected. After `/exit`, offline
+`--show-workflow` displayed the passing evidence in the paused checkpoint.
+The workflow had not evaluated that step. The transcript exposed an
+inconsistent offline step label, corrected to CHECKING in the follow-up.
+No runtime checksum was supplied with the user transcript.
+
+The corrected viewer was checked offline on that same live smoke checkpoint.
+It printed the overall PAUSED state, the step's CHECKING state, and the saved
+passing test. The full offline suite passed 487 tests.
+
+### Metadata-only native work-turn inspection — MOCK_VERIFIED
+
+`--inspect-work-turn SESSION_ID` uses a read-only checkpoint and a metadata
+RPC allowlist without interruption, execution, resume or deletion methods.
+It checks account and project identity, the exact latest turn and the
+cached terminal status. It prints counts of historical local checks without
+upgrading their validity. A running checkpoint can retain the previous turn
+ID across a crash gap and is reported unverified without native requests.
+Synthetic tests exercised a latest turn with older history, mismatched turn
+or status, and ambiguous running bindings. A metadata-only live attempt on
+the workflow autosave smoke checkpoint stopped at App Server initialization
+in the agent environment. No model turn was requested.
+
+### Metadata-only native work-turn inspection — scoped LIVE_VERIFIED
+
+The user ran the inspection on the retained autosave smoke checkpoint with
+the runtime containing `ff95059`. The result was `terminal` /
+`completed`, with one historical passing check, zero failed or unknown
+checks, and `modelTurnsRequested: 0`. This confirms read-only inspection of
+that known completed native work turn. The historical count does not
+revalidate the current project files. The transcript did not include a
+runtime checksum.
+
+### Resume checkpoint preservation — MOCK_VERIFIED
+
+Native workflow resume holds the session writer lock, inspects project and
+thread identity, turn history, and returned permissions, then commits the
+restored checkpoint. Rejected resumes preserve the original metadata
+byte for byte. Fake App Server cases cover project, activity, ephemeral
+state, provider, permission weakening, turn identity, malformed status
+and missing history. The existing crash-gap protection continues to clear
+the old turn ID atomically when reserving a new attempt. No native turn
+was requested for this regression.
+
+### Per-turn workflow measurements — MOCK_VERIFIED
+
+The runtime includes one measurement row per dispatched work attempt in the
+current CLI session. Each row records the requested selection and observed
+terminal status and elapsed time. The optional token fields copy the native
+`last` breakdown for the matching turn. They are last-response observations,
+not estimates of full turn usage. The cumulative native thread snapshot is
+still reported separately. A two-step fake server verified distinct model
+selections and independent per-turn rows. Missing bindings and interrupted
+turns preserve unknown fields as appropriate. Targeted checks and the full
+offline suite passed 490 tests. No new live turn was requested.
+
+### Private workflow metrics JSONL — MOCK_VERIFIED
+
+Explicit `--metrics-jsonl FILE` appends one private summary record per
+started CLI session. It does not retain prompts, responses, session
+identifiers, or account quota observations. The Terminal summary is still
+printed. Synthetic checks verify runtime CLI output, permission and
+symlink rejection, repeated append, and rollback after a partial write.
+The report does not make any additional native requests.
+
+### Offline routing comparison
+
+The pilot's `compare` subcommand reads a chosen baseline and routed metrics
+record with no App Server use. Synthetic CLI cases verify exact deltas,
+explicit selection in multi-row logs, and unknown deltas for incomplete
+coverage or a missing latest token event. This tool compares observations
+only. It does not infer quality or account quota savings from the logs.
+
+### Work-turn model reroute observations — MOCK_VERIFIED
+
+The installed App Server 0.170.0 schema exposes `model/rerouted` with thread
+and turn IDs and source and target model IDs. The workflow records each
+unique source/target transition only on its matching work turn and shares
+those observations with the offline metrics comparison. It does not store
+the reroute reason or infer model dispatch for all responses. Synthetic
+tests cover duplicate notifications, foreign threads, unrelated turns,
+and malformed model IDs. No live reroute was requested.
+
+### Metadata-only workflow catalog preflight — MOCK_VERIFIED
+
+`--check-catalog` checks an explicit new plan against ChatGPT login, quota,
+and visible model/effort entries for the baseline and each step. The
+transport uses the metadata-only connection. Offline fake App Server
+cases cover ready, unavailable model, exhausted quota, and API-key login.
+No thread, model turn, or ModelMate session is created. The check reports
+catalog support and account quota as observed; it does not prove dispatch
+or reserve quota.
+
+### Dedicated Wikipedia query privacy — MOCK_VERIFIED
+
+The standalone search takes a query from its own input, previews it with the
+destination, and requires a fresh exact confirmation before one HTTPS request.
+Offline tests cover refusal, EOF, stale input, exact query encoding, redirect
+rejection, untrusted result content and source URLs. Work threads and their
+native search settings are outside this path. An agent-side public lookup
+failed at DNS before reaching Wikipedia. This evidence covers Wikipedia lookup
+only. The broader search requirement remains open.
+
+The release smoke installed only the runtime as an executable in a clean
+scratch directory with spaces on Linux x86_64 under WSL2 (Python 3.12.0).
+Help, explicit offline plan preview, and cancelled search worked without
+creating ModelMate session state. See RELEASE_CHECKLIST.md for remaining
+release gates.
+
+The transport uses the documented MediaWiki search-pages endpoint and
+public page identifiers for links.
+[MediaWiki REST API reference](https://www.mediawiki.org/wiki/API:REST_API/Reference/en#Search_pages)
+
+The user search smoke stopped with UnicodeDecodeError before the query preview.
+The search now decodes one UTF-8 line at a time. A malformed query can be
+re-entered and malformed confirmation cancels. Synthetic input reproduces
+both a bad paste line followed by a valid Thai query and a valid query line
+followed by invalid confirmation bytes. Neither malformed line is sent.
+
+### Thai Wikipedia search — scoped LIVE_VERIFIED
+
+The user ran the search after the input fixes through `c11c0d4`. The CLI
+trimmed leading whitespace from a public Thai query, previewed the exact
+outbound query and Thai Wikipedia destination, and returned five cited
+sources after explicit confirmation. No model turn is involved in this
+path. This live transcript covers Thai Wikipedia lookup. The English
+endpoint, general-web integration, and cancellation privacy beyond the
+offline tests are outside this live result.
+
+### Confirmed general web search through SearXNG — MOCK_VERIFIED
+
+The user supplies a trusted HTTPS SearXNG origin. The same separate query
+confirmation accepts one UTF-8 line and submits only that text and the JSON
+format parameter to the configured instance. Redirects are rejected and
+source links are rendered as data. Tests cover cancellation without
+connection, exact encoding, rejected destinations and invalid result
+schemes. Live testing requires a configured instance that enables JSON.
+The agent's metadata-only catalog preflight still stopped before App Server
+initialization. No subscription turns were requested.
+
+### Metadata-only workflow catalog preflight — scoped LIVE_VERIFIED
+
+The user ran `--check-catalog` with the list/tuple example and reported
+`state: ready`, `quotaReason: included_usage_available`, and
+`modelTurnsRequested: 0`. Both the baseline and the only step found
+`gpt-6.2-sol/low` available in the live catalog. The observation covers the
+ready path at that moment. Admission failures remain covered by synthetic
+tests. The transcript did not include a runtime checksum.
+
+### Synthetic incident-analysis benchmark — MOCK_VERIFIED
+
+The A1 pilot prepares equivalent model inputs and independent scratch state
+for both arms. Offline previews requested distinct models without creating
+sessions. The rubric accepted a grounded structured answer and rejected an
+overstated cause and duplicate keys. No subscription turn was requested.
+
+A1 partial live result: the routed arm requested `gpt-6.2-sol/low` once.
+Its displayed JSON passed all four independent rubric fields. The baseline
+was interrupted before START and had no metrics record. The launcher now
+returns exit 130 for Ctrl+C without printing a traceback. A subprocess
+smoke signal before START confirmed no state directory or model turn.
+
+A1 paired live result: both completed arms reached CHECKING and their
+identical answers passed all four rubric fields. Each had one timed work
+turn. The private JSONL files were read back locally and the comparator
+matched the user's output. The earlier baseline cancelled before START
+was excluded. Runtime SHA-256
+`35b5ab2598f64839e5f034dddbd593626c7877ced4ede3d8147af3f669065b24`
+matched the checkout. See EVALUATION.md for aggregate token and timing
+measurements. Account utilization and reset timestamps are omitted.

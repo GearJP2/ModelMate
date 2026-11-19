@@ -295,7 +295,13 @@ class NativeRecheckTests(unittest.TestCase):
             parent.finish_task({0: [self.evidence['id']]})
             self.assertEqual(parent.state, 'DONE')
             connection.request('turn/interrupt', {'threadId':connection.thread_id, 'turnId':'recheck-turn'})
-            with self.assertRaises(ProbeError):self.wait(connection)
+            # The conflicting event can arrive after the RPC reply; the prior terminal is already present.
+            with self.assertRaises(ProbeError):
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    connection.drain()
+                    for key, _ in connection.selector.select(.02):
+                        connection.read_ready(key.fileobj)
             self.assertEqual(parent.state, 'UNVERIFIED')
             self.assertIn(self.evidence['id'], parent.snapshot()['stale_evidence'])
             self.assertEqual(connection.operation()['status'], 'unknown')

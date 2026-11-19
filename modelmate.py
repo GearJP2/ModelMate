@@ -15,6 +15,12 @@ class ProbeError(Exception):
     pass
 
 
+class WorkflowPreflightPause(ProbeError):
+    def __init__(self, reason):
+        super().__init__('Workflow preflight paused: ' + reason)
+        self.reason = reason
+
+
 class Connection:
     allowed_methods = {"initialize", "account/read", "model/list", "account/rateLimits/read"}
 
@@ -435,6 +441,27 @@ def validate_plan(raw):
     return plan
 
 
+def suggest_workflow_models(plan):
+    """Recommend an initial role and effort from explicit step risk and checks."""
+    plan = copy.deepcopy(plan)
+    for step in plan['steps']:
+        if step['role'] == 'strong':
+            # The author can mark the step where a strong model is needed.
+            continue
+        if step['risk'] == 'high':
+            role, effort = 'standard', 'medium'
+            reason = 'ขั้นนี้มีความเสี่ยงสูง จึงเพิ่ม effort และใช้เกณฑ์ตรวจที่ระบุ'
+        elif step['kind'] == 'implement' and all(check['kind'] in ('test', 'lint') for check in step['checks']):
+            role, effort = 'economy', 'low'
+            reason = 'ขั้นลงมือความเสี่ยงปกติมี test/lint ตรวจผลทุกข้อ จึงเริ่มที่ economy/low'
+        else:
+            role, effort = 'standard', 'low'
+            reason = 'ใช้ standard/low สำหรับการวางแผน การทบทวน หรือขั้นที่ต้องประเมินผลเพิ่มเติม'
+        if (step['role'], step['effort']) != (role, effort):
+            step.update(role=role, effort=effort, reason=reason)
+    return plan
+
+
 def routing_decision(raw, catalog, role_policy=None):
     """Resolve a proposal; ready means ready for approval, never for execution."""
     try:
@@ -521,7 +548,8 @@ class ModelApprovals:
         if self._pending is None:
             self._pending = {'token': uuid.uuid4().hex, 'key': key}
         return dict(display, state='ask', scope=scope, token=self._pending['token'],
-                    plan=plan if scope == 'plan' else None)
+                    plan=plan if scope == 'plan' else None,
+                    selections=route['selections'] if scope == 'plan' else None)
 
     def answer(self, token, choice):
         """Record an explicit UI choice; never accept model output as a choice."""
@@ -875,10 +903,19 @@ class WorkflowController:
             raise ProbeError('Invalid or stale workflow attempt.')
         return self._active
 
-    def finish_attempt(self, attempt_id, status):
+    def finish_attempt(self, attempt_id, status, *, tool_observations=None):
         attempt = self._attempt(attempt_id)
         if attempt['status'] != 'running' or status not in ('completed', 'failed', 'interrupted'):
             raise ProbeError('Invalid attempt terminal event.')
+        if tool_observations:
+            if status != 'completed':
+                raise ProbeError('Tool evidence requires a completed turn.')
+            evidence = {index: self._check_evidence(attempt, index, origin='tool',
+                result='unknown', exit_code=observed['exit_code'],
+                reference='executor command item ' + observed['item_id'],
+                finding='Observed host-bound native command completion; no stdout/stderr retained.')
+                for index, observed in tool_observations.items()}
+            attempt['checks'].update(evidence)
         attempt['status'] = status
         if status == 'completed':
             self.state, self.reason = 'CHECKING', None
@@ -892,22 +929,27 @@ class WorkflowController:
             self.state, self.reason = 'FAILED', 'execution_failed'
         return self._updated()
 
-    def record_check(self, attempt_id, check_index, *, origin, result='unknown', exit_code=None,
-                     reference, finding):
-        """Host adapters supply observed exit codes or verified findings, not parsed model assertions."""
+    def _check_evidence(self, attempt, check_index, *, origin, result, exit_code, reference, finding):
         import uuid
-        attempt = self._attempt(attempt_id)
         checks = self._plan['steps'][self._index]['checks']
-        if (self.state != 'CHECKING' or attempt['status'] != 'completed'
-                or type(check_index) is not int or not 0 <= check_index < len(checks)
+        if (type(check_index) is not int or not 0 <= check_index < len(checks)
                 or check_index in attempt['checks']):
             raise ProbeError('Invalid, duplicate or out-of-phase check.')
         kind = checks[check_index]['kind']
         verified = workflow_check_result(kind, origin, result, exit_code, reference, finding)
-        evidence = {'id': uuid.uuid4().hex, 'step_id': attempt['step_id'], 'attempt_id': attempt_id,
-            'check_index': check_index, 'kind': kind, 'origin': origin, 'result': verified,
-            'exit_code': exit_code, 'reference': reference, 'finding': finding,
-            'timestamp': datetime.now(timezone.utc).isoformat()}
+        return {'id': uuid.uuid4().hex, 'step_id': attempt['step_id'], 'attempt_id': attempt['id'],
+                'check_index': check_index, 'kind': kind, 'origin': origin, 'result': verified,
+                'exit_code': exit_code, 'reference': reference, 'finding': finding,
+                'timestamp': datetime.now(timezone.utc).isoformat()}
+
+    def record_check(self, attempt_id, check_index, *, origin, result='unknown', exit_code=None,
+                     reference, finding):
+        """Host adapters supply observed exit codes or verified findings, not parsed model assertions."""
+        attempt = self._attempt(attempt_id)
+        if self.state != 'CHECKING' or attempt['status'] != 'completed':
+            raise ProbeError('Invalid, duplicate or out-of-phase check.')
+        evidence = self._check_evidence(attempt, check_index, origin=origin, result=result,
+            exit_code=exit_code, reference=reference, finding=finding)
         attempt['checks'][check_index] = evidence
         self._updated()
         return copy.deepcopy(evidence)
@@ -977,7 +1019,9 @@ class WorkflowController:
         return self._updated()
 
     def pause(self, reason='user_pause'):
-        if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'connection_lost', 'unsupported_capability'):
+        if reason not in ('user_pause', 'quota_unknown', 'quota_exhausted', 'quota_stale', 'account_unknown',
+                          'account_changed', 'chatgpt_login_required', 'extra_credit_access', 'catalog_unavailable',
+                          'connection_lost', 'unsupported_capability'):
             raise ProbeError('Invalid pause reason.')
         if self.state in ('DONE', 'FAILED', 'CLARIFYING'):
             raise ProbeError('Cannot pause a terminal or unclarified task.')
@@ -1122,8 +1166,9 @@ class WorkflowHost:
             raise ProbeError('Workflow is not READY; no dispatch attempted.')
         try:
             data = self._fresh()
-        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
-            self.controller.pause('quota_unknown')
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            reason = exc.reason if isinstance(exc, WorkflowPreflightPause) else 'quota_unknown'
+            self.controller.pause(reason)
             self._signal()
             raise
         state = self.controller.snapshot()
@@ -1214,7 +1259,8 @@ class WorkflowHost:
                         raise ProbeError('Conflicting executor terminal events.')
                     return False
                 self._terminal = status
-                self.controller.finish_attempt(self._binding['attempt_id'], status)
+                self.controller.finish_attempt(self._binding['attempt_id'], status,
+                    tool_observations=self._observations if status == 'completed' else None)
                 self._deadline = None
                 if status != 'completed':
                     self._binding = None
@@ -1279,14 +1325,9 @@ class WorkflowHost:
         if (self._binding is None or self._terminal != 'completed' or state['state'] != 'CHECKING'
                 or active is None or active['id'] != self._binding['attempt_id']):
             raise ProbeError('No confirmed completed attempt ready for checks.')
-        for index, observed in sorted(self._observations.items()):
-            if index not in active['checks']:
-                self.controller.record_check(active['id'], index, origin='tool', exit_code=observed['exit_code'],
-                    reference='executor command item ' + observed['item_id'],
-                    finding='Observed host-bound native command completion; no stdout/stderr retained.')
         checks = state['plan']['steps'][state['step_index']]['checks']
         missing = [i + 1 for i, check in enumerate(checks)
-                   if check['kind'] in ('test', 'lint') and i not in self._observations and i not in active['checks']]
+                   if check['kind'] in ('test', 'lint') and i not in active['checks']]
         for number in missing:
             self.controller.record_check(active['id'], number - 1, origin='tool', exit_code=None,
                 reference='No matching native command completion',
@@ -1623,6 +1664,7 @@ class ChatShell:
         self.exit_code = 0
         self.workflow = workflow
         self.workflow_action = workflow_action
+        self.started_at = time.monotonic()
         self._workflow_check_attempt = None
         self.recheck_backend = self.recheck = self.recheck_pending = None
         self.recheck_commands = {}
@@ -1762,14 +1804,30 @@ class ChatShell:
             self.write('Recheck: ' + status + ' · รอบ ' + str(operation['cycle'] + 1)
                        + ' · reservation ' + str(operation['number']) + '/3'
                        + ' · exit code ' + str(code))
+        if state['state'] == 'READY' and self.workflow_action is not None and not self.recheck_active():
+            self.write('ใช้ /next เพื่อเริ่มขั้นปัจจุบัน')
         if state['state'] == 'CHECKING':
             if active is not None:
-                self.write('Backend จบแล้ว; ใช้ /check เพื่อประเมินผล (manual/rubric ต้อง /verify ก่อน)')
+                checks = state['plan']['steps'][state['step_index']]['checks']
+                pending_manual = [str(i + 1) for i, check in enumerate(checks)
+                                  if check['kind'] in ('manual', 'rubric') and i not in active['checks']]
+                if pending_manual:
+                    self.write('ใช้ /verify CHECK_NUMBER pass|fail|unknown สำหรับข้อ '
+                               + ', '.join(pending_manual) + ' แล้วใช้ /check')
+                else:
+                    self.write('Backend จบแล้ว ใช้ /check เพื่อประเมินผลขั้นนี้')
             elif state['step_index'] == len(state['steps']):
                 self.write('ขั้นงานผ่านแล้ว; ยืนยันเกณฑ์ด้วย /finish เช่น /finish 1=1.1 โดยเลือก ref ที่รองรับเกณฑ์จริง')
         if request is not None and self.pending is not None:
-            self.write('โมเดลที่เสนอ: ' + json.dumps(request['selection']) + ' · ' + request['reason'])
+            if request['scope'] == 'plan':
+                self.write('ยืนยันโมเดลและ effort ของทั้งแผน')
+                for index, selection in enumerate(request['selections'], 1):
+                    self.write('  ขั้น ' + str(index) + ' · ' + selection['model'] + '/' + selection['effort'])
+            else:
+                self.write('โมเดลที่เสนอ: ' + json.dumps(request['selection']) + ' · ' + request['reason'])
             self.write('/approve ' + request['token'] + ' · /decline ' + request['token'] + ' · /pause ' + request['token'])
+            if self.workflow_action is not None:
+                self.write('อนุมัติและเริ่มขั้นนี้ในคำสั่งเดียว: /approve ' + request['token'] + ' --next')
         elif self.pending is not None:
             token = self.pending['token']
             self.write('/continue ' + token + ' · /revise ' + token + ' · /pause ' + token)
@@ -1862,6 +1920,27 @@ class ChatShell:
                                                        pending['selection'], self.event)
         self.show_workflow()
 
+    def show_workflow_status(self, state):
+        stats = workflow_statistics(self.workflow, self.started_at)
+        done = sum(step['state'] == 'DONE' for step in state['steps'])
+        reason = ' · ' + state['reason'] if state['reason'] else ''
+        self.write(state['state'] + reason + ' · ' + state['mode']
+                   + ' · เสร็จ ' + str(done) + '/' + str(len(state['steps'])) + ' ขั้น')
+        self.write(f"เวลาในแชต {stats['elapsedSeconds']:.1f} วินาทีรวมเวลารอ"
+                   f" · {stats['attempts']} attempts · {stats['recheckAttempts']} rechecks")
+        if state['active_attempt'] is not None:
+            selection = state['active_attempt']['selection']
+            self.write('โมเดลที่ร้องขอ: ' + selection['model'] + '/' + selection['effort'])
+        operations = self.workflow.recheck_operations()
+        if operations:
+            status = 'unknown' if self.workflow._recheck_fault else operations[-1]['status']
+            self.write('Recheck: ' + status)
+        if self.recheck_active():
+            self.write('ใช้ /cancel เพื่อขอหยุด recheck')
+        elif state['state'] == 'READY' and self.workflow_action is not None:
+            self.write('ใช้ /next เพื่อเริ่มขั้นปัจจุบัน')
+        self.write('ใช้ /workflow เพื่อดูแผน เกณฑ์ตรวจ และตัวเลือกที่รอการตอบ')
+
     def workflow_command(self, cmd, values):
         state = self.show_workflow(render=False)
         try:
@@ -1873,6 +1952,9 @@ class ChatShell:
             if cmd in ('/workflow', '/status'):
                 if values:
                     raise ProbeError('Use /workflow or /status without arguments.')
+                if cmd == '/status':
+                    self.show_workflow_status(state)
+                    return
             elif cmd in ('/next', '/check'):
                 if values:
                     raise ProbeError('Use ' + cmd + ' without arguments.')
@@ -1950,10 +2032,18 @@ class ChatShell:
                 if values:
                     self.workflow.change_mode(values[0])
             else:
-                if len(values) != 1 or self.pending is None or values[0] != self.pending['token']:
+                start_now = cmd == '/approve' and len(values) == 2 and values[1] == '--next'
+                if ((len(values) != 1 and not start_now) or self.pending is None
+                        or values[0] != self.pending['token']):
                     raise ProbeError('Invalid or stale workflow choice token.')
                 if self.pending['kind'] == 'workflow_model' and cmd in ('/approve', '/decline', '/pause'):
+                    if start_now and self.workflow_action is None:
+                        raise ProbeError('Workflow executor is unavailable; no attempt consumed or dispatched.')
                     self.workflow.answer_model(values[0], cmd[1:])
+                    if start_now:
+                        self.workflow_action({'action': 'next', 'task_id': self.workflow.task_id})
+                        if isinstance(self.workflow_action, WorkflowHost):
+                            return
                 elif self.pending['kind'] == 'workflow_pause' and cmd in ('/continue', '/revise', '/pause'):
                     self.workflow.answer_pause(values[0], {'/continue': 'continue', '/revise': 'revise_scope', '/pause': 'pause'}[cmd])
                 else:
@@ -1989,7 +2079,7 @@ class ChatShell:
                            '/confirm-delete TOKEN /acknowledge TOKEN /cancel /exit\n'
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
                 if self.workflow is not None:
-                    self.write('/workflow /next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · approval ไม่สั่งรันงานเอง')
+                    self.write('/workflow /next /approve TOKEN --next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · /approve TOKEN อย่างเดียวจะรอ /next')
                     if self.recheck_backend is not None:
                         self.write('/recheck STEP.CHECK /confirm-recheck TOKEN /recheck-budget STEP.CHECK continue|revise_scope|pause')
             elif cmd == '/status':
@@ -2490,12 +2580,18 @@ class LiveChatConnection(Connection):
                 yield self.store.read(session_id)
 
     def _deletion_tree(self, record):
-        """Bounded snapshots include archived subagents; never infer an empty subtree."""
-        if record['deletion_state'] == 'remote_deleted' or record['thread_id'] is None:
+        """Preview every persisted root and its server-side cascade."""
+        cleanup = self._recheck_cleanup_receipts(record)
+        if record['deletion_state'] == 'remote_deleted' and (
+                'recheck_cleanup' in record or cleanup is None):
             return []
-        root = self.request('thread/read', {'threadId': record['thread_id'], 'includeTurns': False}).get('thread')
-        self._check_thread(root, record['thread_id'])
-        threads = {root['id']: root}
+        cleanup = cleanup or {}
+        if cleanup.get('pending') is not None:
+            raise ProbeError('Previous native deletion is unconfirmed; inspect Codex before proceeding.')
+        roots = set(session_native_roots(record)) - set(cleanup.get('deleted', []))
+        if not roots:
+            return []
+        threads = {}
         for archived in (False, True):
             cursor, seen = None, set()
             for _ in range(100):
@@ -2516,7 +2612,11 @@ class LiveChatConnection(Connection):
                                 or row.get('parentThreadId') not in (None, parent)):
                             raise ProbeError('Cannot resolve spawned ancestry; nothing deleted.')
                         row = dict(row, parentThreadId=parent)
-                    threads[row['id']] = row
+                    tid = row['id']
+                    if tid in threads and any(threads[tid].get(key) != row.get(key)
+                            for key in ('parentThreadId', 'cwd', 'ephemeral', 'modelProvider', 'status')):
+                        raise ProbeError('Conflicting native thread listings; nothing deleted.')
+                    threads[tid] = row
                 cursor = page.get('nextCursor')
                 if cursor is None:
                     break
@@ -2525,23 +2625,84 @@ class LiveChatConnection(Connection):
                 seen.add(cursor)
             else:
                 raise ProbeError('Deletion scope exceeds scan limit; nothing deleted.')
-        selected = {record['thread_id']}
-        while True:
-            more = {tid for tid, row in threads.items() if row.get('parentThreadId') in selected}
-            if more <= selected:
-                break
-            selected.update(more)
+        children = {}
+        for tid, row in threads.items():
+            parent = row.get('parentThreadId')
+            if parent is not None:
+                if not isinstance(parent, str) or not parent:
+                    raise ProbeError('Invalid native thread ancestry; nothing deleted.')
+                children.setdefault(parent, []).append(tid)
         tree = []
-        for tid in sorted(selected):
-            row = threads[tid]
-            if row.get('status', {}).get('type') not in ('idle', 'notLoaded'):
-                raise ProbeError('Deletion scope contains an active or unknown thread.')
-            tree.append({'thread_id': tid, 'project': row.get('cwd')})
+        for root_id in sorted(roots):
+            root = self.request('thread/read', {'threadId': root_id, 'includeTurns': False}).get('thread')
+            self._check_thread(root, root_id)
+            if record.get('workflow', {}).get('rechecks'):
+                history = self.request('thread/turns/list', {'threadId': root_id, 'limit': 1,
+                    'sortDirection': 'desc', 'itemsView': 'summary'}).get('data')
+                if (not isinstance(history, list) or len(history) > 1
+                        or any(not isinstance(turn, dict)
+                               or turn.get('status') not in ('completed', 'failed', 'interrupted')
+                               for turn in history)):
+                    raise ProbeError('Latest native turn is active or unknown; nothing deleted.')
+            selected = {root_id}
+            pending = [root_id]
+            while pending:
+                for child in children.get(pending.pop(), []):
+                    if child in selected:
+                        raise ProbeError('Cyclic native thread ancestry; nothing deleted.')
+                    selected.add(child)
+                    pending.append(child)
+            if selected & roots != {root_id}:
+                raise ProbeError('Native deletion roots overlap; nothing deleted.')
+            for tid in sorted(selected):
+                row = threads.get(tid, root)
+                self._check_thread(row, tid)
+                tree.append({'thread_id': tid, 'project': row['cwd'], 'delete_root': root_id})
+        selected = {row['thread_id'] for row in tree}
         # Other ModelMate records need their own writer locks and deletion receipts.
         for saved in self.store.list_sessions():
-            if saved['id'] != record['id'] and saved['thread_id'] in selected:
-                raise ProbeError('A descendant has separate ModelMate metadata; delete it first.')
+            if saved['id'] != record['id'] and selected.intersection(session_native_roots(saved, strict=False)):
+                raise ProbeError('A thread in scope belongs to another ModelMate session.')
         return tree
+
+    @staticmethod
+    def _recheck_cleanup_receipts(record):
+        if 'recheck_cleanup' in record:
+            return record['recheck_cleanup']
+        if record.get('workflow', {}).get('rechecks'):
+            # Older versions could acknowledge the work root before local removal refused.
+            deleted = [record['thread_id']] if record['deletion_state'] == 'remote_deleted' else []
+            return {'deleted': deleted, 'pending': None}
+        return None
+
+    def _confirm_session_deletion(self, record, tree):
+        if tree:
+            cleanup = self._recheck_cleanup_receipts(record)
+            record.update(deletion_state='requested', state='PAUSED', pause_reason='deletion_pending')
+            if cleanup is not None:
+                record.update(version=4, recheck_cleanup=cleanup)
+            self.store.save(record)
+            roots = {row['delete_root'] for row in tree}
+            # Keep the work thread available until the independent recheck roots are acknowledged.
+            for root in sorted(roots, key=lambda tid: (tid == record['thread_id'], tid)):
+                if cleanup is not None:
+                    self._fresh_account(require_usage=False)
+                    self._check_identity(record)
+                    current = self._deletion_tree(record)
+                    remaining = roots - set(cleanup['deleted'])
+                    if current != [row for row in tree if row['delete_root'] in remaining]:
+                        raise ProbeError('Deletion scope changed; request a new preview.')
+                    cleanup['pending'] = root
+                    self.store.save(record)
+                self.request('thread/delete', {'threadId': root})
+                if cleanup is not None:
+                    receipt = {'deleted': sorted(cleanup['deleted'] + [root]), 'pending': None}
+                    self.store.save(dict(record, recheck_cleanup=receipt))
+                    record['recheck_cleanup'] = cleanup = receipt
+        if record['deletion_state'] != 'remote_deleted' and (tree or 'recheck_cleanup' in record):
+            self.store.save(dict(record, deletion_state='remote_deleted'))
+            record['deletion_state'] = 'remote_deleted'
+        self.store.remove(record['id'])
 
     def session_command(self, command, values):
         import uuid
@@ -2598,13 +2759,7 @@ class LiveChatConnection(Connection):
                 self._check_identity(record)
                 if record != proposal['record'] or self._deletion_tree(record) != proposal['tree']:
                     raise ProbeError('Deletion scope changed; request a new preview.')
-                if record['deletion_state'] != 'remote_deleted' and record['thread_id'] is not None:
-                    record.update(deletion_state='requested', state='PAUSED', pause_reason='deletion_pending')
-                    self.store.save(record)
-                    self.request('thread/delete', {'threadId': record['thread_id']})
-                    record['deletion_state'] = 'remote_deleted'
-                    self.store.save(record)
-                self.store.remove(sid)
+                self._confirm_session_deletion(record, proposal['tree'])
             self.shell.write('ลบ session ตามขอบเขตที่ยืนยันแล้ว: ' + sid)
             if self.record is not None and sid == self.record['id']:
                 self.record = None
@@ -2845,6 +3000,57 @@ class LiveChatConnection(Connection):
 
 
 
+def native_token_snapshot(value):
+    if not isinstance(value, dict):
+        return None
+    fields = ('inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens')
+    result = {}
+    for key in ('total', 'last'):
+        row = value.get(key)
+        if not isinstance(row, dict) or any(type(row.get(k)) is not int or row[k] < 0 for k in fields):
+            return None
+        result[key] = {k: row[k] for k in fields}
+        cache_write = row.get('cacheWriteInputTokens')
+        if type(cache_write) is int and cache_write >= 0:
+            result[key]['cacheWriteInputTokens'] = cache_write
+    return result
+
+
+def quota_windows(quota):
+    buckets = quota.get('rateLimitsByLimitId')
+    if buckets is None:
+        bucket = quota.get('rateLimits')
+        identity = bucket.get('limitId') if isinstance(bucket, dict) else None
+        buckets = {identity or 'default': bucket} if isinstance(identity or 'default', str) else {}
+    windows = {}
+    if not isinstance(buckets, dict):
+        return windows
+    for bucket, data in buckets.items():
+        if not isinstance(bucket, str) or not bucket or not isinstance(data, dict):
+            continue
+        for key in ('primary', 'secondary'):
+            row = data.get(key)
+            if not isinstance(row, dict):
+                continue
+            used, duration, reset = (row.get(k) for k in ('usedPercent', 'windowDurationMins', 'resetsAt'))
+            if (type(used) in (int, float) and 0 <= used <= 100
+                    and type(duration) is int and duration > 0 and type(reset) is int and reset > 0):
+                windows[bucket, key] = (used, duration, reset)
+    return windows
+
+
+def quota_window_changes(before, after, sampled_at):
+    changes = []
+    for (bucket, window), (used, duration, reset) in sorted(before.items()):
+        current = after.get((bucket, window))
+        if current is None or current[1:] != (duration, reset) or reset <= sampled_at or current[0] < used:
+            continue
+        changes.append({'bucket': terminal_text(bucket), 'window': window, 'windowDurationMins': duration,
+                        'resetsAt': reset, 'beforePercent': used, 'afterPercent': current[0],
+                        'deltaPercentagePoints': round(current[0] - used, 6)})
+    return changes or None
+
+
 class NativeWorkflowConnection(Connection):
     """Opt-in transport for an explicit host plan; no classifier or native approval acceptance."""
     allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume', 'thread/turns/list', 'turn/start', 'turn/interrupt'}
@@ -2860,6 +3066,31 @@ class NativeWorkflowConnection(Connection):
         self._displayed = set()
         self.store = self.session_id = self._attachment = self.controller = None
         self._closed = False
+        self.measure_quota = False
+        self._quota_first = self._quota_ready = None
+        self._measured_turn = self._latest_usage = None
+        self._work_turn_measurements = []
+
+    def workflow_measurements(self):
+        changes = None
+        if self._quota_first:
+            try:
+                account = self.request('account/read', {'refreshToken': False}).get('account')
+                if isinstance(account, dict) and account.get('type') == 'chatgpt':
+                    quota = self.request('account/rateLimits/read')
+                    if quota.get('accountId') == self.account_id:
+                        changes = quota_window_changes(self._quota_first, quota_windows(quota), time.time())
+            except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                pass
+        turns = self._work_turn_measurements
+        elapsed = [turn['elapsedSeconds'] for turn in turns if turn['elapsedSeconds'] is not None]
+        return {'tokenUsage': self._latest_usage,
+                'tokenUsageScope': 'last_observed_work_thread_update' if self._latest_usage else None,
+                'quotaWindowChanges': changes,
+                'turnElapsedSeconds': round(sum(elapsed), 3) if elapsed else None,
+                'timedTurns': len(elapsed),
+                'workTurnMeasurements': [dict(turn, elapsedSeconds=round(turn['elapsedSeconds'], 3))
+                    if turn['elapsedSeconds'] is not None else dict(turn) for turn in turns]}
 
     def connect(self, controller, cwd, role_policy=None, *, store=None):
         if self.host is not None or self.thread_id is not None:
@@ -2876,6 +3107,8 @@ class NativeWorkflowConnection(Connection):
         self.role_policy = copy.deepcopy(role_policy)
         self.account_id = controller._account_id
         fresh = self.preflight()
+        if routing_decision(controller._raw, fresh['catalog'], self.role_policy)['state'] != 'ready_for_approval':
+            raise ProbeError('Workflow model or effort is unavailable in the current catalog.')
         if store is not None:
             if store.project != self.cwd:
                 raise ProbeError('Workflow project mismatch.')
@@ -2904,9 +3137,10 @@ class NativeWorkflowConnection(Connection):
         self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
         return self.host
 
-    def _attach(self, controller, fresh):
+    def _attach(self, controller, fresh, *, persist_initial=True):
         attachment = self.store.workflow(self.session_id, fresh['quota'], fresh['checked_at'],
-                                         fresh['catalog'], self.role_policy, controller=controller)
+                                         fresh['catalog'], self.role_policy, controller=controller,
+                                         persist_initial=persist_initial)
         restored = attachment.__enter__()
         self.controller = restored
         self._attachment = attachment
@@ -2922,7 +3156,7 @@ class NativeWorkflowConnection(Connection):
         self.role_policy = copy.deepcopy(role_policy)
         fresh = self.preflight()
         self.store, self.session_id = store, session_id
-        controller = self._attach(None, fresh)
+        controller = self._attach(None, fresh, persist_initial=False)
         if any(op['status'] in ('pending', 'unknown') for op in controller.recheck_operations()):
             raise ProbeError('Unresolved recheck retained; inspect --show-workflow before native recovery. No replay.')
         record = store.read(session_id)
@@ -2950,13 +3184,16 @@ class NativeWorkflowConnection(Connection):
         LiveChatConnection._check_thread(self, result.get('thread'), tid)
         if not native_permissions_confirmed(result):
             raise ProbeError('Resumed workflow permissions were not confirmed.')
-        self.thread_id = tid
-        self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
+        host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
         if latest is not None:
-            self.host._seen.add((tid, latest['id']))
+            host._seen.add((tid, latest['id']))
         if active is not None:
-            self.host.reconcile({'thread_id': tid, 'turn_id': latest['id']}, latest['status'])
-        return self.host
+            host.reconcile({'thread_id': tid, 'turn_id': latest['id']}, latest['status'])
+        if active is None or active['status'] == 'completed':
+            # A previously running attempt was already saved by reconciliation.
+            store.save_workflow(session_id, controller)
+        self.thread_id, self.host = tid, host
+        return host
 
     def open_recheck(self, evidence_id, spec, selection, on_change):
         if (self._closed or self.store is None or self._attachment is None or self.host is None
@@ -2996,20 +3233,26 @@ class NativeWorkflowConnection(Connection):
         checked_at = time.monotonic()
         account = self.request('account/read', {'refreshToken': False}).get('account')
         if not isinstance(account, dict) or account.get('type') != 'chatgpt':
-            raise ProbeError('Workflow requires ChatGPT subscription login.')
+            raise WorkflowPreflightPause('chatgpt_login_required')
         quota = self.request('account/rateLimits/read')
-        catalog = read_models(self)
         decision = quota_decision(quota, checked_at, expected_account=self.account_id)
         if decision['state'] != 'allow':
-            raise ProbeError('Workflow preflight paused: ' + decision['reason'])
+            raise WorkflowPreflightPause(decision['reason'])
+        try:
+            catalog = read_models(self)
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise WorkflowPreflightPause('catalog_unavailable') from exc
         self.account_id = decision['account_id']
+        if self.measure_quota and self._quota_first is None:
+            self._quota_ready = quota_windows(quota)
         if self.host is not None:
             self.host.catalog = copy.deepcopy(catalog)
             self.host.role_policy = copy.deepcopy(self.role_policy)
         return dict(quota=quota, checked_at=checked_at, catalog=catalog, role_policy=self.role_policy)
 
     def dispatch(self, descriptor):
-        active = self.host.controller.snapshot()['active_attempt'] if self.host is not None else None
+        state = self.host.controller.snapshot() if self.host is not None else None
+        active = state['active_attempt'] if state is not None else None
         if (active is None or active['id'] != descriptor.get('attempt_id') or active['status'] != 'running'
                 or descriptor.get('selection') != active['selection']):
             raise ProbeError('No controller-reserved workflow attempt; nothing dispatched.')
@@ -3022,6 +3265,14 @@ class NativeWorkflowConnection(Connection):
         self._displayed.clear()
         verification = [dict(check=index + 1, **spec) for (step_id, index), spec in sorted(self.host._specs.items())
                         if step_id == active['step_id']]
+        observed = {'step': state['step_index'] + 1, 'cycle': active['cycle'] + 1,
+                    'attempt': active['number'], 'requestedSelection': dict(selection),
+                    'terminalStatus': None, 'elapsedSeconds': None, 'lastReportedTokens': None,
+                    'modelReroutes': []}
+        self._work_turn_measurements.append(observed)
+        self._measured_turn = {'id': None, 'started': time.monotonic(), 'observation': observed}
+        if self.measure_quota and self._quota_first is None:
+            self._quota_first = self._quota_ready
         result = self.request('turn/start', {'threadId': self.thread_id, 'model': selection['model'],
             'effort': selection['effort'], 'input': [{'type': 'text', 'text': json.dumps({
                 'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step'],
@@ -3036,7 +3287,36 @@ class NativeWorkflowConnection(Connection):
             record = self.store.read(self.session_id)
             record['turn_id'] = turn['id']
             self.store.save(record)
+        self._measured_turn['id'] = turn['id']
         return {'thread_id': self.thread_id, 'turn_id': turn['id']}
+
+    def _observe_measurement(self, message):
+        current = self._measured_turn
+        params = message.get('params')
+        if (current is None or current['id'] is None or not isinstance(params, dict)
+                or params.get('threadId') != self.thread_id):
+            return
+        observed = current['observation']
+        method = message['method']
+        if method == 'thread/tokenUsage/updated' and params.get('turnId') == current['id']:
+            snapshot = native_token_snapshot(params.get('tokenUsage'))
+            if snapshot is not None:
+                self._latest_usage = snapshot
+                observed['lastReportedTokens'] = snapshot['last']
+        elif method == 'model/rerouted' and params.get('turnId') == current['id']:
+            previous, target = params.get('fromModel'), params.get('toModel')
+            if (previous != target and all(isinstance(model, str) and 0 < len(model) <= 256
+                                          and model.isascii() and model.isprintable() and not any(c.isspace() for c in model)
+                                          for model in (previous, target))):
+                reroute = {'fromModel': previous, 'toModel': target}
+                if reroute not in observed['modelReroutes']:
+                    observed['modelReroutes'].append(reroute)
+        elif method == 'turn/completed' and observed['terminalStatus'] is None:
+            turn = params.get('turn')
+            if (isinstance(turn, dict) and turn.get('id') == current['id']
+                    and turn.get('status') in ('completed', 'failed', 'interrupted')):
+                observed['terminalStatus'] = turn['status']
+                observed['elapsedSeconds'] = time.monotonic() - current['started']
 
     def interrupt(self, binding):
         if binding['thread_id'] != self.thread_id:
@@ -3091,6 +3371,7 @@ class NativeWorkflowConnection(Connection):
                 self.host.observe_native(message)
             else:
                 self.host.observe_native(message)
+                self._observe_measurement(message)
                 self._display_answer(message)
         if self.stdout_closed:
             raise ProbeError('Workflow backend disconnected; no automatic replay.')
@@ -3311,6 +3592,8 @@ class RecheckRecoveryConnection(Connection):
         if session_id not in store._locked_ids:
             raise ProbeError('Recovery requires the session writer lock.')
         record = store.read(session_id)
+        if record['deletion_state'] != 'none':
+            raise ProbeError('Session deletion is pending; recovery is unavailable.')
         operation = unresolved_recheck(record)
         if operation is None:
             return {'state': 'none'}
@@ -3321,24 +3604,30 @@ class RecheckRecoveryConnection(Connection):
         if operation['thread_id'] == record['thread_id']:
             raise ProbeError('Recheck points at the work thread; no native action attempted.')
         self._account(record)
-        thread = self.request('thread/read', {'threadId': operation['thread_id'], 'includeTurns': False}).get('thread')
-        if (not isinstance(thread, dict) or thread.get('id') != operation['thread_id']
-                or thread.get('cwd') != store.project or thread.get('modelProvider') != 'openai'
+        return dict(report, **self.inspect_bound_turn(store.project, operation['thread_id'], operation['turn_id'],
+                                                      single_turn=True))
+
+    def inspect_bound_turn(self, project, thread_id, turn_id, *, single_turn=False):
+        thread = self.request('thread/read', {'threadId': thread_id, 'includeTurns': False}).get('thread')
+        if (not isinstance(thread, dict) or thread.get('id') != thread_id
+                or thread.get('cwd') != project or thread.get('modelProvider') != 'openai'
                 or thread.get('ephemeral') is not False or not isinstance(thread.get('status'), dict)
                 or thread['status'].get('type') not in ('idle', 'notLoaded', 'active')):
             raise ProbeError('Recovery thread identity/project/provider/state is unsafe or unknown.')
-        history = self.request('thread/turns/list', {'threadId': operation['thread_id'], 'limit': 1,
+        history = self.request('thread/turns/list', {'threadId': thread_id, 'limit': 1,
             'sortDirection': 'desc', 'itemsView': 'summary'})
         turns = history.get('data')
-        if (not isinstance(turns, list) or len(turns) != 1 or history.get('nextCursor') is not None
-                or not isinstance(turns[0], dict) or turns[0].get('id') != operation['turn_id']):
-            return dict(report, reason='native_history_mismatch')
+        cursor = history.get('nextCursor')
+        if (not isinstance(turns, list) or len(turns) != 1
+                or (cursor is not None and (single_turn or not isinstance(cursor, str) or not cursor))
+                or not isinstance(turns[0], dict) or turns[0].get('id') != turn_id):
+            return {'state': 'unverified', 'reason': 'native_history_mismatch'}
         status, thread_status = turns[0].get('status'), thread['status']['type']
         if status in ('completed', 'failed', 'interrupted') and thread_status in ('idle', 'notLoaded'):
-            return dict(report, state='terminal', status=status)
+            return {'state': 'terminal', 'status': status}
         if status == 'inProgress' and thread_status == 'active':
-            return dict(report, state='active')
-        return dict(report, reason='native_status_unconfirmed')
+            return {'state': 'active'}
+        return {'state': 'unverified', 'reason': 'native_status_unconfirmed'}
 
     def interrupt_recheck(self, store, session_id, expected, timeout=5):
         if (not isinstance(expected, dict) or expected.get('state') != 'active'
@@ -3371,6 +3660,20 @@ SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'cri
                   'pause_reason', 'summary', 'updated_at'}
 SESSION_V2_FIELDS = SESSION_FIELDS | {'account_hash', 'turn_id', 'deletion_state'}
 SESSION_V3_FIELDS = SESSION_V2_FIELDS | {'workflow'}
+SESSION_V4_FIELDS = SESSION_V3_FIELDS | {'recheck_cleanup'}
+
+
+def session_native_roots(record, *, strict=True):
+    flow = record.get('workflow', {})
+    events = flow.get('rechecks', [])
+    bindings = ({op['thread_id'] for op in validate_recheck_ledger(events, workflow_saved_evidence(flow))}
+                if events else set())
+    root = record['thread_id']
+    if strict and (None in bindings or root in bindings
+                   or root is None and (flow or record.get('pause_reason') == 'thread_start_unknown')):
+        raise ProbeError('Native bindings are incomplete or ambiguous; nothing deleted.')
+    return (bindings | {root}) - {None}
+
 SESSION_STATES = {'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'AWAITING_TOOL_APPROVAL',
                   'RUNNING', 'CHECKING', 'DONE', 'UNVERIFIED', 'PAUSED', 'FAILED'}
 
@@ -3446,9 +3749,9 @@ class SessionStore:
         if not isinstance(record, dict):
             raise ProbeError('Invalid session metadata fields; file not modified.')
         version = record.get('version')
-        if type(version) is not int or version not in (1, 2, 3):
+        if type(version) is not int or version not in (1, 2, 3, 4):
             raise ProbeError('Unsupported session version; file not modified.')
-        if set(record) != {1: SESSION_FIELDS, 2: SESSION_V2_FIELDS, 3: SESSION_V3_FIELDS}[version]:
+        if set(record) != {1: SESSION_FIELDS, 2: SESSION_V2_FIELDS, 3: SESSION_V3_FIELDS, 4: SESSION_V4_FIELDS}[version]:
             raise ProbeError('Invalid session metadata fields; file not modified.')
         if version >= 2:
             import re
@@ -3491,7 +3794,7 @@ class SessionStore:
                 raise ValueError('timezone required')
         except (ValueError, TypeError, AttributeError):
             raise ProbeError('Invalid session timestamp.') from None
-        if version == 3:
+        if version >= 3:
             flow = validate_workflow_checkpoint(record['workflow'])
             plan = validate_plan(flow['plan'])
             step = flow['steps'][flow['step_index']] if flow['step_index'] < len(flow['steps']) else None
@@ -3502,6 +3805,19 @@ class SessionStore:
                 mirror.update(state=flow['state'], pause_reason=flow['reason'] if flow['state'] == 'PAUSED' else None)
             if flow['account_hash'] != record['account_hash'] or any(record[k] != v for k, v in mirror.items()):
                 raise ProbeError('Session metadata disagrees with its workflow checkpoint.')
+        if version == 4:
+            cleanup = record['recheck_cleanup']
+            roots = session_native_roots(record)
+            if (not flow.get('rechecks') or record['deletion_state'] == 'none'
+                    or not isinstance(cleanup, dict) or set(cleanup) != {'deleted', 'pending'}
+                    or not isinstance(cleanup['deleted'], list)
+                    or any(not isinstance(tid, str) or tid not in roots for tid in cleanup['deleted'])
+                    or cleanup['deleted'] != sorted(set(cleanup['deleted']))
+                    or (cleanup['pending'] is not None and (
+                        not isinstance(cleanup['pending'], str)
+                        or cleanup['pending'] not in roots - set(cleanup['deleted'])))
+                    or (record['deletion_state'] == 'remote_deleted' and set(cleanup['deleted']) != roots)):
+                raise ProbeError('Invalid scoped native deletion receipts.')
         return record
 
     def _open_file(self, name, flags):
@@ -3673,11 +3989,14 @@ class SessionStore:
         self.save(record)
 
     @contextmanager
-    def workflow(self, session_id, quota, checked_at, catalog, role_policy=None, *, controller=None):
-        """Hold one writer lock and persist every controller transition before returning to its caller."""
+    def workflow(self, session_id, quota, checked_at, catalog, role_policy=None, *, controller=None,
+                 persist_initial=True):
+        """Hold the writer lock for transitions and optionally defer the initial resume checkpoint."""
         import hashlib
         with self._lock(session_id):
             record = self.read(session_id)
+            if record.get('deletion_state') != 'none':
+                raise ProbeError('Cannot attach a workflow to unbound or deleting metadata.')
             decision = quota_decision(quota, checked_at)
             if decision['state'] != 'allow':
                 raise ProbeError('Workflow attachment paused: ' + decision['reason'])
@@ -3692,7 +4011,8 @@ class SessionStore:
                 raise ProbeError('Workflow is already attached or closed; restore its checkpoint instead.')
             elif controller._account_id is None:
                 controller._account_id = decision['account_id']
-            self.save_workflow(session_id, controller)
+            if persist_initial:
+                self.save_workflow(session_id, controller)
             controller._persist = lambda current: self.save_workflow(session_id, current)
             try:
                 yield controller
@@ -3707,7 +4027,8 @@ class SessionStore:
         if session_id not in self._locked_ids:
             raise ProbeError('Deleting metadata requires the session lock.')
         record = self.read(session_id)
-        if record.get('workflow', {}).get('rechecks'):
+        if (record.get('workflow', {}).get('rechecks')
+                and (record['version'] != 4 or record['deletion_state'] != 'remote_deleted')):
             raise ProbeError('Retained native recheck threads require scoped cleanup; metadata was not removed.')
         os.unlink(name, dir_fd=self._fd)
         os.fsync(self._fd)
@@ -3762,8 +4083,12 @@ def inspect_local_sessions(project, output, session_id=None):
         write('บันทึกเมื่อ: ' + record['updated_at'])
         if checkpoint['reason']:
             write('เหตุผล: ' + checkpoint['reason'])
-        if checkpoint['active_attempt'] is not None:
-            write('มี attempt ค้างใน checkpoint; ผลปัจจุบันยังไม่ทราบ ห้าม replay อัตโนมัติ')
+        active = checkpoint['active_attempt']
+        if active is not None:
+            if active['status'] == 'completed':
+                write('Turn จบตาม checkpoint และยังรอประเมินผลขั้นนี้')
+            else:
+                write('มี attempt ค้างใน checkpoint; ผลปัจจุบันยังไม่ทราบ ห้าม replay อัตโนมัติ')
         if checkpoint.get('rechecks'):
             rechecks = validate_recheck_ledger(checkpoint['rechecks'], workflow_saved_evidence(checkpoint))
             write('Recheck reservations: ' + str(len(rechecks)) + ' · unresolved: '
@@ -3772,9 +4097,11 @@ def inspect_local_sessions(project, output, session_id=None):
                 write('Recheck ' + str(index + 1) + ': ' + operation['status'] + ' · retained native IDs '
                       + json.dumps({'thread': operation['thread_id'], 'turn': operation['turn_id']}, ensure_ascii=True))
         for index, (step, proposal) in enumerate(zip(checkpoint['steps'], plan['steps'])):
-            write(str(index + 1) + '. ' + proposal['objective'] + ' · ' + step['state']
+            step_state = ('CHECKING' if active is not None and active['step_id'] == step['id']
+                          and active['status'] == 'completed' else step['state'])
+            write(str(index + 1) + '. ' + proposal['objective'] + ' · ' + step_state
                   + ' · รอบ ' + str(step['cycle'] + 1) + ' · attempt ' + str(step['attempts']) + '/3')
-            latest = checkpoint['active_attempt']
+            latest = active
             if latest is None or latest['step_id'] != step['id']:
                 latest = next((item for item in reversed(checkpoint['history'])
                                if 'checks' in item and item['step_id'] == step['id']), None)
@@ -3810,6 +4137,40 @@ def workflow_statistics(controller, started_at, *, now=None):
             'elapsedScope': 'current_cli_session', 'requestedSelections': selections,
             'recheckAttempts': len(rechecks),
             'reportedModels': None, 'tokenUsage': None}
+
+
+def append_workflow_metrics(path, stats):
+    """Append a private, quota-free workflow summary without storing session data."""
+    import fcntl
+    import stat
+
+    fields = ('state', 'elapsedSeconds', 'includesUserWait', 'attempts', 'attemptsScope',
+              'elapsedScope', 'requestedSelections', 'recheckAttempts', 'reportedModels',
+              'tokenUsage', 'tokenUsageScope', 'turnElapsedSeconds', 'timedTurns',
+              'workTurnMeasurements')
+    report = {'schemaVersion': 1, **{name: stats.get(name) for name in fields}}
+    line = (json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')) + '\n').encode()
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o077 or info.st_nlink != 1):
+            raise ProbeError('Metrics output requires a private regular file owned by this user.')
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        original_size = os.fstat(fd).st_size
+        try:
+            pending = memoryview(line)
+            while pending:
+                written = os.write(fd, pending)
+                if written <= 0:
+                    raise OSError('Incomplete metrics write.')
+                pending = pending[written:]
+        except OSError:
+            os.ftruncate(fd, original_size)
+            raise
+    finally:
+        os.close(fd)
 
 
 def load_check_commands(path, plan, project):
@@ -3890,7 +4251,7 @@ def read_workflow_confirmation(input_stream, write, *, confirmation='START', can
             continue
         if value.startswith(b'\x1b[200~') and value.endswith(b'\x1b[201~'):
             value = value[6:-6].strip()
-        if value == confirmation.encode('ascii'):
+        if ended and value == confirmation.encode('ascii'):
             return True
         if value and value != cancellation.encode('ascii'):
             details = {'bytes': len(line), 'ascii': line.isascii(),
@@ -3900,12 +4261,59 @@ def read_workflow_confirmation(input_stream, write, *, confirmation='START', can
         return False
 
 
+def check_workflow_account(plan, policy):
+    """Read account policy and catalog for an explicit workflow without creating a thread."""
+    connection = Connection(['codex', 'app-server', '--stdio',
+        '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'], 15)
+    try:
+        connection.request('initialize', {'clientInfo': {'name': 'modelmate_workflow_preflight', 'version': '0.1.0'}})
+        connection.send({'method': 'initialized'})
+        quota = refresh_quota(connection)
+        report = {'state': 'paused', 'quotaReason': quota['reason'], 'modelTurnsRequested': 0}
+        if quota['state'] != 'allow':
+            return report
+        try:
+            catalog = read_models(connection)
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            return dict(report, catalogReason='catalog_unavailable')
+        steps = []
+        baseline = {'model': policy['standard'], 'effort': 'low'}
+        try:
+            select_model(catalog, baseline['model'], baseline['effort'])
+            baseline['available'] = True
+        except ProbeError as exc:
+            baseline.update(available=False, reason=str(exc))
+        for index, step in enumerate(plan['steps'], 1):
+            requested = {'step': index, 'role': step['role'],
+                         'model': policy[step['role']], 'effort': step['effort']}
+            try:
+                select_role(catalog, step['role'], policy, step['effort'])
+                requested['available'] = True
+            except ProbeError as exc:
+                requested.update(available=False, reason=str(exc))
+            steps.append(requested)
+        if time.monotonic() - quota['checked_at'] > 15:
+            report['quotaReason'] = 'quota_stale'
+        elif baseline['available'] and all(step['available'] for step in steps):
+            report['state'] = 'ready'
+        return dict(report, baseline=baseline, steps=steps)
+    finally:
+        connection.close()
+
+
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
-                      experimental_rechecks=False):
+                      experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
+                      check_catalog=False):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     if experimental_rechecks and resume_id is None:
         raise ProbeError('--experimental-rechecks requires --resume-workflow.')
+    if check_catalog and (execute or resume_id is not None):
+        raise ProbeError('--check-catalog requires a new workflow preview without execution.')
+    if metrics_jsonl is not None and not execute:
+        raise ProbeError('--metrics-jsonl requires an executing workflow.')
+    if suggest_models and resume_id is not None:
+        raise ProbeError('--suggest-models requires a new --workflow plan.')
     if resume_id is not None:
         with SessionStore(os.getcwd(), read_only=True) as reader:
             saved = reader.read(resume_id)
@@ -3918,6 +4326,9 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
             raw = source.read(65537).decode('utf-8')
     mode = mode or 'ask_to_escalate'
     plan = validate_plan(raw)
+    if suggest_models and not plan['clarifications']:
+        raw = json.dumps(suggest_workflow_models(plan), ensure_ascii=False)
+        plan = validate_plan(raw)
     commands = load_check_commands(checks_path, plan, os.getcwd())
     policy = {}
     for binding in bindings:
@@ -3947,11 +4358,13 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     for spec in commands:
         preview.write('คำสั่งตรวจ ' + str(spec['step']) + '.' + str(spec['check']) + ': '
                       + json.dumps({'command': spec['command'], 'cwd': spec['cwd']}, ensure_ascii=True))
+    if suggest_models:
+        preview.write('ข้อเสนอจาก risk และ checks ของแต่ละขั้น · คุณภาพยังต้องยืนยันจากผลตรวจ')
     preview.write('โมเดลข้างต้นเป็นค่าที่ร้องขอ; ยังไม่ได้ตรวจ catalog/quota จริง')
     if experimental_rechecks:
         preview.write('Experimental recheck · standard=' + policy['standard'] + '/low · native threads retained')
         preview.write('/recheck แสดงแผน; /confirm-recheck TOKEN ใช้โควตาเพิ่มหนึ่ง verification turn')
-    if not execute:
+    if not execute and not check_catalog:
         preview.write('Preview เท่านั้น ไม่เปิด Codex ไม่ใช้โควตา; --execute-workflow เพื่อเริ่มแบบ opt-in')
         return 0
     required = {(i + 1, j + 1) for i, step in enumerate(plan['steps'])
@@ -3976,6 +4389,10 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         raise ProbeError('Every test/lint check needs an explicit --check-commands binding before execution.')
     if any(step['effort'] == 'ultra' for step in plan['steps']):
         raise ProbeError('Automatic delegation effort is not enabled.')
+    if check_catalog:
+        report = check_workflow_account(plan, policy)
+        preview.write('Workflow preflight · ' + json.dumps(report, ensure_ascii=True))
+        return 0 if report['state'] == 'ready' else 2
     preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · resume ต้องตรวจ native state ใหม่')
     preview.write('ใช้โควตา subscription เมื่อกด /next หรือยืนยัน recheck; พิมพ์ START แล้ว Enter เพื่อยืนยันแผน หรือ CANCEL เพื่อยกเลิก:')
     output.flush()
@@ -3988,6 +4405,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         backend = NativeWorkflowConnection(['codex', 'app-server', '--stdio',
             '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
             '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
+        backend.measure_quota = measure_quota
         if resume_id is None:
             host = backend.connect(controller, os.getcwd(), policy, store=store)
         else:
@@ -4005,14 +4423,64 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
                         workflow_action=host, catalog=snapshot['catalog'], role_policy=policy,
                         recheck_commands=commands if experimental_rechecks else None)
     finally:
+        elapsed_end = time.monotonic()
+        measurements = {}
         try:
             if backend is not None:
-                backend.close()
+                try:
+                    measurements = backend.workflow_measurements()
+                finally:
+                    backend.close()
         finally:
             if store is not None:
                 store.close()
         observed = backend.controller if backend is not None and backend.controller is not None else controller
-        preview.write('สถิติ workflow: ' + json.dumps(workflow_statistics(observed, started_at), ensure_ascii=False))
+        stats = workflow_statistics(observed, started_at, now=elapsed_end)
+        stats.update(measurements)
+        preview.write('สถิติ workflow: ' + json.dumps(stats, ensure_ascii=False))
+        if metrics_jsonl is not None:
+            try:
+                append_workflow_metrics(metrics_jsonl, stats)
+            except (ProbeError, OSError, ValueError, TypeError) as exc:
+                detail = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+                preview.write('บันทึก metrics JSONL ไม่สำเร็จ · ' + detail)
+
+
+def run_work_turn_inspection(session_id, output):
+    """Inspect the saved work binding, without replaying or revalidating its checks."""
+    with SessionStore(os.getcwd(), read_only=True) as store:
+        record = store.read(session_id)
+        flow = record.get('workflow')
+        if flow is None or record['deletion_state'] != 'none':
+            raise ProbeError('Inspection requires a saved workflow without pending deletion.')
+        latest = flow['active_attempt']
+        if latest is None:
+            latest = next((event for event in reversed(flow['history']) if 'checks' in event), None)
+        if not record['thread_id'] or not record['turn_id'] or latest is None:
+            report = {'state': 'unverified', 'reason': 'missing_native_binding'}
+        elif latest['status'] == 'running':
+            # A crash before turn/start replies can leave the previous turn ID in the checkpoint.
+            report = {'state': 'unverified', 'reason': 'unconfirmed_attempt_binding'}
+        else:
+            connection = RecheckRecoveryConnection(['codex', 'app-server', '--stdio',
+                '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
+            try:
+                connection.allowed_methods = connection.allowed_methods - {'turn/interrupt'}
+                connection._account(record)
+                report = connection.inspect_bound_turn(store.project, record['thread_id'], record['turn_id'])
+                if report['state'] == 'terminal' and report['status'] != latest['status']:
+                    report = {'state': 'unverified', 'reason': 'native_status_mismatch'}
+                if store.read(session_id) != record:
+                    raise ProbeError('Workflow checkpoint changed during inspection; run it again.')
+            finally:
+                connection.close()
+        counts = dict.fromkeys(('pass', 'fail', 'unknown'), 0)
+        if latest is not None:
+            for check in latest['checks']:
+                counts[check['result']] += 1
+        output.write(json.dumps(dict(report, historicalChecks=counts, modelTurnsRequested=0),
+                                ensure_ascii=True) + '\n')
+        return 0 if report['state'] == 'terminal' else 2
 
 
 def run_recheck_recovery(session_id, input_stream, output):
@@ -4049,19 +4517,235 @@ def run_recheck_recovery(session_id, input_stream, output):
             connection.close()
 
 
+def run_session_cleanup(session_id, input_stream, output):
+    """Preview and delete one account-bound session without opening a chat."""
+    import uuid
+
+    def write(text):
+        output.write(terminal_text(text) + '\n')
+        output.flush()
+
+    project = os.getcwd()
+    with SessionStore(project, read_only=True) as reader:
+        reader.read(session_id)
+    with SessionStore(project) as store, store._lock(session_id):
+        record = store.read(session_id)
+        backend = LiveChatConnection(['codex', 'app-server', '--stdio',
+            '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
+        try:
+            backend.allowed_methods = {'initialize', 'account/read', 'account/rateLimits/read',
+                                       'thread/read', 'thread/turns/list', 'thread/list', 'thread/delete'}
+            backend.store, backend.cwd = store, store.project
+            backend.request('initialize', {'clientInfo': {'name': 'modelmate_session_cleanup', 'version': '0.1.0'}})
+            backend.send({'method': 'initialized'})
+            backend._fresh_account(require_usage=False)
+            backend._check_identity(record)
+            tree = backend._deletion_tree(record)
+            write(json.dumps({'delete_session': session_id, 'title': record['title'],
+                              'threads_including_descendants': tree,
+                              'work_files_deleted': False}, ensure_ascii=True))
+            token = 'DELETE ' + uuid.uuid4().hex
+            write('พิมพ์ ' + token + ' แล้ว Enter เพื่อยืนยันการลบ หรือ CANCEL เพื่อยกเลิก')
+            if not read_workflow_confirmation(input_stream, write, confirmation=token):
+                write('ยกเลิกการลบ session')
+                return 2
+            backend._fresh_account(require_usage=False)
+            backend._check_identity(record)
+            if record != store.read(session_id) or tree != backend._deletion_tree(record):
+                raise ProbeError('Deletion scope changed; request a new preview.')
+            backend._confirm_session_deletion(record, tree)
+            write('ลบ session ตามขอบเขตที่ยืนยันแล้ว: ' + session_id)
+            return 0
+        finally:
+            backend.close()
+
+
+def read_search_json(host, path, method, body=None, *, source):
+    import http.client
+
+    headers = {'Accept': 'application/json', 'User-Agent': 'ModelMate/0.1 (https://github.com/GearJP2/ModelMate)'}
+    if body is not None:
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    connection = http.client.HTTPSConnection(host, timeout=8)
+    try:
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ProbeError(source + ' search returned HTTP ' + str(response.status) + '.')
+        data = response.read(262145)
+        if len(data) > 262144:
+            raise ProbeError(source + ' search response exceeded its size limit.')
+        try:
+            payload = json.loads(data)
+        except (ValueError, RecursionError) as exc:
+            raise ProbeError('Invalid ' + source + ' search response.') from exc
+        if not isinstance(payload, dict):
+            raise ProbeError('Invalid ' + source + ' search response.')
+        return payload
+    except (OSError, http.client.HTTPException) as exc:
+        raise ProbeError(source + ' search connection failed (' + diagnostic_code(exc) + ').') from None
+    finally:
+        connection.close()
+
+
+def search_text(value, limit):
+    import html
+    import re
+    plain = html.unescape(re.sub(r'<[^<>]{0,128}>', '', value))
+    return terminal_text(' '.join(plain.split()))[:limit]
+
+
+def search_wikipedia(query, language):
+    """Fetch source candidates with only the explicitly supplied query."""
+    from urllib.parse import urlencode
+
+    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
+    path = '/w/rest.php/v1/search/page?' + urlencode({'q': query, 'limit': 5})
+    pages = read_search_json(host, path, 'GET', source='Wikipedia').get('pages')
+    if not isinstance(pages, list) or len(pages) > 5:
+        raise ProbeError('Invalid Wikipedia search results.')
+    results = []
+    for page in pages:
+        if not isinstance(page, dict):
+            raise ProbeError('Invalid Wikipedia search result.')
+        identifier, title, excerpt = (page.get(key) for key in ('id', 'title', 'excerpt'))
+        if (type(identifier) is not int or not 0 < identifier < 2 ** 63
+                or not isinstance(title, str) or not title.strip() or not isinstance(excerpt, str)):
+            raise ProbeError('Invalid Wikipedia source metadata.')
+        results.append({'title': search_text(title, 300), 'excerpt': search_text(excerpt, 600),
+                        'url': 'https://' + host + '/?curid=' + str(identifier)})
+    return results
+
+
+def searxng_host(origin):
+    import re
+    from urllib.parse import urlsplit
+
+    try:
+        url = urlsplit(origin)
+        if (url.scheme == 'https' and url.path in ('', '/') and not url.query and not url.fragment
+                and re.fullmatch(r'[A-Za-z0-9.-]+(?::[0-9]+)?', url.netloc)
+                and url.port != 0):
+            return url.netloc
+    except ValueError:
+        pass
+    raise ProbeError('Provide the HTTPS origin of a trusted SearXNG instance, without credentials or a path.')
+
+
+def search_searxng(query, host):
+    from urllib.parse import urlencode, urlsplit
+
+    body = urlencode({'q': query, 'format': 'json'}).encode('ascii')
+    rows = read_search_json(host, '/search', 'POST', body, source='SearXNG').get('results')
+    if not isinstance(rows, list):
+        raise ProbeError('Invalid SearXNG search results. Check that JSON output is enabled.')
+    results = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        url, title, content = (row.get(key) for key in ('url', 'title', 'content'))
+        if (not isinstance(url, str) or len(url) > 4096 or not isinstance(title, str) or not title.strip()
+                or terminal_text(url) != url or any(c.isspace() for c in url)):
+            continue
+        try:
+            link = urlsplit(url)
+            if link.scheme not in ('http', 'https') or not link.hostname or link.username is not None:
+                continue
+        except ValueError:
+            continue
+        results.append({'title': search_text(title, 300),
+                        'excerpt': search_text(content, 600) if isinstance(content, str) else '',
+                        'url': url})
+        if len(results) == 5:
+            break
+    return results
+
+
+def run_wikipedia_search(input_stream, output, language):
+    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
+    return run_confirmed_search(input_stream, output, host, 'Wikipedia',
+                                lambda query: search_wikipedia(query, language))
+
+
+def run_confirmed_search(input_stream, output, host, source, search):
+    import secrets
+    import unicodedata
+
+    def write(message):
+        output.write(message + '\n')
+        output.flush()
+
+    def read_line(limit):
+        # Decode only the current line, even when a terminal paste contains later invalid bytes.
+        binary = getattr(input_stream, 'buffer', None)
+        if binary is not None:
+            return binary.readline(limit * 4).decode('utf-8')
+        return input_stream.readline(limit)
+
+    write('พิมพ์คำค้น ' + source + ' หนึ่งบรรทัด แล้วกด Enter')
+    while True:
+        try:
+            line = read_line(1026)
+            break
+        except UnicodeDecodeError as exc:
+            if not exc.object.endswith(b'\n'):
+                raise ProbeError('คำค้นอ่านเป็น UTF-8 ไม่ได้ กรุณาเปิดคำสั่งค้นใหม่') from None
+            write('คำค้นอ่านเป็น UTF-8 ไม่ได้ กรุณาพิมพ์คำค้นใหม่แล้วกด Enter')
+    if not line.endswith('\n'):
+        raise ProbeError('Search requires a complete query line of up to 1024 characters.')
+    query = line.strip()
+    if (not query or len(query) > 1024 or any(unicodedata.category(c).startswith('C') for c in query)):
+        raise ProbeError('Invalid search query.')
+    token = 'SEARCH ' + secrets.token_hex(4)
+    write('คำค้นที่จะส่งไปยัง ' + host + ' · ' + json.dumps(query, ensure_ascii=False))
+    if source == 'SearXNG':
+        write('SearXNG อาจส่งคำค้นนี้ต่อให้เครื่องมือค้นหาที่ instance เปิดใช้')
+    write('พิมพ์ ' + token + ' แล้ว Enter เพื่อส่งคำค้น หรือ CANCEL เพื่อยกเลิก')
+    try:
+        confirmation = read_line(128)
+    except UnicodeDecodeError:
+        write('ยกเลิกการค้น เพราะรหัสยืนยันอ่านเป็น UTF-8 ไม่ได้')
+        return 2
+    if not confirmation.endswith('\n') or confirmation.strip(' \t\r\n') != token:
+        write('ยกเลิกการค้น')
+        return 2
+    results = search(query)
+    if not results:
+        write('ไม่พบผลจาก ' + source)
+    for index, result in enumerate(results, 1):
+        write(str(index) + '. ' + result['title'] + '\n   ' + result['excerpt'] + '\n   ' + result['url'])
+    return 0
+
+
 def main():
     import argparse
     import sys
     parser = argparse.ArgumentParser(description='ModelMate Terminal chat: offline by default; --live uses ChatGPT subscription quota.')
     parser.add_argument('prompt', nargs='?', help='initial task text')
     modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--delete-session', metavar='SESSION_ID',
+                       help='preview and confirm scoped native thread and metadata deletion; no model turns')
+    modes.add_argument('--search-web', metavar='HTTPS_ORIGIN',
+                       help='search a configured SearXNG instance with a separately confirmed query')
+    modes.add_argument('--search-wikipedia', choices=('en', 'th'), metavar='{en,th}',
+                       help='search Wikipedia with a separately entered and confirmed query; no model turns')
+    modes.add_argument('--inspect-work-turn', metavar='SESSION_ID',
+                       help='inspect the last saved workflow turn; no inference or checkpoint changes')
     modes.add_argument('--recover-recheck', metavar='SESSION_ID',
                        help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
+    parser.add_argument('--check-catalog', action='store_true',
+                        help='validate a new workflow against live catalog and quota without inference')
+    parser.add_argument('--suggest-models', action='store_true',
+                        help='recommend role/effort from explicit step risk and checks; requires a new --workflow')
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
     parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
+    parser.add_argument('--measure-quota', action='store_true',
+                        help='include matching quota window observations in the live workflow summary')
+    parser.add_argument('--metrics-jsonl', metavar='FILE',
+                        help='append a private live workflow metrics record without account quota data')
     parser.add_argument('--execute-workflow', action='store_true', help='opt-in native workflow; requires START confirmation')
     parser.add_argument('--experimental-rechecks', action='store_true',
                         help='experimental tool-check resume; /confirm-recheck consumes an extra model turn; native threads retained')
@@ -4073,10 +4757,55 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.check_catalog and (not args.workflow or args.execute_workflow):
+        parser.error('--check-catalog requires --workflow without --execute-workflow')
+    if args.measure_quota and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
+        parser.error('--measure-quota requires an executing workflow')
+    if args.metrics_jsonl is not None and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
+        parser.error('--metrics-jsonl requires an executing workflow')
+    if args.suggest_models and not args.workflow:
+        parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
         parser.error('--experimental-rechecks requires --resume-workflow')
     if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
+    if args.delete_session:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Session deletion does not accept prompt/model/effort overrides')
+        try:
+            return run_session_cleanup(args.delete_session, sys.stdin, sys.stdout)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+            print('ModelMate cleanup: ' + terminal_text(message), file=sys.stderr)
+            return 1
+    if args.search_wikipedia or args.search_web is not None:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Web search only accepts its own confirmed query')
+        try:
+            if args.search_wikipedia:
+                return run_wikipedia_search(sys.stdin, sys.stdout, args.search_wikipedia)
+            host = searxng_host(args.search_web)
+            return run_confirmed_search(sys.stdin, sys.stdout, host, 'SearXNG',
+                                        lambda query: search_searxng(query, host))
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, UnicodeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+            print('ModelMate search: ' + terminal_text(message), file=sys.stderr)
+            return 1
+    if args.inspect_work_turn:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Work-turn inspection does not accept prompt/model/effort overrides')
+        try:
+            return run_work_turn_inspection(args.inspect_work_turn, sys.stdout)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+            print('ModelMate work inspection: ' + terminal_text(message), file=sys.stderr)
+            return 1
     if args.recover_recheck:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Recheck recovery does not accept prompt/model/effort overrides')
@@ -4094,7 +4823,9 @@ def main():
         try:
             return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
-                                     experimental_rechecks=args.experimental_rechecks)
+                                     experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
+                                     measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl,
+                                     check_catalog=args.check_catalog)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

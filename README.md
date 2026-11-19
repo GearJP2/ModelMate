@@ -40,10 +40,10 @@
 | Tool recheck หลัง resume | ต้องเปิด experimental opt-in และยืนยันแยกก่อนใช้โควตาเพิ่ม |
 | Recovery ของ recheck ที่มี native IDs ครบ | มีผลทดสอบสดการอ่าน terminal status; หลักฐานเดิมยังเป็นประวัติ |
 | สามโหมด `auto` / `ask_to_escalate` / `approve_plan` | มี policy สำหรับ explicit workflow; ทุกโหมดยังต้องสั่ง `/next` |
-| เลือกโมเดลอัตโนมัติจาก prompt | ยังไม่เปิด; ไม่มี decision model แยก |
-| ค้นเว็บพร้อมขออนุญาตใช้ข้อมูลส่วนตัว | ยังไม่เปิด |
+| ตัวช่วยเลือกโมเดลรายขั้น | `--suggest-models` เสนอ role และ effort จาก risk และ checks ในแผน; ยังรอผลเปรียบเทียบงานจริง |
+| ค้นแหล่งอ้างอิงพร้อมยืนยันคำค้น | `--search-wikipedia en\|th` ค้น Wikipedia ภาษาไทยผ่านสดแล้ว และค้นเว็บทั่วไปผ่าน SearXNG ที่ระบุเองได้แบบทดลอง |
 
-รายละเอียดสถานะและงานที่เหลืออยู่ใน [Master plan](docs/MASTER_PLAN.md)
+รายละเอียดสถานะอยู่ใน [Master plan](docs/MASTER_PLAN.md) และ [Release checklist](docs/RELEASE_CHECKLIST.md)
 
 <a id="quick-start"></a>
 ## Quick start
@@ -172,7 +172,9 @@ python3 modelmate.py --recover-recheck SESSION_ID
 
 ไม่เริ่ม model turn ใหม่ หากยัง active จะถาม `STOP` / `PAUSE` ก่อนดำเนินการ
 สถานะที่จบแล้วเป็นประวัติ ไม่ทำให้ผลตรวจเก่ากลายเป็นหลักฐานปัจจุบัน
-การลบ native threads ของ workflow ที่มี rechecks แบบ scoped ยังไม่รองรับ
+ใช้ `python3 modelmate.py --delete-session SESSION_ID` จากโปรเจกต์เดิมเพื่อดูขอบเขต
+work thread, recheck threads และ descendants แล้วพิมพ์รหัสยืนยันที่แสดง
+คำสั่งนี้ไม่เริ่ม model turn; เส้นทางลบ recheck ผ่านการทดสอบจำลองแล้ว
 ดู [Native recheck contract](docs/NATIVE_RECHECK.md)
 
 ## Permissions & data

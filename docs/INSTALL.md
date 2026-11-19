@@ -61,6 +61,7 @@ chmod +x modelmate.py
 ```bash
 sr --workflow examples/explain-lists.json --role-model standard=gpt-6.1-sol
 sr --sessions
+# เพิ่ม --suggest-models ใน plan preview เพื่อดูข้อเสนอ model/effort
 ```
 
 ตัวอย่าง/เอกสาร/verifier ไม่ถูกฝังใน runtime ที่คัดลอก ให้ระบุ path ของแผนจริง

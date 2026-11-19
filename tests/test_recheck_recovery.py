@@ -11,8 +11,8 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from modelmate import (Connection, RecheckRecoveryConnection, ProbeError, SessionStore,
-                       WorkflowController, run_recheck_recovery, validate_workflow_checkpoint, main)
+from modelmate import (Connection, LiveChatConnection, RecheckRecoveryConnection, ProbeError, SessionStore,
+                       WorkflowController, run_recheck_recovery, run_session_cleanup, run_work_turn_inspection, validate_workflow_checkpoint, main)
 from test_routing import PLAN, CATALOG, POLICY, QUOTA
 
 
@@ -45,7 +45,7 @@ for line in sys.stdin:
   active=mode in ('active','ack_only','changed','account_change','finished_before_stop') and not interrupted
   if mode=='finished_before_stop' and reads>1:active=False
   status='inProgress' if active else 'interrupted' if interrupted or mode=='interrupted' else 'failed' if mode=='failed' else 'completed'
-  result={'data':[{'id':'check-turn','status':status}],'nextCursor':None}
+  result={'data':[{'id':'work-turn' if p['threadId']=='work-thread' else 'check-turn','status':status}],'nextCursor':None}
   if mode=='turn_id' or (mode=='changed' and reads>1):result['data'][0]['id']='foreign'
   if mode=='empty':result['data']=[]
   if mode=='older':result['nextCursor']='older'
@@ -91,6 +91,175 @@ class RecheckRecoveryTests(unittest.TestCase):
 
     def records(self):
         return [json.loads(line) for line in self.trace.read_text().splitlines()] if self.trace.exists() else []
+
+    def cleanup_backend(self):
+        backend = LiveChatConnection([sys.executable, '-c', 'import time;time.sleep(30)'], .5)
+        self.addCleanup(backend.close)
+        backend.store, backend.cwd = self.store, str(self.project)
+        backend.account_id = QUOTA['accountId']
+        backend._fresh_account = Mock()
+        threads = {
+            tid: {'id': tid, 'cwd': str(self.project), 'modelProvider': 'openai',
+                  'ephemeral': False, 'status': {'type': 'idle'}}
+            for tid in ('work-thread', 'check-thread', 'check-child', 'unrelated')
+        }
+        threads['check-child']['parentThreadId'] = 'check-thread'
+
+        def reply(method, params):
+            if method == 'thread/list':
+                return {'data': [row for tid, row in threads.items()
+                                 if (tid == 'check-child') == params['archived']]}
+            if method == 'thread/read':
+                return {'thread': threads.get(params['threadId'])}
+            if method == 'thread/turns/list':
+                return {'data': [{'status': 'completed'}]}
+            if method == 'thread/delete':
+                del threads[params['threadId']]
+                if params['threadId'] == 'check-thread':
+                    del threads['check-child']
+                return {}
+            raise AssertionError(method)
+
+        backend.request = Mock(side_effect=reply)
+        return backend, threads
+
+    def test_scoped_cleanup_includes_independent_recheck_and_its_archived_child(self):
+        backend, threads = self.cleanup_backend()
+        with self.store._lock(self.sid):
+            record = self.store.read(self.sid)
+            tree = backend._deletion_tree(record)
+            self.assertEqual({row['thread_id']: row['delete_root'] for row in tree}, {
+                'check-thread': 'check-thread', 'check-child': 'check-thread', 'work-thread': 'work-thread'})
+            self.assertEqual(self.store.read(self.sid), self.before)
+            with patch.object(self.store, 'remove', side_effect=OSError):
+                with self.assertRaises(OSError):
+                    backend._confirm_session_deletion(record, tree)
+            saved = self.store.read(self.sid)
+            self.assertEqual(saved['recheck_cleanup'], {'deleted': ['check-thread', 'work-thread'], 'pending': None})
+            self.assertEqual(saved['deletion_state'], 'remote_deleted')
+            backend._confirm_session_deletion(saved, backend._deletion_tree(saved))
+        self.assertEqual(list(threads), ['unrelated'])
+        self.assertEqual(self.store.list_sessions(), [])
+        self.assertEqual([call.args[1]['threadId'] for call in backend.request.call_args_list
+                          if call.args[0] == 'thread/delete'], ['check-thread', 'work-thread'])
+
+    def test_cleanup_resumes_older_work_root_receipt(self):
+        backend, threads = self.cleanup_backend()
+        del threads['work-thread']
+        with self.store._lock(self.sid):
+            record = self.store.read(self.sid)
+            record.update(deletion_state='remote_deleted', state='PAUSED', pause_reason='deletion_pending')
+            self.store.save(record)
+            tree = backend._deletion_tree(record)
+            self.assertEqual({row['delete_root'] for row in tree}, {'check-thread'})
+            backend._confirm_session_deletion(record, tree)
+        self.assertEqual(set(threads), {'unrelated'})
+        self.assertEqual(self.store.list_sessions(), [])
+
+    def test_cleanup_cli_requires_exact_confirmation_with_enter(self):
+        import uuid
+
+        backend, threads = self.cleanup_backend()
+        reply = backend.request.side_effect
+        backend.request.side_effect = lambda method, params: (
+            {} if method == 'initialize' else reply(method, params))
+        token = uuid.UUID(int=10)
+        for ending, expected in [(b'', 2), (b'\n', 0)]:
+            read_fd, write_fd = os.pipe()
+            with os.fdopen(write_fd, 'wb') as writer:
+                writer.write(('DELETE ' + token.hex).encode() + ending)
+            output = io.StringIO()
+            with (os.fdopen(read_fd) as reader,
+                  patch('modelmate.os.getcwd', return_value=str(self.project)),
+                  patch.dict(os.environ, {'XDG_STATE_HOME': str(self.home)}),
+                  patch('modelmate.LiveChatConnection', return_value=backend),
+                  patch.object(backend, 'send'), patch.object(backend, 'close'),
+                  patch('uuid.uuid4', return_value=token)):
+                self.assertEqual(run_session_cleanup(self.sid, reader, output), expected)
+            self.assertIn('check-child', output.getvalue())
+            if expected == 2:
+                self.assertEqual(self.store.read(self.sid), self.before)
+                self.assertFalse(any(call.args[0] == 'thread/delete' for call in backend.request.call_args_list))
+        self.assertEqual(set(threads), {'unrelated'})
+        self.assertFalse(any(call.args[0] in ('turn/start', 'thread/start', 'thread/resume', 'turn/interrupt')
+                             for call in backend.request.call_args_list))
+
+    def test_partial_cleanup_keeps_receipt_and_never_replays_uncertain_root(self):
+        backend, threads = self.cleanup_backend()
+        reply = backend.request.side_effect
+
+        def disconnected(method, params):
+            if method == 'thread/delete' and params['threadId'] == 'work-thread':
+                raise ProbeError('Synthetic disconnect.')
+            return reply(method, params)
+
+        backend.request.side_effect = disconnected
+        with self.store._lock(self.sid):
+            record = self.store.read(self.sid)
+            tree = backend._deletion_tree(record)
+            with self.assertRaisesRegex(ProbeError, 'disconnect'):
+                backend._confirm_session_deletion(record, tree)
+            saved = self.store.read(self.sid)
+            self.assertEqual(saved['recheck_cleanup'], {'deleted': ['check-thread'], 'pending': 'work-thread'})
+            with self.assertRaisesRegex(ProbeError, 'unconfirmed'):
+                backend._deletion_tree(saved)
+        self.assertEqual(set(threads), {'work-thread', 'unrelated'})
+
+    def test_cleanup_refuses_active_foreign_or_separately_bound_threads(self):
+        backend, threads = self.cleanup_backend()
+        with self.store._lock(self.sid):
+            record = self.store.read(self.sid)
+            for key, value in [('status', {'type': 'active'}), ('cwd', '/other-project')]:
+                with patch.dict(threads['check-child'], {key: value}):
+                    with self.assertRaises(ProbeError):
+                        backend._deletion_tree(record)
+            self.store.create('Other saved binding', thread_id='check-thread')
+            with self.assertRaisesRegex(ProbeError, 'another ModelMate session'):
+                backend._deletion_tree(record)
+        self.assertFalse(any(call.args[0] == 'thread/delete' for call in backend.request.call_args_list))
+
+    def test_cleanup_refuses_lost_recheck_thread_binding(self):
+        self.make_pending('reserved')
+        backend, _ = self.cleanup_backend()
+        with self.store._lock(self.sid), self.assertRaisesRegex(ProbeError, 'incomplete'):
+            backend._deletion_tree(self.store.read(self.sid))
+        backend.request.assert_not_called()
+
+    def test_work_turn_inspection_reads_latest_bound_turn_without_revalidation(self):
+        for mode, status, code in [('older', 'terminal', 0), ('failed', 'unverified', 2),
+                                   ('turn_id', 'unverified', 2)]:
+            with self.subTest(mode=mode):
+                output = io.StringIO()
+                with (patch('modelmate.os.getcwd', return_value=str(self.project)),
+                      patch.dict(os.environ, {'XDG_STATE_HOME': str(self.home)}),
+                      patch('modelmate.RecheckRecoveryConnection', return_value=self.backend(mode))):
+                    self.assertEqual(run_work_turn_inspection(self.sid, output), code)
+                report = json.loads(output.getvalue())
+                self.assertEqual(report['state'], status)
+                self.assertEqual(report['historicalChecks'], {'pass': 1, 'fail': 0, 'unknown': 0})
+                self.assertEqual(self.store.read(self.sid), self.before)
+        self.assertLessEqual({row['method'] for row in self.records()}, {
+            'initialize', 'initialized', 'account/read', 'account/rateLimits/read',
+            'thread/read', 'thread/turns/list'})
+
+    def test_work_turn_inspection_does_not_infer_binding_for_running_attempt(self):
+        raw = json.dumps(PLAN)
+        record = self.store.create('unbound work attempt', thread_id='work-thread',
+            account_hash=self.before['account_hash'])
+        with self.store.workflow(record['id'], QUOTA, time.monotonic(), CATALOG, POLICY,
+                controller=WorkflowController(raw, CATALOG, POLICY)) as controller:
+            controller.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)
+            # An older turn ID on disk is not enough to bind the current running attempt.
+            saved = self.store.read(record['id'])
+            saved['turn_id'] = 'work-turn'
+            self.store.save(saved)
+        output = io.StringIO()
+        with (patch('modelmate.os.getcwd', return_value=str(self.project)),
+              patch.dict(os.environ, {'XDG_STATE_HOME': str(self.home)}),
+              patch('modelmate.RecheckRecoveryConnection') as connection):
+            self.assertEqual(run_work_turn_inspection(record['id'], output), 2)
+            connection.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())['reason'], 'unconfirmed_attempt_binding')
 
     def test_terminal_recovery_preserves_evidence_counters_and_bindings(self):
         backend=self.backend()
