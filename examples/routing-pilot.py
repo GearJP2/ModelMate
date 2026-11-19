@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -197,6 +198,67 @@ def score_dedupe(answer):
     return 0 if all(results.values()) else 1
 
 
+def read_metrics_row(path, row_number):
+    if row_number is not None and row_number < 1:
+        raise ValueError('Metrics row numbers start at 1.')
+    with path.open(encoding='utf-8') as source:
+        if row_number is None:
+            line = source.readline()
+            if source.readline():
+                raise ValueError('Choose an explicit row for ' + str(path) + '.')
+        else:
+            line = next((line for index, line in enumerate(source, 1) if index == row_number), '')
+    if not line:
+        raise ValueError('Metrics row not found in ' + str(path) + '.')
+    row = json.loads(line)
+    if not isinstance(row, dict) or type(row.get('schemaVersion')) is not int or row['schemaVersion'] != 1:
+        raise ValueError('Unsupported metrics record in ' + str(path) + '.')
+    return row
+
+
+def comparison_metrics(report):
+    def number(value):
+        return value if type(value) in (float, int) and 0 <= value < 2 ** 63 and math.isfinite(value) else None
+
+    attempts = report.get('attempts')
+    timed = report.get('timedTurns')
+    turns = report.get('workTurnMeasurements')
+    complete = (type(attempts) is int and attempts > 0 and type(timed) is int
+                and isinstance(turns, list) and len(turns) == timed == attempts
+                and report.get('attemptsScope') == 'workflow_total'
+                and all(isinstance(turn, dict) and turn.get('terminalStatus') == 'completed'
+                        and number(turn.get('elapsedSeconds')) is not None for turn in turns))
+    usage = report.get('tokenUsage')
+    total = usage.get('total') if isinstance(usage, dict) else None
+    last = usage.get('last') if isinstance(usage, dict) else None
+    tokens_comparable = (complete and type(report.get('recheckAttempts')) is int
+                         and report['recheckAttempts'] == 0
+                         and report.get('tokenUsageScope') == 'last_observed_work_thread_update'
+                         and isinstance(total, dict) and isinstance(last, dict)
+                         and turns[-1].get('lastReportedTokens') == last)
+    return {
+        'state': report.get('state'), 'attempts': attempts, 'timedTurns': timed,
+        'requestedSelections': report.get('requestedSelections'),
+        'allRecordedWorkTurnsCompletedHere': complete,
+        'workTurnSeconds': number(report.get('turnElapsedSeconds')) if complete else None,
+        'cliWallSecondsIncludingUserWait': number(report.get('elapsedSeconds'))
+        if report.get('elapsedScope') == 'current_cli_session' and report.get('includesUserWait') is True else None,
+        'reportedWorkThreadTokens': number(total.get('totalTokens')) if tokens_comparable else None,
+        'reportedCachedInputTokens': number(total.get('cachedInputTokens')) if tokens_comparable else None,
+    }
+
+
+def compare(baseline_path, routed_path, baseline_row, routed_row):
+    baseline = comparison_metrics(read_metrics_row(baseline_path, baseline_row))
+    routed = comparison_metrics(read_metrics_row(routed_path, routed_row))
+    fields = ('workTurnSeconds', 'reportedWorkThreadTokens', 'reportedCachedInputTokens')
+    deltas = {key: round(routed[key] - baseline[key], 3)
+              if routed[key] is not None and baseline[key] is not None else None for key in fields}
+    print(json.dumps({'baseline': baseline, 'routed': routed, 'routedMinusBaseline': deltas},
+                     indent=2, ensure_ascii=True, allow_nan=False))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
@@ -214,6 +276,11 @@ def main():
     grade = actions.add_parser('score', help='score the letter from the turn with trusted local cases')
     grade.add_argument('answer')
     grade.add_argument('--case', choices=('c1', 'dedupe'), default='c1')
+    analysis = actions.add_parser('compare', help='compare two private metrics records offline')
+    analysis.add_argument('baseline', type=Path)
+    analysis.add_argument('routed', type=Path)
+    analysis.add_argument('--baseline-row', type=int)
+    analysis.add_argument('--routed-row', type=int)
     args = parser.parse_args()
     try:
         if args.action == 'prepare':
@@ -222,6 +289,8 @@ def main():
         if args.action == 'run':
             return run(args.scratch, args.arm, args.standard, args.strong, args.execute, args.economy,
                        args.measure_quota, args.metrics_jsonl)
+        if args.action == 'compare':
+            return compare(args.baseline, args.routed, args.baseline_row, args.routed_row)
         return score_dedupe(args.answer) if args.case == 'dedupe' else score(args.answer)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

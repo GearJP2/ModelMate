@@ -2172,3 +2172,11 @@ identifiers, or account quota observations. The Terminal summary is still
 printed. Synthetic checks verify runtime CLI output, permission and
 symlink rejection, repeated append, and rollback after a partial write.
 The report does not make any additional native requests.
+
+### Offline routing comparison
+
+The pilot's `compare` subcommand reads a chosen baseline and routed metrics
+record with no App Server use. Synthetic CLI cases verify exact deltas,
+explicit selection in multi-row logs, and unknown deltas for incomplete
+coverage or a missing latest token event. This tool compares observations
+only. It does not infer quality or account quota savings from the logs.

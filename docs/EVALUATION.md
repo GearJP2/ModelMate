@@ -200,3 +200,18 @@ Use separate files for the baseline and routed arms to preserve their labels.
 These files store the same timing and token counters shown in the summary,
 with no account quota observations. Keep any quota comparisons separately,
 using only the observations approved for that evaluation.
+
+Compare a pair of saved metrics records offline:
+
+```bash
+python3 examples/routing-pilot.py compare baseline.jsonl routed.jsonl
+```
+
+When a file contains multiple runs, select the intended record with
+`--baseline-row N` and/or `--routed-row N` (1-based). Pair runs with the same
+frozen task and runtime. The command reports routed minus baseline for work
+turn time, reported work-thread tokens and its cached-input subset. It
+leaves incomplete timing, resumed runs with earlier attempts, and missing
+latest token snapshots as null where applicable. Apply the case scorer or
+rubric separately for quality. Account quota observations are not in the
+JSONL records.
