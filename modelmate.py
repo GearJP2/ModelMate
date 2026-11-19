@@ -3069,8 +3069,7 @@ class NativeWorkflowConnection(Connection):
         self.measure_quota = False
         self._quota_first = self._quota_ready = None
         self._measured_turn = self._latest_usage = None
-        self._turn_seconds = 0.0
-        self._terminal_turns = 0
+        self._work_turn_measurements = []
 
     def workflow_measurements(self):
         changes = None
@@ -3083,11 +3082,15 @@ class NativeWorkflowConnection(Connection):
                         changes = quota_window_changes(self._quota_first, quota_windows(quota), time.time())
             except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
                 pass
+        turns = self._work_turn_measurements
+        elapsed = [turn['elapsedSeconds'] for turn in turns if turn['elapsedSeconds'] is not None]
         return {'tokenUsage': self._latest_usage,
                 'tokenUsageScope': 'last_observed_work_thread_update' if self._latest_usage else None,
                 'quotaWindowChanges': changes,
-                'turnElapsedSeconds': round(self._turn_seconds, 3) if self._terminal_turns else None,
-                'timedTurns': self._terminal_turns}
+                'turnElapsedSeconds': round(sum(elapsed), 3) if elapsed else None,
+                'timedTurns': len(elapsed),
+                'workTurnMeasurements': [dict(turn, elapsedSeconds=round(turn['elapsedSeconds'], 3))
+                    if turn['elapsedSeconds'] is not None else dict(turn) for turn in turns]}
 
     def connect(self, controller, cwd, role_policy=None, *, store=None):
         if self.host is not None or self.thread_id is not None:
@@ -3248,7 +3251,8 @@ class NativeWorkflowConnection(Connection):
         return dict(quota=quota, checked_at=checked_at, catalog=catalog, role_policy=self.role_policy)
 
     def dispatch(self, descriptor):
-        active = self.host.controller.snapshot()['active_attempt'] if self.host is not None else None
+        state = self.host.controller.snapshot() if self.host is not None else None
+        active = state['active_attempt'] if state is not None else None
         if (active is None or active['id'] != descriptor.get('attempt_id') or active['status'] != 'running'
                 or descriptor.get('selection') != active['selection']):
             raise ProbeError('No controller-reserved workflow attempt; nothing dispatched.')
@@ -3261,7 +3265,11 @@ class NativeWorkflowConnection(Connection):
         self._displayed.clear()
         verification = [dict(check=index + 1, **spec) for (step_id, index), spec in sorted(self.host._specs.items())
                         if step_id == active['step_id']]
-        started = time.monotonic()
+        observed = {'step': state['step_index'] + 1, 'cycle': active['cycle'] + 1,
+                    'attempt': active['number'], 'requestedSelection': dict(selection),
+                    'terminalStatus': None, 'elapsedSeconds': None, 'lastReportedTokens': None}
+        self._work_turn_measurements.append(observed)
+        self._measured_turn = {'id': None, 'started': time.monotonic(), 'observation': observed}
         if self.measure_quota and self._quota_first is None:
             self._quota_first = self._quota_ready
         result = self.request('turn/start', {'threadId': self.thread_id, 'model': selection['model'],
@@ -3278,26 +3286,28 @@ class NativeWorkflowConnection(Connection):
             record = self.store.read(self.session_id)
             record['turn_id'] = turn['id']
             self.store.save(record)
-        self._measured_turn = {'id': turn['id'], 'started': started, 'terminal': False}
+        self._measured_turn['id'] = turn['id']
         return {'thread_id': self.thread_id, 'turn_id': turn['id']}
 
     def _observe_measurement(self, message):
         current = self._measured_turn
         params = message.get('params')
-        if current is None or not isinstance(params, dict) or params.get('threadId') != self.thread_id:
+        if (current is None or current['id'] is None or not isinstance(params, dict)
+                or params.get('threadId') != self.thread_id):
             return
+        observed = current['observation']
         method = message['method']
         if method == 'thread/tokenUsage/updated' and params.get('turnId') == current['id']:
             snapshot = native_token_snapshot(params.get('tokenUsage'))
             if snapshot is not None:
                 self._latest_usage = snapshot
-        elif method == 'turn/completed' and not current['terminal']:
+                observed['lastReportedTokens'] = snapshot['last']
+        elif method == 'turn/completed' and observed['terminalStatus'] is None:
             turn = params.get('turn')
             if (isinstance(turn, dict) and turn.get('id') == current['id']
                     and turn.get('status') in ('completed', 'failed', 'interrupted')):
-                current['terminal'] = True
-                self._turn_seconds += time.monotonic() - current['started']
-                self._terminal_turns += 1
+                observed['terminalStatus'] = turn['status']
+                observed['elapsedSeconds'] = time.monotonic() - current['started']
 
     def interrupt(self, binding):
         if binding['thread_id'] != self.thread_id:

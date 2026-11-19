@@ -1,4 +1,5 @@
 """Native protocol integration against a synthetic subprocess, never a live model."""
+import copy
 import io
 import json
 import os
@@ -60,7 +61,7 @@ for line in sys.stdin:
    for thread_id, turn_id, value in [('thread',str(turn),total),('other',str(turn),dict(total,totalTokens=99)),
                                      ('thread','old',dict(total,totalTokens=99))]:
     emit({'method':'thread/tokenUsage/updated','params':{'threadId':thread_id,'turnId':turn_id,
-     'tokenUsage':{'last':value,'total':value}}})
+     'tokenUsage':{'last':value,'total':{k:n*turn for k,n in value.items()}}}})
   if mode=='approval':emit({'id':'approval','method':'item/commandExecution/requestApproval',
    'params':{'threadId':'thread','turnId':str(turn),'itemId':'tool','command':'write','cwd':'/synthetic'}})
   elif mode not in ('text-only','text-only-fail'):emit({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':str(turn),'status':'completed'}}})
@@ -140,7 +141,32 @@ class NativeWorkflowTests(unittest.TestCase):
         self.assertEqual(summary['tokenUsage']['last']['cachedInputTokens'], 3)
         self.assertEqual(summary['tokenUsage']['last']['reasoningOutputTokens'], 1)
         self.assertEqual(summary['quotaWindowChanges'][0]['deltaPercentagePoints'], 1)
+        turn, = summary['workTurnMeasurements']
+        self.assertEqual((turn['step'], turn['cycle'], turn['attempt'], turn['terminalStatus']), (1, 1, 1, 'completed'))
+        self.assertEqual(turn['requestedSelection'], {'model': POLICY['standard'], 'effort': 'low'})
+        self.assertEqual(turn['lastReportedTokens']['totalTokens'], 11)
         self.assertEqual(sum(row.get('method') == 'turn/start' for row in self.records()), 1)
+
+    def test_per_turn_measurements_include_roles_without_summing_last_snapshots(self):
+        plan = copy.deepcopy(PLAN)
+        plan['steps'].append(dict(plan['steps'][0], role='strong'))
+        controller = WorkflowController(json.dumps(plan), CATALOG, POLICY, 'auto')
+        backend = self.backend('metrics')
+        host = backend.connect(controller, '/synthetic', POLICY)
+        for index in range(2):
+            host.configure_check(0, step_index=index, command='python3 -m unittest', cwd='/synthetic')
+        for _ in range(2):
+            host({'action': 'next', 'task_id': controller.task_id})
+            backend.drain()
+            host({'action': 'check', 'task_id': controller.task_id})
+        summary = backend.workflow_measurements()
+        self.assertEqual(summary['timedTurns'], 2)
+        turns = summary['workTurnMeasurements']
+        self.assertEqual([row['step'] for row in turns], [1, 2])
+        self.assertEqual([row['requestedSelection']['model'] for row in turns],
+                         [POLICY['standard'], POLICY['strong']])
+        self.assertEqual([row['lastReportedTokens']['totalTokens'] for row in turns], [11, 11])
+        self.assertEqual(summary['tokenUsage']['total']['totalTokens'], 22)
 
     def test_auth_quota_and_permission_mismatch_start_no_turn(self):
         for mode in ('api','quota','permissions'):
@@ -194,6 +220,10 @@ class NativeWorkflowTests(unittest.TestCase):
                 with self.assertRaises(ProbeError):
                     c.host({'action':'next','task_id':self.controller.task_id})
                 self.assertEqual(sum(r.get('method')=='turn/start' for r in self.records()), 1)
+                measured, = c.workflow_measurements()['workTurnMeasurements']
+                self.assertIsNone(measured['terminalStatus'])
+                self.assertIsNone(measured['elapsedSeconds'])
+                self.assertIsNone(measured['lastReportedTokens'])
                 c.close()
 
     def test_direct_dispatch_requires_reservation_and_cannot_repeat_attempt(self):

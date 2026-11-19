@@ -29,10 +29,10 @@ class MetricsTests(unittest.TestCase):
     def test_timing_requires_one_matching_terminal_event_even_when_interrupted(self):
         backend = NativeWorkflowConnection.__new__(NativeWorkflowConnection)
         backend.thread_id = 'work'
-        backend._measured_turn = {'id': 'current', 'started': 3.0, 'terminal': False}
+        observed = {'terminalStatus': None, 'elapsedSeconds': None, 'lastReportedTokens': None}
+        backend._measured_turn = {'id': 'current', 'started': 3.0, 'observation': observed}
+        backend._work_turn_measurements = [observed]
         backend._latest_usage = backend._quota_first = None
-        backend._turn_seconds = 0.0
-        backend._terminal_turns = 0
         event = {'method': 'turn/completed', 'params': {
             'threadId': 'work', 'turn': {'id': 'current', 'status': 'interrupted'}}}
         with patch('modelmate.time.monotonic', return_value=5.0):
@@ -43,13 +43,15 @@ class MetricsTests(unittest.TestCase):
         result = backend.workflow_measurements()
         self.assertEqual(result['timedTurns'], 1)
         self.assertEqual(result['turnElapsedSeconds'], 2.0)
+        self.assertEqual(result['workTurnMeasurements'], [{
+            'terminalStatus': 'interrupted', 'elapsedSeconds': 2.0, 'lastReportedTokens': None}])
         self.assertIsNone(result['tokenUsage'])
 
     def test_final_quota_observation_checks_account_identity_and_uses_metadata_only(self):
         backend = NativeWorkflowConnection.__new__(NativeWorkflowConnection)
         backend.account_id = 'expected'
         backend._latest_usage = None
-        backend._terminal_turns = 0
+        backend._work_turn_measurements = []
         backend._quota_first = {('models', 'primary'): (4, 300, int(time.time()) + 600)}
         reset = backend._quota_first['models', 'primary'][2]
 

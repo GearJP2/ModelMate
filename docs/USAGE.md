@@ -633,3 +633,10 @@ python3 modelmate.py --inspect-work-turn SESSION_ID
 ผล `terminal` ยืนยันสถานะของ turn เดิม ส่วนผลเทสต์สำหรับไฟล์ปัจจุบันต้องตรวจใหม่
 เมื่อ binding ไม่ครบ ประวัติไม่ตรง หรือ checkpoint ค้างเป็น running โปรแกรมจะรายงาน
 `unverified` และไม่เดาว่า turn เก่าคือ attempt ปัจจุบัน
+
+`workTurnMeasurements` แสดงผลแยกตามขั้น รอบ และ attempt ที่ส่งใน CLI session นี้
+แต่ละรายการมีโมเดลที่ร้องขอ สถานะและเวลาเมื่อเห็น terminal event และ
+`lastReportedTokens` จาก snapshot ล่าสุดที่ตรงกับ turn นั้น ค่านี้เป็นชุด
+`last` ที่ Codex ส่งมา โดยเฉพาะ turn ที่เรียกเครื่องมืออาจมีหลาย model responses
+จึงไม่ใช่ token รวมทั้ง turn หากไม่มีเหตุการณ์ที่ตรงกัน ค่าจะเป็น null
+ผลสรุปยังเก็บ `tokenUsage.total` ของ thread ตามที่ Codex ส่งมาแยกต่างหาก

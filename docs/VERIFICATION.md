@@ -2151,3 +2151,15 @@ state, provider, permission weakening, turn identity, malformed status
 and missing history. The existing crash-gap protection continues to clear
 the old turn ID atomically when reserving a new attempt. No native turn
 was requested for this regression.
+
+### Per-turn workflow measurements — MOCK_VERIFIED
+
+The runtime includes one measurement row per dispatched work attempt in the
+current CLI session. Each row records the requested selection and observed
+terminal status and elapsed time. The optional token fields copy the native
+`last` breakdown for the matching turn. They are last-response observations,
+not estimates of full turn usage. The cumulative native thread snapshot is
+still reported separately. A two-step fake server verified distinct model
+selections and independent per-turn rows. Missing bindings and interrupted
+turns preserve unknown fields as appropriate. Targeted checks and the full
+offline suite passed 490 tests. No new live turn was requested.
