@@ -1993,3 +1993,11 @@ and the displayed answer reported a successful command. The user exited
 before `/check`. Local checkpoint inspection confirmed a completed attempt
 with zero recorded checks and no review attempt. The claim is insufficient
 for the native test criterion. The paired result remains open.
+
+Economy pilot baseline follow-up: the user captured a passing native tool
+check for step one using one `gpt-6.2-astra/low` attempt. Exit occurred
+between the two steps, before the review dispatch. The saved session passed
+the offline experimental workflow resume preview. Its first-step tool
+evidence is historical on resume. The experiment can still grade that
+observed test outcome and a subsequent review separately, without using a
+new test turn to mark the restored workflow DONE.
