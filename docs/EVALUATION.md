@@ -441,3 +441,16 @@ saved fail and unknown badges and checks that inspection leaves the checkpoint
 untouched. The empty patch failed four assertions, including both new badge
 checks, and the reference restoration passed all nine tests. The previous display-unknown case also reproduced its
 expected empty-patch failure and eight passing reference checks.
+
+After reviewing both candidate diffs, grade them together offline.
+
+```sh
+python3 examples/checkpoint-pilot.py grade-pair display-evidence \
+  "$scratch/gpt-6.2-sol.patch" "$scratch/gpt-6.2-astra.patch" --trusted-patch
+```
+
+The JSON report lists the routed arm first. It keeps the original delivery
+verdict and retries format repair only when Git rejected the original. Exit 0
+means both original deliveries passed, 1 means one or both did not pass,
+and 2 means grading was unavailable for at least one arm. The report is
+printed even when one patch is missing, so the available arm can be graded.

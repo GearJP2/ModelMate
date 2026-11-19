@@ -1,6 +1,7 @@
 """Prepare checkpoint pilot tasks and grade trusted patches offline."""
 import argparse
 import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -113,6 +114,10 @@ EVIDENCE_BADGE_TEST = """
 """
 
 
+class PatchRejected(ValueError):
+    """Git could not apply the candidate diff."""
+
+
 def grade(case_name, patch, *, repair_format=False):
     fix, module, selector, _ = CASES[case_name]
     with tempfile.TemporaryDirectory(prefix="modelmate-checkpoint-grade-") as scratch:
@@ -124,7 +129,8 @@ def grade(case_name, patch, *, repair_format=False):
                 apply.append("--recount")
                 if not patch.endswith(b"\n"):
                     patch += b"\n"
-            subprocess.run([*apply, "-"], cwd=root, input=patch, check=True)
+            if subprocess.run([*apply, "-"], cwd=root, input=patch).returncode:
+                raise PatchRejected("Git rejected the candidate patch.")
         verifier = f"tests/{module}.py"
         verifier_source = git_output("show", f"{fix}:{verifier}").decode("utf-8")
         if case_name == "display-evidence":
@@ -141,6 +147,26 @@ def grade(case_name, patch, *, repair_format=False):
         ).returncode
 
 
+def grade_delivery(case_name, patch_path):
+    result = {"original": None, "afterFormatRepair": None}
+    try:
+        patch = patch_path.read_bytes()
+        try:
+            result["original"] = "passed" if grade(case_name, patch) == 0 else "test_failed"
+        except PatchRejected:
+            result["original"] = "patch_rejected"
+            try:
+                repaired = grade(case_name, patch, repair_format=True)
+                result["afterFormatRepair"] = "passed" if repaired == 0 else "test_failed"
+            except PatchRejected:
+                result["afterFormatRepair"] = "patch_rejected"
+    except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as exc:
+        print(f"Checkpoint pilot could not grade {patch_path.name}: {exc}", file=sys.stderr)
+        field = "afterFormatRepair" if result["original"] else "original"
+        result[field] = "unavailable"
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -154,6 +180,12 @@ def main():
                         help="confirm the patched Python code may execute locally")
     grader.add_argument("--repair-format", action="store_true",
                         help="add a final newline and recount diff hunk lines")
+    pair = commands.add_parser("grade-pair")
+    pair.add_argument("case", choices=CASES)
+    pair.add_argument("routed", type=Path)
+    pair.add_argument("baseline", type=Path)
+    pair.add_argument("--trusted-patch", action="store_true", required=True,
+                      help="confirm both patches may execute Python locally")
     args = parser.parse_args()
     case = CASES[args.case]
     try:
@@ -162,6 +194,15 @@ def main():
             export_base(args.case, args.workspace)
             print(case[3])
             return 0
+        if args.command == "grade-pair":
+            results = {
+                "routed": grade_delivery(args.case, args.routed),
+                "baseline": grade_delivery(args.case, args.baseline),
+            }
+            print(json.dumps(results, indent=2))
+            if any("unavailable" in arm.values() for arm in results.values()):
+                return 2
+            return int(any(arm["original"] != "passed" for arm in results.values()))
         return grade(args.case, args.patch.read_bytes(), repair_format=args.repair_format)
     except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as exc:
         print(f"Checkpoint pilot could not complete: {exc}", file=sys.stderr)

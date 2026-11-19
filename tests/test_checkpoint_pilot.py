@@ -1,4 +1,5 @@
 """Offline checks for the historical checkpoint preparation and grader."""
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -66,3 +67,18 @@ class CheckpointPilotTests(unittest.TestCase):
         )
         self.assertEqual(repaired.returncode, 0, repaired.stderr)
         self.assertEqual(patch.read_bytes(), raw)
+
+    def test_pair_reports_original_and_repaired_results_independently(self):
+        routed = self.scratch / "routed.patch"
+        baseline = self.scratch / "baseline.patch"
+        raw = subprocess.check_output(
+            ["git", "diff", "e43bb08^", "e43bb08", "--", "modelmate.py"], cwd=REPO,
+        )
+        routed.write_bytes(raw.rstrip(b"\n"))
+        baseline.write_bytes(raw)
+        result = self.run_pilot("grade-pair", "display", routed, baseline, "--trusted-patch")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "routed": {"original": "patch_rejected", "afterFormatRepair": "passed"},
+            "baseline": {"original": "passed", "afterFormatRepair": None},
+        })
