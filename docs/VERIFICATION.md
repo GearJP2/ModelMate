@@ -1974,3 +1974,15 @@ baseline. Both reached DONE with observed first-step test evidence and
 separate consent for each strong step. The full existing offline suite passed
 479 tests. An agent-side `--doctor` attempt exited before the App Server
 initialized; no live turn was requested. The paired live result remains open.
+
+Economy pilot routed live result: the user requested `gpt-6-luna/low` once
+for the registered native test and recorded a passing tool check via
+`/check`. The review requested `gpt-6.2-astra/low` only after explicit
+model approval and a separate dispatch command. A missing-token approval
+was rejected before that consent. The review's proposed final-index test
+was independently verified against the staged function and a variant that
+skips the final element. The three original cases passed against both.
+Both attempts reached CHECKING. The workflow was paused on exit before
+rubric entry for the second step. Two attempts and zero rechecks were
+reported. Runtime SHA-256 matched the C1 runtime. The economy pilot baseline,
+backend-reported models, and attributable quota observations are still open.
