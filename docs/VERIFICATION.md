@@ -2117,3 +2117,16 @@ No runtime checksum was supplied with the user transcript.
 The corrected viewer was checked offline on that same live smoke checkpoint.
 It printed the overall PAUSED state, the step's CHECKING state, and the saved
 passing test. The full offline suite passed 487 tests.
+
+### Metadata-only native work-turn inspection — MOCK_VERIFIED
+
+`--inspect-work-turn SESSION_ID` uses a read-only checkpoint and a metadata
+RPC allowlist without interruption, execution, resume or deletion methods.
+It checks account and project identity, the exact latest turn and the
+cached terminal status. It prints counts of historical local checks without
+upgrading their validity. A running checkpoint can retain the previous turn
+ID across a crash gap and is reported unverified without native requests.
+Synthetic tests exercised a latest turn with older history, mismatched turn
+or status, and ambiguous running bindings. A metadata-only live attempt on
+the workflow autosave smoke checkpoint stopped at App Server initialization
+in the agent environment. No model turn was requested.

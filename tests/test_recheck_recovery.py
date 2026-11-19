@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from modelmate import (Connection, LiveChatConnection, RecheckRecoveryConnection, ProbeError, SessionStore,
-                       WorkflowController, run_recheck_recovery, run_session_cleanup, validate_workflow_checkpoint, main)
+                       WorkflowController, run_recheck_recovery, run_session_cleanup, run_work_turn_inspection, validate_workflow_checkpoint, main)
 from test_routing import PLAN, CATALOG, POLICY, QUOTA
 
 
@@ -45,7 +45,7 @@ for line in sys.stdin:
   active=mode in ('active','ack_only','changed','account_change','finished_before_stop') and not interrupted
   if mode=='finished_before_stop' and reads>1:active=False
   status='inProgress' if active else 'interrupted' if interrupted or mode=='interrupted' else 'failed' if mode=='failed' else 'completed'
-  result={'data':[{'id':'check-turn','status':status}],'nextCursor':None}
+  result={'data':[{'id':'work-turn' if p['threadId']=='work-thread' else 'check-turn','status':status}],'nextCursor':None}
   if mode=='turn_id' or (mode=='changed' and reads>1):result['data'][0]['id']='foreign'
   if mode=='empty':result['data']=[]
   if mode=='older':result['nextCursor']='older'
@@ -224,6 +224,42 @@ class RecheckRecoveryTests(unittest.TestCase):
         with self.store._lock(self.sid), self.assertRaisesRegex(ProbeError, 'incomplete'):
             backend._deletion_tree(self.store.read(self.sid))
         backend.request.assert_not_called()
+
+    def test_work_turn_inspection_reads_latest_bound_turn_without_revalidation(self):
+        for mode, status, code in [('older', 'terminal', 0), ('failed', 'unverified', 2),
+                                   ('turn_id', 'unverified', 2)]:
+            with self.subTest(mode=mode):
+                output = io.StringIO()
+                with (patch('modelmate.os.getcwd', return_value=str(self.project)),
+                      patch.dict(os.environ, {'XDG_STATE_HOME': str(self.home)}),
+                      patch('modelmate.RecheckRecoveryConnection', return_value=self.backend(mode))):
+                    self.assertEqual(run_work_turn_inspection(self.sid, output), code)
+                report = json.loads(output.getvalue())
+                self.assertEqual(report['state'], status)
+                self.assertEqual(report['historicalChecks'], {'pass': 1, 'fail': 0, 'unknown': 0})
+                self.assertEqual(self.store.read(self.sid), self.before)
+        self.assertLessEqual({row['method'] for row in self.records()}, {
+            'initialize', 'initialized', 'account/read', 'account/rateLimits/read',
+            'thread/read', 'thread/turns/list'})
+
+    def test_work_turn_inspection_does_not_infer_binding_for_running_attempt(self):
+        raw = json.dumps(PLAN)
+        record = self.store.create('unbound work attempt', thread_id='work-thread',
+            account_hash=self.before['account_hash'])
+        with self.store.workflow(record['id'], QUOTA, time.monotonic(), CATALOG, POLICY,
+                controller=WorkflowController(raw, CATALOG, POLICY)) as controller:
+            controller.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)
+            # An older turn ID on disk is not enough to bind the current running attempt.
+            saved = self.store.read(record['id'])
+            saved['turn_id'] = 'work-turn'
+            self.store.save(saved)
+        output = io.StringIO()
+        with (patch('modelmate.os.getcwd', return_value=str(self.project)),
+              patch.dict(os.environ, {'XDG_STATE_HOME': str(self.home)}),
+              patch('modelmate.RecheckRecoveryConnection') as connection):
+            self.assertEqual(run_work_turn_inspection(record['id'], output), 2)
+            connection.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())['reason'], 'unconfirmed_attempt_binding')
 
     def test_terminal_recovery_preserves_evidence_counters_and_bindings(self):
         backend=self.backend()

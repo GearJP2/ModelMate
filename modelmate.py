@@ -3581,24 +3581,30 @@ class RecheckRecoveryConnection(Connection):
         if operation['thread_id'] == record['thread_id']:
             raise ProbeError('Recheck points at the work thread; no native action attempted.')
         self._account(record)
-        thread = self.request('thread/read', {'threadId': operation['thread_id'], 'includeTurns': False}).get('thread')
-        if (not isinstance(thread, dict) or thread.get('id') != operation['thread_id']
-                or thread.get('cwd') != store.project or thread.get('modelProvider') != 'openai'
+        return dict(report, **self.inspect_bound_turn(store.project, operation['thread_id'], operation['turn_id'],
+                                                      single_turn=True))
+
+    def inspect_bound_turn(self, project, thread_id, turn_id, *, single_turn=False):
+        thread = self.request('thread/read', {'threadId': thread_id, 'includeTurns': False}).get('thread')
+        if (not isinstance(thread, dict) or thread.get('id') != thread_id
+                or thread.get('cwd') != project or thread.get('modelProvider') != 'openai'
                 or thread.get('ephemeral') is not False or not isinstance(thread.get('status'), dict)
                 or thread['status'].get('type') not in ('idle', 'notLoaded', 'active')):
             raise ProbeError('Recovery thread identity/project/provider/state is unsafe or unknown.')
-        history = self.request('thread/turns/list', {'threadId': operation['thread_id'], 'limit': 1,
+        history = self.request('thread/turns/list', {'threadId': thread_id, 'limit': 1,
             'sortDirection': 'desc', 'itemsView': 'summary'})
         turns = history.get('data')
-        if (not isinstance(turns, list) or len(turns) != 1 or history.get('nextCursor') is not None
-                or not isinstance(turns[0], dict) or turns[0].get('id') != operation['turn_id']):
-            return dict(report, reason='native_history_mismatch')
+        cursor = history.get('nextCursor')
+        if (not isinstance(turns, list) or len(turns) != 1
+                or (cursor is not None and (single_turn or not isinstance(cursor, str) or not cursor))
+                or not isinstance(turns[0], dict) or turns[0].get('id') != turn_id):
+            return {'state': 'unverified', 'reason': 'native_history_mismatch'}
         status, thread_status = turns[0].get('status'), thread['status']['type']
         if status in ('completed', 'failed', 'interrupted') and thread_status in ('idle', 'notLoaded'):
-            return dict(report, state='terminal', status=status)
+            return {'state': 'terminal', 'status': status}
         if status == 'inProgress' and thread_status == 'active':
-            return dict(report, state='active')
-        return dict(report, reason='native_status_unconfirmed')
+            return {'state': 'active'}
+        return {'state': 'unverified', 'reason': 'native_status_unconfirmed'}
 
     def interrupt_recheck(self, store, session_id, expected, timeout=5):
         if (not isinstance(expected, dict) or expected.get('state') != 'active'
@@ -4324,6 +4330,43 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         preview.write('สถิติ workflow: ' + json.dumps(stats, ensure_ascii=False))
 
 
+def run_work_turn_inspection(session_id, output):
+    """Inspect the saved work binding, without replaying or revalidating its checks."""
+    with SessionStore(os.getcwd(), read_only=True) as store:
+        record = store.read(session_id)
+        flow = record.get('workflow')
+        if flow is None or record['deletion_state'] != 'none':
+            raise ProbeError('Inspection requires a saved workflow without pending deletion.')
+        latest = flow['active_attempt']
+        if latest is None:
+            latest = next((event for event in reversed(flow['history']) if 'checks' in event), None)
+        if not record['thread_id'] or not record['turn_id'] or latest is None:
+            report = {'state': 'unverified', 'reason': 'missing_native_binding'}
+        elif latest['status'] == 'running':
+            # A crash before turn/start replies can leave the previous turn ID in the checkpoint.
+            report = {'state': 'unverified', 'reason': 'unconfirmed_attempt_binding'}
+        else:
+            connection = RecheckRecoveryConnection(['codex', 'app-server', '--stdio',
+                '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
+            try:
+                connection.allowed_methods = connection.allowed_methods - {'turn/interrupt'}
+                connection._account(record)
+                report = connection.inspect_bound_turn(store.project, record['thread_id'], record['turn_id'])
+                if report['state'] == 'terminal' and report['status'] != latest['status']:
+                    report = {'state': 'unverified', 'reason': 'native_status_mismatch'}
+                if store.read(session_id) != record:
+                    raise ProbeError('Workflow checkpoint changed during inspection; run it again.')
+            finally:
+                connection.close()
+        counts = dict.fromkeys(('pass', 'fail', 'unknown'), 0)
+        if latest is not None:
+            for check in latest['checks']:
+                counts[check['result']] += 1
+        output.write(json.dumps(dict(report, historicalChecks=counts, modelTurnsRequested=0),
+                                ensure_ascii=True) + '\n')
+        return 0 if report['state'] == 'terminal' else 2
+
+
 def run_recheck_recovery(session_id, input_stream, output):
     """Inspect/reconcile retained bindings without model dispatch or restored grants."""
     def write(text):
@@ -4409,6 +4452,8 @@ def main():
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--delete-session', metavar='SESSION_ID',
                        help='preview and confirm scoped native thread and metadata deletion; no model turns')
+    modes.add_argument('--inspect-work-turn', metavar='SESSION_ID',
+                       help='inspect the last saved workflow turn; no inference or checkpoint changes')
     modes.add_argument('--recover-recheck', metavar='SESSION_ID',
                        help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
@@ -4449,6 +4494,17 @@ def main():
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
             print('ModelMate cleanup: ' + terminal_text(message), file=sys.stderr)
+            return 1
+    if args.inspect_work_turn:
+        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+            parser.error('Work-turn inspection does not accept prompt/model/effort overrides')
+        try:
+            return run_work_turn_inspection(args.inspect_work_turn, sys.stdout)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+            print('ModelMate work inspection: ' + terminal_text(message), file=sys.stderr)
             return 1
     if args.recover_recheck:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':

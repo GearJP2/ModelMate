@@ -618,3 +618,18 @@ Summary ตอนออกจาก native workflow แสดง `turnElapsedSec
 window duration และ reset เดียวกันที่ยังไม่ถึงเวลา reset โปรแกรมแสดงผลต่างเป็น
 percentage points ใน `quotaWindowChanges` ข้อมูลที่เทียบไม่ได้แสดงเป็น null
 ผลต่างเป็นการเปลี่ยนแปลงระดับบัญชีในช่วงที่สังเกต และอาจรวมการใช้งานจาก client อื่น
+
+### ดูสถานะ native ของ work turn ที่บันทึกไว้
+
+จาก project เดิมและ state directory เดิม ใช้:
+
+```bash
+python3 modelmate.py --inspect-work-turn SESSION_ID
+```
+
+คำสั่งนี้อ่าน checkpoint และถาม Codex เฉพาะสถานะของ work thread และ turn
+ล่าสุดที่ตรงกับ binding ที่บันทึกไว้ โดยไม่เปิด turn และไม่แก้ checkpoint
+ค่า `historicalChecks` นับผลตรวจที่เก็บไว้ใน attempt นั้น
+ผล `terminal` ยืนยันสถานะของ turn เดิม ส่วนผลเทสต์สำหรับไฟล์ปัจจุบันต้องตรวจใหม่
+เมื่อ binding ไม่ครบ ประวัติไม่ตรง หรือ checkpoint ค้างเป็น running โปรแกรมจะรายงาน
+`unverified` และไม่เดาว่า turn เก่าคือ attempt ปัจจุบัน
