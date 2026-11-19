@@ -48,6 +48,29 @@ def dedupe_plan(role):
             }]}
 
 
+def incident_plan(role):
+    objective = (
+        'Analyze the synthetic incident using only these records. Do not call tools or access files. '
+        'All times are UTC on the same day. B: 09:10, elevated checkout errors first observed. '
+        'D: 09:23, checkout errors return to normal. A: 09:04, configuration rollout started. '
+        'C: 09:18, rollback started and upstream provider reported its own service recovery. '
+        'No causal investigation was recorded. Respond with one JSON object containing exactly these keys: '
+        'timeline (array of the four event IDs in chronological order), '
+        'observed_impact_minutes (integer between first and last recorded customer impact observations, '
+        'from first elevated errors until return to normal), '
+        'root_cause (one of config_confirmed, upstream_confirmed, unconfirmed), '
+        'competing_recovery_event (ID of the record containing both potential recovery explanations). '
+        'Use no Markdown or commentary.'
+    )
+    criterion = 'Correctly order events, compute the observed duration and preserve causal uncertainty.'
+    return {'version': 1, 'goal': 'Analyze the observed checkout incident timeline', 'clarifications': [],
+            'success_criteria': [criterion], 'steps': [{
+                'kind': 'implement', 'objective': objective, 'role': role, 'effort': 'low',
+                'risk': 'normal', 'reason': 'The given records support independent grading.',
+                'checks': [{'kind': 'rubric', 'criterion': criterion}],
+            }]}
+
+
 def prepare(case):
     scratch = Path(tempfile.mkdtemp(prefix='modelmate-routing-pilot-'))
     runtime = scratch / 'modelmate.py'
@@ -78,6 +101,8 @@ def prepare(case):
             plan = prepare_economy(project, role)
         elif case == 'dedupe':
             plan = dedupe_plan(role)
+        elif case == 'incident':
+            plan = incident_plan(role)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
@@ -132,11 +157,11 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     checks = project / 'checks.json'
     plan_path = project / 'plan.json'
     case_file = scratch / 'case.txt'
-    dedupe = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() == 'dedupe'
+    measured_pair = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() in ('dedupe', 'incident')
     mode = 'approve_plan'
     if checks.is_file():
         mode = 'ask_to_escalate'
-    elif dedupe:
+    elif measured_pair:
         mode = 'auto'
     args = [sys.executable, str(runtime), '--workflow', str(plan_path),
             '--workflow-mode', mode, '--role-model', 'standard=' + standard,
@@ -149,7 +174,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
         args.append('--suggest-models')
     if execute:
         args.append('--execute-workflow')
-    if measure_quota or (execute and dedupe):
+    if measure_quota or (execute and measured_pair):
         args.append('--measure-quota')
     if metrics_jsonl is not None:
         args.extend(['--metrics-jsonl', os.path.abspath(metrics_jsonl)])
@@ -196,6 +221,26 @@ def score_dedupe(answer):
                for name, values, expected in cases}
     print(json.dumps(results, sort_keys=True))
     return 0 if all(results.values()) else 1
+
+
+def score_incident(answer):
+    def unique_fields(pairs):
+        fields = {}
+        for key, value in pairs:
+            if key in fields:
+                raise ValueError('Duplicate incident answer key.')
+            fields[key] = value
+        return fields
+
+    result = json.loads(answer, object_pairs_hook=unique_fields)
+    expected = {'timeline': ['A', 'B', 'C', 'D'], 'observed_impact_minutes': 13,
+                'root_cause': 'unconfirmed', 'competing_recovery_event': 'C'}
+    if not isinstance(result, dict) or result.keys() != expected.keys():
+        raise ValueError('Expected the incident answer as one JSON object with the four requested keys.')
+    checks = {key: type(result[key]) is type(value) and result[key] == value
+              for key, value in expected.items()}
+    print(json.dumps(checks))
+    return 0 if all(checks.values()) else 1
 
 
 def read_metrics_row(path, row_number):
@@ -266,7 +311,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -276,9 +321,9 @@ def main():
     launch.add_argument('--execute', action='store_true', help='enable START and turn approval, which can use quota')
     launch.add_argument('--measure-quota', action='store_true', help='include observed live quota-window changes')
     launch.add_argument('--metrics-jsonl', help='append a private metrics report without account quota data')
-    grade = actions.add_parser('score', help='score the letter from the turn with trusted local cases')
+    grade = actions.add_parser('score', help='score a turn answer with the case rubric')
     grade.add_argument('answer')
-    grade.add_argument('--case', choices=('c1', 'dedupe'), default='c1')
+    grade.add_argument('--case', choices=('c1', 'dedupe', 'incident'), default='c1')
     analysis = actions.add_parser('compare', help='compare two private metrics records offline')
     analysis.add_argument('baseline', type=Path)
     analysis.add_argument('routed', type=Path)
@@ -294,7 +339,8 @@ def main():
                        args.measure_quota, args.metrics_jsonl)
         if args.action == 'compare':
             return compare(args.baseline, args.routed, args.baseline_row, args.routed_row)
-        return score_dedupe(args.answer) if args.case == 'dedupe' else score(args.answer)
+        scorers = {'c1': score, 'dedupe': score_dedupe, 'incident': score_incident}
+        return scorers[args.case](args.answer)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
 

@@ -1,5 +1,6 @@
 """Offline tests of the routing pilot's metrics reader and comparison."""
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -72,3 +73,35 @@ class PilotComparisonTests(unittest.TestCase):
         deltas = json.loads(result.stdout)['routedMinusBaseline']
         self.assertEqual(deltas['workTurnSeconds'], -0.6)
         self.assertIsNone(deltas['reportedWorkThreadTokens'])
+
+    def test_incident_plan_freezes_same_questions_and_previews_without_dispatch(self):
+        prepared = subprocess.check_output([sys.executable, str(PILOT), 'prepare', '--case', 'incident'],
+                                           text=True, timeout=5)
+        scratch = Path(prepared.strip())
+        self.addCleanup(shutil.rmtree, scratch)
+        plans = []
+        for arm, model in [('baseline', 'synthetic-strong'), ('routed', 'synthetic-standard')]:
+            result = subprocess.check_output([sys.executable, str(PILOT), 'run', str(scratch), arm,
+                '--standard', 'synthetic-standard', '--strong', 'synthetic-strong'], text=True, timeout=5)
+            self.assertIn(model + '/low', result)
+            self.assertIn('observed_impact_minutes', result)
+            self.assertFalse((scratch / arm / 'state').exists())
+            plan = json.loads((scratch / arm / 'project' / 'plan.json').read_text())
+            plan['steps'][0].pop('role')
+            plans.append(plan)
+        self.assertEqual(*plans)
+
+    def test_incident_scorer_detects_overstated_cause_and_duplicate_fields(self):
+        result = {'timeline': ['A', 'B', 'C', 'D'], 'observed_impact_minutes': 13,
+                  'root_cause': 'unconfirmed', 'competing_recovery_event': 'C'}
+        command = [sys.executable, str(PILOT), 'score', '--case', 'incident']
+        score = subprocess.run(command + [json.dumps(result)], capture_output=True, text=True, timeout=5)
+        self.assertEqual(score.returncode, 0, score.stderr)
+        result['root_cause'] = 'config_confirmed'
+        score = subprocess.run(command + [json.dumps(result)], capture_output=True, text=True, timeout=5)
+        self.assertEqual(score.returncode, 1)
+        self.assertFalse(json.loads(score.stdout)['root_cause'])
+        duplicate = json.dumps(result)[:-1] + ', "root_cause": "unconfirmed"}'
+        score = subprocess.run(command + [duplicate], capture_output=True, text=True, timeout=5)
+        self.assertEqual(score.returncode, 2)
+        self.assertIn('Duplicate incident answer key', score.stderr)

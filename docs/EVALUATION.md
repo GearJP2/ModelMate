@@ -228,3 +228,19 @@ JSONL records.
 Inspect `observedModelReroutes` when comparing records. If Codex reported a
 reroute for an arm, its measurements describe that arm as observed. A
 requested model alone cannot establish which model processed every response.
+
+### Measured incident-analysis pair (A1)
+
+`prepare --case incident` freezes a synthetic checkout incident with
+out-of-order event records and competing recovery explanations. The two arms
+receive the same records and produce one JSON object. A deterministic rubric
+checks chronological order, observed duration, causal uncertainty, and the
+event supporting the competing explanations. The grader rejects duplicate keys.
+
+Run the routed arm first for this case. Use `--execute --metrics-jsonl FILE`
+for each arm and its own file within the prepared pair directory. The launcher
+uses Auto and enables quota-window observations for both arms. After
+`START`, submit `/next` once, wait for the answer and CHECKING, and exit.
+Use `score --case incident` with the answer JSON and `compare` with the two
+files. This case measures one analysis attempt per arm. It cannot establish
+quota savings on its own.

@@ -2256,3 +2256,10 @@ The user ran `--check-catalog` with the list/tuple example and reported
 `gpt-6.2-sol/low` available in the live catalog. The observation covers the
 ready path at that moment. Admission failures remain covered by synthetic
 tests. The transcript did not include a runtime checksum.
+
+### Synthetic incident-analysis benchmark — MOCK_VERIFIED
+
+The A1 pilot prepares equivalent model inputs and independent scratch state
+for both arms. Offline previews requested distinct models without creating
+sessions. The rubric accepted a grounded structured answer and rejected an
+overstated cause and duplicate keys. No subscription turn was requested.
