@@ -160,7 +160,7 @@ def grade(case_name, patch, *, repair_format=False):
         return subprocess.run(
             [sys.executable, "-B", "-c", VERIFIER_RUNNER,
              module if selector is None else f"{module}.{selector}"],
-            cwd=root, timeout=60,
+            cwd=root, stdout=sys.stderr, timeout=60,
         ).returncode
 
 

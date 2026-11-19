@@ -1,4 +1,5 @@
 """Offline checks for the historical checkpoint preparation and grader."""
+import difflib
 import json
 from pathlib import Path
 import subprocess
@@ -75,9 +76,20 @@ class CheckpointPilotTests(unittest.TestCase):
             ["git", "diff", "e43bb08^", "e43bb08", "--", "modelmate.py"], cwd=REPO,
         )
         routed.write_bytes(raw.rstrip(b"\n"))
-        baseline.write_bytes(raw)
+        base, fixed = [
+            subprocess.check_output(["git", "show", f"{revision}:modelmate.py"],
+                                    cwd=REPO, text=True)
+            for revision in ("e43bb08^", "e43bb08")
+        ]
+        noisy_fixed = fixed + "\nprint('synthetic verifier stdout')\n"
+        baseline.write_text("".join(difflib.unified_diff(
+            base.splitlines(keepends=True), noisy_fixed.splitlines(keepends=True),
+            fromfile="a/modelmate.py", tofile="b/modelmate.py",
+        )), encoding="utf-8")
+
         result = self.run_pilot("grade-pair", "display", routed, baseline, "--trusted-patch")
         self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("synthetic verifier stdout", result.stderr)
         self.assertEqual(json.loads(result.stdout), {
             "routed": {"original": "patch_rejected", "afterFormatRepair": "passed"},
             "baseline": {"original": "passed", "afterFormatRepair": None},

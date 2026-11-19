@@ -455,4 +455,5 @@ means both original deliveries passed, 1 means one or both did not pass,
 and 2 means a test error or unavailable grader for at least one arm.
 A test that errors, cannot load, or is skipped reports `test_error`.
 A missing patch or verifier timeout reports `unavailable`. The report still
-includes the other arm's result.
+includes the other arm's result. Capture stdout for the JSON report and
+stderr for verifier diagnostics and any output from the candidate code.
