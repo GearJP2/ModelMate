@@ -244,3 +244,20 @@ uses Auto and enables quota-window observations for both arms. After
 Use `score --case incident` with the answer JSON and `compare` with the two
 files. This case measures one analysis attempt per arm. It cannot establish
 quota savings on its own.
+
+#### Measured A1 result
+
+Both completed arms scored 4/4 on the same structured incident answer
+and each used one timed attempt. The pilot wrote both JSONL files and
+the offline comparator reproduced the following measurements.
+
+| Arm | Requested model | Total tokens | Cached input subset | Observed turn seconds |
+| --- | --- | ---: | ---: | ---: |
+| Routed | gpt-6.2-sol/low | 13,322 | 9,856 | 3.360 |
+| Baseline | gpt-6.2-astra/low | 13,273 | 9,984 | 5.292 |
+
+Routed reported 49 more tokens and its observed turn was 1.932 seconds
+shorter. The secondary window showed no visible change for either arm;
+there was no comparable primary window reported by the routed arm.
+The cache differed and the runs were sequential. The two observations
+do not establish a quota saving or a general latency advantage.

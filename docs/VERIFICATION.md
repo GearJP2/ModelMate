@@ -2269,3 +2269,12 @@ Its displayed JSON passed all four independent rubric fields. The baseline
 was interrupted before START and had no metrics record. The launcher now
 returns exit 130 for Ctrl+C without printing a traceback. A subprocess
 smoke signal before START confirmed no state directory or model turn.
+
+A1 paired live result: both completed arms reached CHECKING and their
+identical answers passed all four rubric fields. Each had one timed work
+turn. The private JSONL files were read back locally and the comparator
+matched the user's output. The earlier baseline cancelled before START
+was excluded. Runtime SHA-256
+`35b5ab2598f64839e5f034dddbd593626c7877ced4ede3d8147af3f669065b24`
+matched the checkout. See EVALUATION.md for aggregate token and timing
+measurements. Account utilization and reset timestamps are omitted.
