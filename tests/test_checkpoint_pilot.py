@@ -82,3 +82,26 @@ class CheckpointPilotTests(unittest.TestCase):
             "routed": {"original": "patch_rejected", "afterFormatRepair": "passed"},
             "baseline": {"original": "passed", "afterFormatRepair": None},
         })
+
+    def test_pair_reports_import_errors_without_losing_other_result(self):
+        routed = self.scratch / "routed.patch"
+        baseline = self.scratch / "baseline.patch"
+        source = subprocess.check_output(
+            ["git", "show", "e43bb08^:modelmate.py"], cwd=REPO,
+        )
+        lines = source.splitlines(keepends=True)[:6]
+        routed.write_bytes(
+            b"--- a/modelmate.py\n+++ b/modelmate.py\n@@ -1,6 +1,7 @@\n"
+            + b"".join(b" " + line for line in lines[:3])
+            + b"+def invalid_syntax(\n"
+            + b"".join(b" " + line for line in lines[3:])
+        )
+        baseline.touch()
+
+        result = self.run_pilot("grade-pair", "display", routed, baseline, "--trusted-patch")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("SyntaxError", result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "routed": {"original": "test_error", "afterFormatRepair": None},
+            "baseline": {"original": "test_failed", "afterFormatRepair": None},
+        })

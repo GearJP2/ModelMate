@@ -114,6 +114,24 @@ EVIDENCE_BADGE_TEST = """
 """
 
 
+VERIFIER_RUNNER = """
+import sys
+import traceback
+import unittest
+
+sys.path.insert(0, 'tests')
+try:
+    suite = unittest.defaultTestLoader.loadTestsFromName(sys.argv[1])
+except Exception:
+    traceback.print_exc()
+    sys.exit(2)
+result = unittest.TextTestRunner().run(suite)
+if result.errors or not result.testsRun or result.skipped:
+    sys.exit(2)
+sys.exit(0 if result.wasSuccessful() else 1)
+"""
+
+
 class PatchRejected(ValueError):
     """Git could not apply the candidate diff."""
 
@@ -140,11 +158,14 @@ def grade(case_name, patch, *, repair_format=False):
             verifier_source = verifier_source.replace(anchor, EVIDENCE_BADGE_TEST + anchor)
         (root / verifier).write_text(verifier_source, encoding="utf-8")
         return subprocess.run(
-            [sys.executable, "-B", "-c",
-             "import sys, unittest; sys.path.insert(0, 'tests'); unittest.main(module=None)",
+            [sys.executable, "-B", "-c", VERIFIER_RUNNER,
              module if selector is None else f"{module}.{selector}"],
             cwd=root, timeout=60,
         ).returncode
+
+
+def test_verdict(exit_code):
+    return {0: "passed", 1: "test_failed", 2: "test_error"}.get(exit_code, "unavailable")
 
 
 def grade_delivery(case_name, patch_path):
@@ -152,12 +173,12 @@ def grade_delivery(case_name, patch_path):
     try:
         patch = patch_path.read_bytes()
         try:
-            result["original"] = "passed" if grade(case_name, patch) == 0 else "test_failed"
+            result["original"] = test_verdict(grade(case_name, patch))
         except PatchRejected:
             result["original"] = "patch_rejected"
             try:
                 repaired = grade(case_name, patch, repair_format=True)
-                result["afterFormatRepair"] = "passed" if repaired == 0 else "test_failed"
+                result["afterFormatRepair"] = test_verdict(repaired)
             except PatchRejected:
                 result["afterFormatRepair"] = "patch_rejected"
     except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as exc:
@@ -200,10 +221,12 @@ def main():
                 "baseline": grade_delivery(args.case, args.baseline),
             }
             print(json.dumps(results, indent=2))
-            if any("unavailable" in arm.values() for arm in results.values()):
+            if any({"unavailable", "test_error"}.intersection(arm.values())
+                   for arm in results.values()):
                 return 2
             return int(any(arm["original"] != "passed" for arm in results.values()))
-        return grade(args.case, args.patch.read_bytes(), repair_format=args.repair_format)
+        exit_code = grade(args.case, args.patch.read_bytes(), repair_format=args.repair_format)
+        return exit_code if exit_code in (0, 1) else 2
     except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as exc:
         print(f"Checkpoint pilot could not complete: {exc}", file=sys.stderr)
         return 2

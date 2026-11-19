@@ -332,9 +332,9 @@ applies changes to `modelmate.py` and restores the selected historical
 verifier from the fix revision. It runs candidate code under the caller's
 permissions. Review the patch and use an appropriately isolated environment
 before grading model-generated changes. Exit 0 means the test passed, exit 1
-means unittest reported a failure or error, and exit 2 covers preparation or
-execution errors caught by the wrapper. Inspect the test output to distinguish
-a regression from an unavailable verifier.
+means an assertion failed, and exit 2 covers patch rejection, test errors,
+skipped tests or an unavailable verifier. Inspect the test output for the
+specific cause.
 
 Offline smoke run for both cases produced the expected assertion failures with
 an empty patch and a passing test with the historical fix. Each prepared
@@ -452,5 +452,7 @@ python3 examples/checkpoint-pilot.py grade-pair display-evidence \
 The JSON report lists the routed arm first. It keeps the original delivery
 verdict and retries format repair only when Git rejected the original. Exit 0
 means both original deliveries passed, 1 means one or both did not pass,
-and 2 means grading was unavailable for at least one arm. The report is
-printed even when one patch is missing, so the available arm can be graded.
+and 2 means a test error or unavailable grader for at least one arm.
+A test that errors, cannot load, or is skipped reports `test_error`.
+A missing patch or verifier timeout reports `unavailable`. The report still
+includes the other arm's result.
