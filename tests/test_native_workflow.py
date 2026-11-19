@@ -37,7 +37,10 @@ for line in sys.stdin:
   result={'accountId':'different' if mode=='account-after-connect' and quota_reads>=3 else 'synthetic',
    'ordinaryUsageAllowed':mode!='quota' and not (mode=='quota-after-connect' and quota_reads>=3),
    'rateLimits':{'primary':{'usedPercent':10}}}
-  if mode=='unknown-after-connect' and quota_reads>=3:result.pop('ordinaryUsageAllowed')
+  if mode=='unknown' or (mode=='unknown-after-connect' and quota_reads>=3):
+   result.pop('ordinaryUsageAllowed')
+  if quota_reads==3 and mode=='quota-recovers':result['ordinaryUsageAllowed']=False
+  if quota_reads==3 and mode=='unknown-recovers':result.pop('ordinaryUsageAllowed')
   if mode=='metrics':result['rateLimits']['primary'].update(
    usedPercent=10+turn,windowDurationMins=300,resetsAt=quota_reset)
  elif method=='thread/start':result={'thread':{'id':'thread','cwd':req['params']['cwd'],
@@ -176,12 +179,15 @@ class NativeWorkflowTests(unittest.TestCase):
         self.assertEqual(summary['tokenUsage']['total']['totalTokens'], 22)
 
     def test_auth_quota_and_permission_mismatch_start_no_turn(self):
-        for mode in ('api','quota','permissions'):
+        for mode in ('api', 'quota', 'unknown', 'permissions'):
             with self.subTest(mode=mode):
                 self.trace.unlink(missing_ok=True)
                 c = self.backend(mode)
                 with self.assertRaises(ProbeError):c.connect(self.controller, '/synthetic', POLICY)
-                self.assertFalse(any(r.get('method')=='turn/start' for r in self.records()))
+                methods = {row['method'] for row in self.records()}
+                self.assertNotIn('turn/start', methods)
+                if mode != 'permissions':
+                    self.assertNotIn('thread/start', methods)
                 c.close()
 
     def test_mid_workflow_preflight_preserves_pause_reason_without_consuming_attempt(self):
@@ -205,6 +211,35 @@ class NativeWorkflowTests(unittest.TestCase):
                     self.assertFalse(any(row.get('method') == 'turn/start' for row in self.records()))
                 finally:
                     backend.close()
+
+    def test_quota_recovery_requires_explicit_continue_and_fresh_dispatch(self):
+        for mode, reason in (('quota-recovers', 'quota_exhausted'),
+                             ('unknown-recovers', 'quota_unknown')):
+            with self.subTest(mode=mode):
+                self.trace.unlink(missing_ok=True)
+                controller = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)
+                backend = self.backend(mode)
+                host = backend.connect(controller, '/synthetic', POLICY)
+                next_step = {'action': 'next', 'task_id': controller.task_id}
+
+                with self.assertRaisesRegex(ProbeError, reason):
+                    host(next_step)
+                state = controller.snapshot()
+                self.assertEqual(state['steps'][0]['attempts'], 0)
+                with self.assertRaisesRegex(ProbeError, 'not READY'):
+                    host(next_step)
+                self.assertFalse(any(row['method'] == 'turn/start' for row in self.records()))
+
+                controller.answer_pause(state['pause_token'], 'continue')
+                self.assertFalse(any(row['method'] == 'turn/start' for row in self.records()))
+                host(next_step)
+                backend.drain()
+                methods = [row['method'] for row in self.records()]
+                self.assertEqual(methods.count('turn/start'), 1)
+                self.assertEqual(methods.count('thread/start'), 1)
+                self.assertEqual(methods.count('account/rateLimits/read'), 4)
+                self.assertEqual(controller.snapshot()['steps'][0]['attempts'], 1)
+                backend.close()
 
     def test_declines_tool_request_and_pauses_without_accept(self):
         c = self.backend('approval'); self.start(c)

@@ -117,6 +117,7 @@ class WorkflowEntryTests(unittest.TestCase):
             ('text', 'synthetic-standard', 0, 'included_usage_available'),
             ('text', 'synthetic-missing', 2, 'included_usage_available'),
             ('quota', 'synthetic-standard', 2, 'quota_exhausted'),
+            ('unknown', 'synthetic-standard', 2, 'quota_unknown'),
             ('api', 'synthetic-standard', 2, 'chatgpt_login_required'),
         ]:
             with self.subTest(mode=mode, model=model):

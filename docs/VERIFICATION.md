@@ -2287,3 +2287,15 @@ A subsequent successful retry does not erase the original failure.
 Acceptance time is captured on DONE and excludes time spent in the CLI
 after acceptance. Synthetic tests verified pending, failed-then-passed,
 and durable CLI report cases. No new inference was requested.
+
+### Offline quota admission and explicit recovery
+
+The fake App Server exercises exhausted quota and missing admission evidence
+at catalog preview, native workflow connect, and the preflight before dispatch.
+The preview issues only metadata RPCs. Initial connect blocks before thread
+creation. A preflight denial after connect leaves the attempt count at zero.
+In the transient cases a second request while paused sends no turn. After an
+explicit continue and a fresh allowed quota read, the next request sends one
+turn on the existing thread. The test traces cover each RPC and assert the
+thread and attempt counts. These checks exercise controller admission and do
+not measure provider quota behavior.
