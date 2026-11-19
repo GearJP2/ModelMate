@@ -256,6 +256,7 @@ sys.exit(modelmate.main())
 
     def test_real_cli_loop_preserves_confirmation_input_and_autosaves_done(self):
         trace=self.root/'trace'
+        metrics = self.root / 'metrics.jsonl'
         source='import sys;sys.path.insert(0,'+repr(str(ROOT))+');import modelmate\n'
         source+='import os\nSERVER='+repr(SERVER)+'\nTRACE='+repr(str(trace))+'\n'
         source+='''
@@ -267,7 +268,8 @@ sys.exit(modelmate.main())
 '''
         env=dict(os.environ,XDG_STATE_HOME=str(self.root/'state'))
         p=subprocess.Popen([sys.executable,'-u','-c',source,'--workflow',str(self.path),
-                            '--role-model','standard=synthetic-standard','--execute-workflow'],
+                            '--role-model','standard=synthetic-standard','--execute-workflow',
+                            '--metrics-jsonl', str(metrics)],
                            cwd=self.root,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         def cleanup():
             if p.poll() is None:p.kill()
@@ -302,6 +304,10 @@ sys.exit(modelmate.main())
         self.assertEqual(stats['state'], 'DONE')
         self.assertEqual(stats['attempts'], 1)
         self.assertIsNone(stats['reportedModels'])
+        logged = json.loads(metrics.read_text())
+        self.assertEqual((logged['state'], logged['attempts']), ('DONE', 1))
+        self.assertEqual(logged['workTurnMeasurements'], stats['workTurnMeasurements'])
+        self.assertNotIn(evidence, metrics.read_text())
         with SessionStore(self.root,self.root/'state',read_only=True) as store:
             records=store.list_sessions()
             self.assertEqual(len(records),1)

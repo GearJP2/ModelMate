@@ -2163,3 +2163,12 @@ still reported separately. A two-step fake server verified distinct model
 selections and independent per-turn rows. Missing bindings and interrupted
 turns preserve unknown fields as appropriate. Targeted checks and the full
 offline suite passed 490 tests. No new live turn was requested.
+
+### Private workflow metrics JSONL — MOCK_VERIFIED
+
+Explicit `--metrics-jsonl FILE` appends one private summary record per
+started CLI session. It does not retain prompts, responses, session
+identifiers, or account quota observations. The Terminal summary is still
+printed. Synthetic checks verify runtime CLI output, permission and
+symlink rejection, repeated append, and rollback after a partial write.
+The report does not make any additional native requests.

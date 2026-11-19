@@ -4130,6 +4130,40 @@ def workflow_statistics(controller, started_at, *, now=None):
             'reportedModels': None, 'tokenUsage': None}
 
 
+def append_workflow_metrics(path, stats):
+    """Append a private, quota-free workflow summary without storing session data."""
+    import fcntl
+    import stat
+
+    fields = ('state', 'elapsedSeconds', 'includesUserWait', 'attempts', 'attemptsScope',
+              'elapsedScope', 'requestedSelections', 'recheckAttempts', 'reportedModels',
+              'tokenUsage', 'tokenUsageScope', 'turnElapsedSeconds', 'timedTurns',
+              'workTurnMeasurements')
+    report = {'schemaVersion': 1, **{name: stats.get(name) for name in fields}}
+    line = (json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')) + '\n').encode()
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o077 or info.st_nlink != 1):
+            raise ProbeError('Metrics output requires a private regular file owned by this user.')
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        original_size = os.fstat(fd).st_size
+        try:
+            pending = memoryview(line)
+            while pending:
+                written = os.write(fd, pending)
+                if written <= 0:
+                    raise OSError('Incomplete metrics write.')
+                pending = pending[written:]
+        except OSError:
+            os.ftruncate(fd, original_size)
+            raise
+    finally:
+        os.close(fd)
+
+
 def load_check_commands(path, plan, project):
     """User-owned bindings are separate from model proposals; loading never executes commands."""
     if path is None:
@@ -4219,11 +4253,13 @@ def read_workflow_confirmation(input_stream, write, *, confirmation='START', can
 
 
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
-                      experimental_rechecks=False, suggest_models=False, measure_quota=False):
+                      experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     if experimental_rechecks and resume_id is None:
         raise ProbeError('--experimental-rechecks requires --resume-workflow.')
+    if metrics_jsonl is not None and not execute:
+        raise ProbeError('--metrics-jsonl requires an executing workflow.')
     if suggest_models and resume_id is not None:
         raise ProbeError('--suggest-models requires a new --workflow plan.')
     if resume_id is not None:
@@ -4346,6 +4382,12 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         stats = workflow_statistics(observed, started_at, now=elapsed_end)
         stats.update(measurements)
         preview.write('สถิติ workflow: ' + json.dumps(stats, ensure_ascii=False))
+        if metrics_jsonl is not None:
+            try:
+                append_workflow_metrics(metrics_jsonl, stats)
+            except (ProbeError, OSError, ValueError, TypeError) as exc:
+                detail = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
+                preview.write('บันทึก metrics JSONL ไม่สำเร็จ · ' + detail)
 
 
 def run_work_turn_inspection(session_id, output):
@@ -4483,6 +4525,8 @@ def main():
     parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
     parser.add_argument('--measure-quota', action='store_true',
                         help='include matching quota window observations in the live workflow summary')
+    parser.add_argument('--metrics-jsonl', metavar='FILE',
+                        help='append a private live workflow metrics record without account quota data')
     parser.add_argument('--execute-workflow', action='store_true', help='opt-in native workflow; requires START confirmation')
     parser.add_argument('--experimental-rechecks', action='store_true',
                         help='experimental tool-check resume; /confirm-recheck consumes an extra model turn; native threads retained')
@@ -4496,6 +4540,8 @@ def main():
     args = parser.parse_args()
     if args.measure_quota and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
         parser.error('--measure-quota requires an executing workflow')
+    if args.metrics_jsonl is not None and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
+        parser.error('--metrics-jsonl requires an executing workflow')
     if args.suggest_models and not args.workflow:
         parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
@@ -4542,7 +4588,7 @@ def main():
             return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
                                      experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
-                                     measure_quota=args.measure_quota)
+                                     measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

@@ -121,7 +121,7 @@ def prepare_economy(project, role):
             ]}
 
 
-def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=False):
+def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=False, metrics_jsonl=None):
     if standard == strong or not standard.strip() or not strong.strip():
         raise ValueError('Choose two distinct model IDs that support low effort.')
     scratch = scratch.resolve(strict=True)
@@ -150,6 +150,8 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
         args.append('--execute-workflow')
     if measure_quota or (execute and dedupe):
         args.append('--measure-quota')
+    if metrics_jsonl is not None:
+        args.extend(['--metrics-jsonl', os.path.abspath(metrics_jsonl)])
     print('Runtime SHA-256 ' + hashlib.sha256(runtime.read_bytes()).hexdigest(), flush=True)
     return subprocess.run(args, cwd=project, env=dict(os.environ, XDG_STATE_HOME=str(state))).returncode
 
@@ -208,6 +210,7 @@ def main():
     launch.add_argument('--economy')
     launch.add_argument('--execute', action='store_true', help='enable START and turn approval, which can use quota')
     launch.add_argument('--measure-quota', action='store_true', help='include observed live quota-window changes')
+    launch.add_argument('--metrics-jsonl', help='append a private metrics report without account quota data')
     grade = actions.add_parser('score', help='score the letter from the turn with trusted local cases')
     grade.add_argument('answer')
     grade.add_argument('--case', choices=('c1', 'dedupe'), default='c1')
@@ -217,7 +220,8 @@ def main():
             prepare(args.case)
             return 0
         if args.action == 'run':
-            return run(args.scratch, args.arm, args.standard, args.strong, args.execute, args.economy, args.measure_quota)
+            return run(args.scratch, args.arm, args.standard, args.strong, args.execute, args.economy,
+                       args.measure_quota, args.metrics_jsonl)
         return score_dedupe(args.answer) if args.case == 'dedupe' else score(args.answer)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

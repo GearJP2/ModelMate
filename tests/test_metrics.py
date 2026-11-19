@@ -1,12 +1,60 @@
 """Metrics preserve observed counters and exclude incomparable quota windows."""
+import json
+import os
+from pathlib import Path
+import stat
+import tempfile
 import time
 import unittest
 from unittest.mock import Mock, patch
 
-from modelmate import NativeWorkflowConnection, native_token_snapshot, quota_window_changes, quota_windows
+from modelmate import (NativeWorkflowConnection, ProbeError, append_workflow_metrics,
+                       native_token_snapshot, quota_window_changes, quota_windows)
 
 
 class MetricsTests(unittest.TestCase):
+    def test_jsonl_appends_only_metrics_to_a_private_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'metrics.jsonl'
+            for attempt in (1, 2):
+                append_workflow_metrics(path, {'state': 'DONE', 'attempts': attempt,
+                    'quotaWindowChanges': [{'beforePercent': 15}], 'prompt': 'private', 'session': 'private'})
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual([row['attempts'] for row in rows], [1, 2])
+            self.assertEqual(rows[0]['schemaVersion'], 1)
+            self.assertNotIn('quotaWindowChanges', rows[0])
+            self.assertNotIn('private', path.read_text())
+
+    def test_jsonl_rejects_symlinks_and_nonprivate_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'existing'
+            path.write_text('original')
+            path.chmod(0o644)
+            with self.assertRaises(ProbeError):
+                append_workflow_metrics(path, {})
+            link = Path(root) / 'link'
+            link.symlink_to(path)
+            with self.assertRaises(OSError):
+                append_workflow_metrics(link, {})
+            self.assertEqual(path.read_text(), 'original')
+
+    def test_jsonl_partial_append_failure_preserves_existing_record(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'metrics.jsonl'
+            append_workflow_metrics(path, {'state': 'DONE'})
+            original = path.read_bytes()
+            write = os.write
+            with patch('modelmate.os.write') as mocked:
+                def partial(fd, payload):
+                    if mocked.call_count == 1:
+                        return write(fd, payload[:8])
+                    raise OSError('injected write failure')
+                mocked.side_effect = partial
+                with self.assertRaises(OSError):
+                    append_workflow_metrics(path, {'state': 'PAUSED'})
+            self.assertEqual(path.read_bytes(), original)
+
     def test_token_usage_requires_valid_complete_core_counters(self):
         counters = {'inputTokens': 7, 'cachedInputTokens': 3, 'outputTokens': 2,
                     'reasoningOutputTokens': 1, 'totalTokens': 9}

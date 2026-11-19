@@ -194,3 +194,9 @@ change across either observation. The cache difference, sequential run order
 and account-level reporting prevent attributing those window changes to a
 model or estimating quota savings. The user exited both completed turns
 before rubric entry, so arm quality comes from independent scoring.
+
+For repeated paired runs, pass `--metrics-jsonl FILE` to each live pilot arm.
+Use separate files for the baseline and routed arms to preserve their labels.
+These files store the same timing and token counters shown in the summary,
+with no account quota observations. Keep any quota comparisons separately,
+using only the observations approved for that evaluation.
