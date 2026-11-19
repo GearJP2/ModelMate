@@ -2263,3 +2263,9 @@ The A1 pilot prepares equivalent model inputs and independent scratch state
 for both arms. Offline previews requested distinct models without creating
 sessions. The rubric accepted a grounded structured answer and rejected an
 overstated cause and duplicate keys. No subscription turn was requested.
+
+A1 partial live result: the routed arm requested `gpt-6.2-sol/low` once.
+Its displayed JSON passed all four independent rubric fields. The baseline
+was interrupted before START and had no metrics record. The launcher now
+returns exit 130 for Ctrl+C without printing a traceback. A subprocess
+smoke signal before START confirmed no state directory or model turn.

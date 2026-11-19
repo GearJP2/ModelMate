@@ -341,6 +341,8 @@ def main():
             return compare(args.baseline, args.routed, args.baseline_row, args.routed_row)
         scorers = {'c1': score, 'dedupe': score_dedupe, 'incident': score_incident}
         return scorers[args.case](args.answer)
+    except KeyboardInterrupt:
+        return 130
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
 
