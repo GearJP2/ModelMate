@@ -2049,3 +2049,10 @@ This covers live metric availability on one work turn. `reportedModels`
 remained null and unchanged displayed percentages do not establish zero
 quota use. No account-level percentages, reset timestamps, or session IDs
 are retained in this record.
+
+Measured C3 partial live result: the baseline requested `gpt-6.2-astra/low`
+once and its answer passed all five de-duplication cases. The live summary
+contained token counters, one timed terminal turn, and two comparable quota
+windows. The initial routed session exited before dispatch and reported zero
+attempts and zero timed turns. It provides no paired measurement. Account
+usage values, reset timestamps, and session IDs are omitted.
