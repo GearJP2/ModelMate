@@ -409,3 +409,22 @@ on both cases, while its reported token count was higher in both. These
 observations support handling patch format separately from escalation. They do
 not establish subscription quota savings or justify enabling the trial routing
 rule as a default.
+
+### Verify the wording mismatch offline
+
+On temporary copies of the two live patches, replace only the warning text
+with `ผลปัจจุบันยังไม่ทราบ ห้ามรันซ้ำอัตโนมัติ`. Grade each copy with
+`--repair-format`. Both passed 8/8. This is a human correction after the
+initial delivery and does not change either live verdict.
+
+For the next independent case, write down what the verifier checks before
+running either arm. If a UI string is a compatibility requirement, put the
+required literal in the task. For a warning that allows equivalent wording,
+verify the branch and regression behavior with tests and assess the two
+message requirements independently of model identity. Record raw patch
+applicability, applicability after format repair, and the acceptance verdict.
+Keep human code corrections separate from format repair.
+
+Use the existing selection rule in production while the trial rule is
+evaluated. The next comparison should use a fresh display task so the two
+previous cases remain evidence about the original prompts and verifier.
