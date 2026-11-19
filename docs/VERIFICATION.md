@@ -2247,3 +2247,12 @@ connection, exact encoding, rejected destinations and invalid result
 schemes. Live testing requires a configured instance that enables JSON.
 The agent's metadata-only catalog preflight still stopped before App Server
 initialization. No subscription turns were requested.
+
+### Metadata-only workflow catalog preflight — scoped LIVE_VERIFIED
+
+The user ran `--check-catalog` with the list/tuple example and reported
+`state: ready`, `quotaReason: included_usage_available`, and
+`modelTurnsRequested: 0`. Both the baseline and the only step found
+`gpt-6.2-sol/low` available in the live catalog. The observation covers the
+ready path at that moment. Admission failures remain covered by synthetic
+tests. The transcript did not include a runtime checksum.

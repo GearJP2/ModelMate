@@ -6,7 +6,7 @@ for the particular path, client version and platform being shipped. See
 
 | Gate | Evidence available | Remaining |
 | --- | --- | --- |
-| G1 account and dispatch | User-run workflow catalogue and requested-model paths, context recall and scoped resume | Check the metadata-only catalog preview live. Reported dispatch telemetry is incomplete. |
+| G1 account and dispatch | Live metadata-only catalog preview, requested-model paths, context recall and scoped resume | Reported dispatch telemetry is incomplete. |
 | G2 permissions and lifecycle | Scoped live native workflow denial, interruption, metadata inspection, recheck recovery and scoped deletion | Verify retained recheck STOP, varied permission failures and actual disconnect/recovery. |
 | G3 private search | Live Thai Wikipedia lookup and offline general search through a configured SearXNG endpoint | Live SearXNG instance validation. Hosted search remains disabled in work threads. |
 | G4 quota and billing | Offline fail-closed paths and live telemetry with observed account windows | Live exhausted/unknown admission paths and version-specific billing guarantees. |
