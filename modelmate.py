@@ -3267,7 +3267,8 @@ class NativeWorkflowConnection(Connection):
                         if step_id == active['step_id']]
         observed = {'step': state['step_index'] + 1, 'cycle': active['cycle'] + 1,
                     'attempt': active['number'], 'requestedSelection': dict(selection),
-                    'terminalStatus': None, 'elapsedSeconds': None, 'lastReportedTokens': None}
+                    'terminalStatus': None, 'elapsedSeconds': None, 'lastReportedTokens': None,
+                    'modelReroutes': []}
         self._work_turn_measurements.append(observed)
         self._measured_turn = {'id': None, 'started': time.monotonic(), 'observation': observed}
         if self.measure_quota and self._quota_first is None:
@@ -3302,6 +3303,14 @@ class NativeWorkflowConnection(Connection):
             if snapshot is not None:
                 self._latest_usage = snapshot
                 observed['lastReportedTokens'] = snapshot['last']
+        elif method == 'model/rerouted' and params.get('turnId') == current['id']:
+            previous, target = params.get('fromModel'), params.get('toModel')
+            if (previous != target and all(isinstance(model, str) and 0 < len(model) <= 256
+                                          and model.isascii() and model.isprintable() and not any(c.isspace() for c in model)
+                                          for model in (previous, target))):
+                reroute = {'fromModel': previous, 'toModel': target}
+                if reroute not in observed['modelReroutes']:
+                    observed['modelReroutes'].append(reroute)
         elif method == 'turn/completed' and observed['terminalStatus'] is None:
             turn = params.get('turn')
             if (isinstance(turn, dict) and turn.get('id') == current['id']

@@ -239,6 +239,9 @@ def comparison_metrics(report):
     return {
         'state': report.get('state'), 'attempts': attempts, 'timedTurns': timed,
         'requestedSelections': report.get('requestedSelections'),
+        'observedModelReroutes': [transition for turn in turns if isinstance(turn, dict)
+                                 and isinstance(turn.get('modelReroutes'), list)
+                                 for transition in turn['modelReroutes']] if isinstance(turns, list) else [],
         'allRecordedWorkTurnsCompletedHere': complete,
         'workTurnSeconds': number(report.get('turnElapsedSeconds')) if complete else None,
         'cliWallSecondsIncludingUserWait': number(report.get('elapsedSeconds'))

@@ -647,3 +647,9 @@ python3 modelmate.py --inspect-work-turn SESSION_ID
 ไม่เปิดสิทธิ์ให้ผู้อื่น ข้อมูลในไฟล์ประกอบด้วยสถานะ เวลา จำนวน attempts
 โมเดลที่ร้องขอ และ token counters โดยไม่มี prompt, คำตอบ, session ID หรือ
 quota window ของบัญชี ถ้าบันทึกไม่ได้ Terminal ยังแสดงสรุปตามปกติ
+
+หาก Codex ส่งเหตุการณ์เปลี่ยนโมเดลของ work turn โปรแกรมแสดงคู่
+`fromModel` และ `toModel` ใน `workTurnMeasurements[].modelReroutes`
+และรวมไว้ใน JSONL เมื่อเปิดบันทึก ค่า `requestedSelection` ยังแสดงโมเดล
+และ effort ที่ร้องขอ ส่วน `reportedModels` อาจเป็น null เพราะเหตุการณ์
+เปลี่ยนโมเดลเพียงอย่างเดียวไม่บอกโมเดลที่ประมวลผลทุก response

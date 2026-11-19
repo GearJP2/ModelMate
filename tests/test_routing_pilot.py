@@ -37,13 +37,18 @@ class PilotComparisonTests(unittest.TestCase):
 
     def test_completed_pair_compares_seconds_total_tokens_and_cached_subset(self):
         self.write(self.baseline, self.measured(100, 20, 2.3))
-        self.write(self.routed, self.measured(90, 0, 1.7))
+        routed = self.measured(90, 0, 1.7)
+        transition = {'fromModel': 'synthetic-standard', 'toModel': 'synthetic-fallback'}
+        routed['workTurnMeasurements'][0]['modelReroutes'] = [transition]
+        self.write(self.routed, routed)
         result = self.cli()
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
         self.assertEqual(report['routedMinusBaseline'], {'workTurnSeconds': -0.6,
             'reportedWorkThreadTokens': -10, 'reportedCachedInputTokens': -20})
         self.assertEqual(report['routed']['cliWallSecondsIncludingUserWait'], 60)
+        self.assertEqual(report['baseline']['observedModelReroutes'], [])
+        self.assertEqual(report['routed']['observedModelReroutes'], [transition])
 
     def test_ambiguous_selection_requires_row_and_resumed_partial_metrics_stay_unknown(self):
         complete = self.measured(100, 20, 2.3)

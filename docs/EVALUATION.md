@@ -224,3 +224,7 @@ leaves incomplete timing, resumed runs with earlier attempts, and missing
 latest token snapshots as null where applicable. Apply the case scorer or
 rubric separately for quality. Account quota observations are not in the
 JSONL records.
+
+Inspect `observedModelReroutes` when comparing records. If Codex reported a
+reroute for an arm, its measurements describe that arm as observed. A
+requested model alone cannot establish which model processed every response.

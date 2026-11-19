@@ -57,6 +57,12 @@ for line in sys.stdin:
     emit({'method':'item/completed','params':{'threadId':thread_id,'turnId':turn_id,
      'item':{'id':'answer','type':'agentMessage','text':'SYNTHETIC_ANSWER all tests passed DONE' if (thread_id,turn_id)==('thread',str(turn)) else 'FOREIGN_ANSWER'}}})
   if mode=='metrics':
+   event={'method':'model/rerouted','params':{'threadId':'thread','turnId':str(turn),
+    'fromModel':req['params']['model'],'toModel':'synthetic-fallback','reason':'synthetic'}}
+   for observation in (event,event,dict(event,params=dict(event['params'],threadId='foreign',toModel='other')),
+                       dict(event,params=dict(event['params'],turnId='unknown',toModel='other')),
+                       dict(event,params=dict(event['params'],toModel='invalid model'))):
+    emit(observation)
    total={'inputTokens':9,'cachedInputTokens':3,'outputTokens':2,'reasoningOutputTokens':1,'totalTokens':11}
    for thread_id, turn_id, value in [('thread',str(turn),total),('other',str(turn),dict(total,totalTokens=99)),
                                      ('thread','old',dict(total,totalTokens=99))]:
@@ -145,6 +151,7 @@ class NativeWorkflowTests(unittest.TestCase):
         self.assertEqual((turn['step'], turn['cycle'], turn['attempt'], turn['terminalStatus']), (1, 1, 1, 'completed'))
         self.assertEqual(turn['requestedSelection'], {'model': POLICY['standard'], 'effort': 'low'})
         self.assertEqual(turn['lastReportedTokens']['totalTokens'], 11)
+        self.assertEqual(turn['modelReroutes'], [{'fromModel': POLICY['standard'], 'toModel': 'synthetic-fallback'}])
         self.assertEqual(sum(row.get('method') == 'turn/start' for row in self.records()), 1)
 
     def test_per_turn_measurements_include_roles_without_summing_last_snapshots(self):

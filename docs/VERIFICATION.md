@@ -2180,3 +2180,13 @@ record with no App Server use. Synthetic CLI cases verify exact deltas,
 explicit selection in multi-row logs, and unknown deltas for incomplete
 coverage or a missing latest token event. This tool compares observations
 only. It does not infer quality or account quota savings from the logs.
+
+### Work-turn model reroute observations — MOCK_VERIFIED
+
+The installed App Server 0.170.0 schema exposes `model/rerouted` with thread
+and turn IDs and source and target model IDs. The workflow records each
+unique source/target transition only on its matching work turn and shares
+those observations with the offline metrics comparison. It does not store
+the reroute reason or infer model dispatch for all responses. Synthetic
+tests cover duplicate notifications, foreign threads, unrelated turns,
+and malformed model IDs. No live reroute was requested.
