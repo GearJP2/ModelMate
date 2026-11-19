@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modelmate import ChatShell, ProbeError, WorkflowController, run_workflow_file, SessionStore, main, workflow_statistics, WorkflowHost, read_workflow_confirmation
+from modelmate import Connection, ChatShell, ProbeError, WorkflowController, run_workflow_file, SessionStore, main, workflow_statistics, WorkflowHost, read_workflow_confirmation
 from test_routing import PLAN, CATALOG, POLICY, QUOTA
 from test_native_workflow import SERVER
 
@@ -111,6 +111,30 @@ class WorkflowEntryTests(unittest.TestCase):
             self.assertIn(selection, output.getvalue())
         self.assertEqual(json.loads(self.path.read_text()), self.plan)
 
+    def test_live_catalog_preview_uses_metadata_only_and_returns_admission_reasons(self):
+        trace = self.root / 'catalog-trace'
+        for mode, model, code, quota in [
+            ('text', 'synthetic-standard', 0, 'included_usage_available'),
+            ('text', 'synthetic-missing', 2, 'included_usage_available'),
+            ('quota', 'synthetic-standard', 2, 'quota_exhausted'),
+            ('api', 'synthetic-standard', 2, 'chatgpt_login_required'),
+        ]:
+            with self.subTest(mode=mode, model=model):
+                trace.unlink(missing_ok=True)
+                connection = Connection([sys.executable, '-u', '-c', SERVER, str(trace), mode], 1)
+                output = io.StringIO()
+                with patch('modelmate.Connection', return_value=connection):
+                    self.assertEqual(run_workflow_file(self.path, ['standard=' + model],
+                        None, False, io.StringIO(), output, check_catalog=True), code)
+                report = json.loads(output.getvalue().split('Workflow preflight · ')[-1])
+                self.assertEqual(report['quotaReason'], quota)
+                self.assertEqual(report['modelTurnsRequested'], 0)
+                if mode == 'text':
+                    self.assertEqual(report['steps'][0]['available'], code == 0)
+                methods = {json.loads(line)['method'] for line in trace.read_text().splitlines()}
+                self.assertLessEqual(methods, {'initialize', 'initialized', 'account/read',
+                                               'account/rateLimits/read', 'model/list'})
+
     def test_unsupported_checks_and_clarification_cannot_execute(self):
         with patch('modelmate.NativeWorkflowConnection.__init__',side_effect=AssertionError('backend forbidden')):
             for kind in ('test','lint','source'):
@@ -186,7 +210,7 @@ class WorkflowEntryTests(unittest.TestCase):
         self.assertEqual(c.snapshot()['active_attempt']['checks'],{})
 
     def test_workflow_option_conflicts_fail_before_backend(self):
-        for args in (['--execute-workflow'], ['--suggest-models'],['--workflow',str(self.path),'prompt'],
+        for args in (['--execute-workflow'], ['--suggest-models'], ['--check-catalog'],['--workflow',str(self.path),'prompt'],
                      ['--workflow',str(self.path),'--resume','a'],['--workflow',str(self.path),'--live']):
             with patch('sys.argv',['modelmate.py']+args),patch('sys.stderr',new_callable=io.StringIO):
                 with self.assertRaises(SystemExit) as exc:main()

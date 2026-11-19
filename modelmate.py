@@ -4261,12 +4261,55 @@ def read_workflow_confirmation(input_stream, write, *, confirmation='START', can
         return False
 
 
+def check_workflow_account(plan, policy):
+    """Read account policy and catalog for an explicit workflow without creating a thread."""
+    connection = Connection(['codex', 'app-server', '--stdio',
+        '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'], 15)
+    try:
+        connection.request('initialize', {'clientInfo': {'name': 'modelmate_workflow_preflight', 'version': '0.1.0'}})
+        connection.send({'method': 'initialized'})
+        quota = refresh_quota(connection)
+        report = {'state': 'paused', 'quotaReason': quota['reason'], 'modelTurnsRequested': 0}
+        if quota['state'] != 'allow':
+            return report
+        try:
+            catalog = read_models(connection)
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            return dict(report, catalogReason='catalog_unavailable')
+        steps = []
+        baseline = {'model': policy['standard'], 'effort': 'low'}
+        try:
+            select_model(catalog, baseline['model'], baseline['effort'])
+            baseline['available'] = True
+        except ProbeError as exc:
+            baseline.update(available=False, reason=str(exc))
+        for index, step in enumerate(plan['steps'], 1):
+            requested = {'step': index, 'role': step['role'],
+                         'model': policy[step['role']], 'effort': step['effort']}
+            try:
+                select_role(catalog, step['role'], policy, step['effort'])
+                requested['available'] = True
+            except ProbeError as exc:
+                requested.update(available=False, reason=str(exc))
+            steps.append(requested)
+        if time.monotonic() - quota['checked_at'] > 15:
+            report['quotaReason'] = 'quota_stale'
+        elif baseline['available'] and all(step['available'] for step in steps):
+            report['state'] = 'ready'
+        return dict(report, baseline=baseline, steps=steps)
+    finally:
+        connection.close()
+
+
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
-                      experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None):
+                      experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
+                      check_catalog=False):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     if experimental_rechecks and resume_id is None:
         raise ProbeError('--experimental-rechecks requires --resume-workflow.')
+    if check_catalog and (execute or resume_id is not None):
+        raise ProbeError('--check-catalog requires a new workflow preview without execution.')
     if metrics_jsonl is not None and not execute:
         raise ProbeError('--metrics-jsonl requires an executing workflow.')
     if suggest_models and resume_id is not None:
@@ -4321,7 +4364,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     if experimental_rechecks:
         preview.write('Experimental recheck · standard=' + policy['standard'] + '/low · native threads retained')
         preview.write('/recheck แสดงแผน; /confirm-recheck TOKEN ใช้โควตาเพิ่มหนึ่ง verification turn')
-    if not execute:
+    if not execute and not check_catalog:
         preview.write('Preview เท่านั้น ไม่เปิด Codex ไม่ใช้โควตา; --execute-workflow เพื่อเริ่มแบบ opt-in')
         return 0
     required = {(i + 1, j + 1) for i, step in enumerate(plan['steps'])
@@ -4346,6 +4389,10 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         raise ProbeError('Every test/lint check needs an explicit --check-commands binding before execution.')
     if any(step['effort'] == 'ultra' for step in plan['steps']):
         raise ProbeError('Automatic delegation effort is not enabled.')
+    if check_catalog:
+        report = check_workflow_account(plan, policy)
+        preview.write('Workflow preflight · ' + json.dumps(report, ensure_ascii=True))
+        return 0 if report['state'] == 'ready' else 2
     preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · resume ต้องตรวจ native state ใหม่')
     preview.write('ใช้โควตา subscription เมื่อกด /next หรือยืนยัน recheck; พิมพ์ START แล้ว Enter เพื่อยืนยันแผน หรือ CANCEL เพื่อยกเลิก:')
     output.flush()
@@ -4527,6 +4574,8 @@ def main():
                        help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
+    parser.add_argument('--check-catalog', action='store_true',
+                        help='validate a new workflow against live catalog and quota without inference')
     parser.add_argument('--suggest-models', action='store_true',
                         help='recommend role/effort from explicit step risk and checks; requires a new --workflow')
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
@@ -4547,6 +4596,8 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.check_catalog and (not args.workflow or args.execute_workflow):
+        parser.error('--check-catalog requires --workflow without --execute-workflow')
     if args.measure_quota and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
         parser.error('--measure-quota requires an executing workflow')
     if args.metrics_jsonl is not None and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
@@ -4597,7 +4648,8 @@ def main():
             return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
                                      experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
-                                     measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl)
+                                     measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl,
+                                     check_catalog=args.check_catalog)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

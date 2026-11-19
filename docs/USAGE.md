@@ -653,3 +653,18 @@ quota window ของบัญชี ถ้าบันทึกไม่ได
 และรวมไว้ใน JSONL เมื่อเปิดบันทึก ค่า `requestedSelection` ยังแสดงโมเดล
 และ effort ที่ร้องขอ ส่วน `reportedModels` อาจเป็น null เพราะเหตุการณ์
 เปลี่ยนโมเดลเพียงอย่างเดียวไม่บอกโมเดลที่ประมวลผลทุก response
+
+### ตรวจ catalog และโควตาก่อนเริ่ม workflow
+
+```bash
+python3 "$HOME/Coding/Hobby/ModelMate/modelmate.py" \
+  --workflow "$HOME/Coding/Hobby/ModelMate/examples/explain-lists.json" \
+  --role-model standard=gpt-6.2-sol --check-catalog
+```
+
+`--check-catalog` ใช้กับ preview ของแผนใหม่และใช้ร่วมกับ
+`--suggest-models` ได้ โปรแกรมตรวจ ChatGPT login, สถานะโควตา และ
+model/effort ที่ขอสำหรับ baseline และทุกขั้น โดยไม่สร้าง thread หรือเปิด turn
+ผล `ready` หมายถึงผ่านการตรวจ ณ เวลาที่อ่านข้อมูล
+ผล `paused` (exit 2) จะแสดงเหตุผลหรือขั้นที่เลือก model/effort ไม่ได้
+ตอนเริ่มงานจริง ระบบยังอ่านโควตาและ catalog ใหม่อีกครั้ง

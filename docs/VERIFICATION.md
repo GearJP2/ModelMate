@@ -2190,3 +2190,13 @@ those observations with the offline metrics comparison. It does not store
 the reroute reason or infer model dispatch for all responses. Synthetic
 tests cover duplicate notifications, foreign threads, unrelated turns,
 and malformed model IDs. No live reroute was requested.
+
+### Metadata-only workflow catalog preflight — MOCK_VERIFIED
+
+`--check-catalog` checks an explicit new plan against ChatGPT login, quota,
+and visible model/effort entries for the baseline and each step. The
+transport uses the metadata-only connection. Offline fake App Server
+cases cover ready, unavailable model, exhausted quota, and API-key login.
+No thread, model turn, or ModelMate session is created. The check reports
+catalog support and account quota as observed; it does not prove dispatch
+or reserve quota.
