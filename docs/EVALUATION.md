@@ -339,3 +339,30 @@ a regression from an unavailable verifier.
 Offline smoke run for both cases produced the expected assertion failures with
 an empty patch and a passing test with the historical fix. Each prepared
 workspace had no Git history.
+
+### First live display pair
+
+The user ran Codex CLI 0.170.0 with read-only tools and low reasoning effort
+against separate exports of the display base. Both models proposed changing
+the displayed step state for the matching completed attempt while keeping
+the saved checkpoint and evidence intact.
+
+| Requested model | Original patch | Regression check after format repair | CLI-reported tokens |
+| --- | --- | --- | ---: |
+| gpt-6.2-sol | Rejected as corrupt | Pass | 31,561 |
+| gpt-6.2-astra | Rejected as corrupt | Pass | 8,825 |
+
+The original patch files lacked a trailing newline. Adding it and using
+`git apply --recount` in fresh base exports allowed both patches to apply.
+The grader verified regenerated diffs without changing either proposed code
+edit. Count both original deliveries as failed and both format-repaired
+changes as passing. No additional model turn was used for the repair. Token
+counts alone cannot establish subscription quota savings.
+
+Freeze the candidate rule for the next evaluation. Start with Standard for
+display-only checkpoint changes that have independent offline verification.
+Keep the existing selection for persisted state changes. A patch formatting
+error calls for local syntax validation before considering model escalation.
+The resume case sits outside the display-only scope and can check that the
+rule does not lower the model for that case. A separate unseen display case
+is needed to test whether the proposed downgrade generalizes.
