@@ -2971,6 +2971,57 @@ class LiveChatConnection(Connection):
 
 
 
+def native_token_snapshot(value):
+    if not isinstance(value, dict):
+        return None
+    fields = ('inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens')
+    result = {}
+    for key in ('total', 'last'):
+        row = value.get(key)
+        if not isinstance(row, dict) or any(type(row.get(k)) is not int or row[k] < 0 for k in fields):
+            return None
+        result[key] = {k: row[k] for k in fields}
+        cache_write = row.get('cacheWriteInputTokens')
+        if type(cache_write) is int and cache_write >= 0:
+            result[key]['cacheWriteInputTokens'] = cache_write
+    return result
+
+
+def quota_windows(quota):
+    buckets = quota.get('rateLimitsByLimitId')
+    if buckets is None:
+        bucket = quota.get('rateLimits')
+        identity = bucket.get('limitId') if isinstance(bucket, dict) else None
+        buckets = {identity or 'default': bucket} if isinstance(identity or 'default', str) else {}
+    windows = {}
+    if not isinstance(buckets, dict):
+        return windows
+    for bucket, data in buckets.items():
+        if not isinstance(bucket, str) or not bucket or not isinstance(data, dict):
+            continue
+        for key in ('primary', 'secondary'):
+            row = data.get(key)
+            if not isinstance(row, dict):
+                continue
+            used, duration, reset = (row.get(k) for k in ('usedPercent', 'windowDurationMins', 'resetsAt'))
+            if (type(used) in (int, float) and 0 <= used <= 100
+                    and type(duration) is int and duration > 0 and type(reset) is int and reset > 0):
+                windows[bucket, key] = (used, duration, reset)
+    return windows
+
+
+def quota_window_changes(before, after, sampled_at):
+    changes = []
+    for (bucket, window), (used, duration, reset) in sorted(before.items()):
+        current = after.get((bucket, window))
+        if current is None or current[1:] != (duration, reset) or reset <= sampled_at or current[0] < used:
+            continue
+        changes.append({'bucket': terminal_text(bucket), 'window': window, 'windowDurationMins': duration,
+                        'resetsAt': reset, 'beforePercent': used, 'afterPercent': current[0],
+                        'deltaPercentagePoints': round(current[0] - used, 6)})
+    return changes or None
+
+
 class NativeWorkflowConnection(Connection):
     """Opt-in transport for an explicit host plan; no classifier or native approval acceptance."""
     allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume', 'thread/turns/list', 'turn/start', 'turn/interrupt'}
@@ -2986,6 +3037,28 @@ class NativeWorkflowConnection(Connection):
         self._displayed = set()
         self.store = self.session_id = self._attachment = self.controller = None
         self._closed = False
+        self.measure_quota = False
+        self._quota_first = self._quota_ready = None
+        self._measured_turn = self._latest_usage = None
+        self._turn_seconds = 0.0
+        self._terminal_turns = 0
+
+    def workflow_measurements(self):
+        changes = None
+        if self._quota_first:
+            try:
+                account = self.request('account/read', {'refreshToken': False}).get('account')
+                if isinstance(account, dict) and account.get('type') == 'chatgpt':
+                    quota = self.request('account/rateLimits/read')
+                    if quota.get('accountId') == self.account_id:
+                        changes = quota_window_changes(self._quota_first, quota_windows(quota), time.time())
+            except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                pass
+        return {'tokenUsage': self._latest_usage,
+                'tokenUsageScope': 'last_observed_work_thread_update' if self._latest_usage else None,
+                'quotaWindowChanges': changes,
+                'turnElapsedSeconds': round(self._turn_seconds, 3) if self._terminal_turns else None,
+                'timedTurns': self._terminal_turns}
 
     def connect(self, controller, cwd, role_policy=None, *, store=None):
         if self.host is not None or self.thread_id is not None:
@@ -3134,6 +3207,8 @@ class NativeWorkflowConnection(Connection):
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             raise WorkflowPreflightPause('catalog_unavailable') from exc
         self.account_id = decision['account_id']
+        if self.measure_quota and self._quota_first is None:
+            self._quota_ready = quota_windows(quota)
         if self.host is not None:
             self.host.catalog = copy.deepcopy(catalog)
             self.host.role_policy = copy.deepcopy(self.role_policy)
@@ -3153,6 +3228,9 @@ class NativeWorkflowConnection(Connection):
         self._displayed.clear()
         verification = [dict(check=index + 1, **spec) for (step_id, index), spec in sorted(self.host._specs.items())
                         if step_id == active['step_id']]
+        started = time.monotonic()
+        if self.measure_quota and self._quota_first is None:
+            self._quota_first = self._quota_ready
         result = self.request('turn/start', {'threadId': self.thread_id, 'model': selection['model'],
             'effort': selection['effort'], 'input': [{'type': 'text', 'text': json.dumps({
                 'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step'],
@@ -3167,7 +3245,26 @@ class NativeWorkflowConnection(Connection):
             record = self.store.read(self.session_id)
             record['turn_id'] = turn['id']
             self.store.save(record)
+        self._measured_turn = {'id': turn['id'], 'started': started, 'terminal': False}
         return {'thread_id': self.thread_id, 'turn_id': turn['id']}
+
+    def _observe_measurement(self, message):
+        current = self._measured_turn
+        params = message.get('params')
+        if current is None or not isinstance(params, dict) or params.get('threadId') != self.thread_id:
+            return
+        method = message['method']
+        if method == 'thread/tokenUsage/updated' and params.get('turnId') == current['id']:
+            snapshot = native_token_snapshot(params.get('tokenUsage'))
+            if snapshot is not None:
+                self._latest_usage = snapshot
+        elif method == 'turn/completed' and not current['terminal']:
+            turn = params.get('turn')
+            if (isinstance(turn, dict) and turn.get('id') == current['id']
+                    and turn.get('status') in ('completed', 'failed', 'interrupted')):
+                current['terminal'] = True
+                self._turn_seconds += time.monotonic() - current['started']
+                self._terminal_turns += 1
 
     def interrupt(self, binding):
         if binding['thread_id'] != self.thread_id:
@@ -3222,6 +3319,7 @@ class NativeWorkflowConnection(Connection):
                 self.host.observe_native(message)
             else:
                 self.host.observe_native(message)
+                self._observe_measurement(message)
                 self._display_answer(message)
         if self.stdout_closed:
             raise ProbeError('Workflow backend disconnected; no automatic replay.')
@@ -4062,7 +4160,7 @@ def read_workflow_confirmation(input_stream, write, *, confirmation='START', can
 
 
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
-                      experimental_rechecks=False, suggest_models=False):
+                      experimental_rechecks=False, suggest_models=False, measure_quota=False):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     if experimental_rechecks and resume_id is None:
@@ -4156,6 +4254,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         backend = NativeWorkflowConnection(['codex', 'app-server', '--stdio',
             '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
             '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
+        backend.measure_quota = measure_quota
         if resume_id is None:
             host = backend.connect(controller, os.getcwd(), policy, store=store)
         else:
@@ -4173,14 +4272,21 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
                         workflow_action=host, catalog=snapshot['catalog'], role_policy=policy,
                         recheck_commands=commands if experimental_rechecks else None)
     finally:
+        elapsed_end = time.monotonic()
+        measurements = {}
         try:
             if backend is not None:
-                backend.close()
+                try:
+                    measurements = backend.workflow_measurements()
+                finally:
+                    backend.close()
         finally:
             if store is not None:
                 store.close()
         observed = backend.controller if backend is not None and backend.controller is not None else controller
-        preview.write('สถิติ workflow: ' + json.dumps(workflow_statistics(observed, started_at), ensure_ascii=False))
+        stats = workflow_statistics(observed, started_at, now=elapsed_end)
+        stats.update(measurements)
+        preview.write('สถิติ workflow: ' + json.dumps(stats, ensure_ascii=False))
 
 
 def run_recheck_recovery(session_id, input_stream, output):
@@ -4277,6 +4383,8 @@ def main():
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
     parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
+    parser.add_argument('--measure-quota', action='store_true',
+                        help='include matching quota window observations in the live workflow summary')
     parser.add_argument('--execute-workflow', action='store_true', help='opt-in native workflow; requires START confirmation')
     parser.add_argument('--experimental-rechecks', action='store_true',
                         help='experimental tool-check resume; /confirm-recheck consumes an extra model turn; native threads retained')
@@ -4288,6 +4396,8 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.measure_quota and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
+        parser.error('--measure-quota requires an executing workflow')
     if args.suggest_models and not args.workflow:
         parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
@@ -4322,7 +4432,8 @@ def main():
         try:
             return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
-                                     experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models)
+                                     experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
+                                     measure_quota=args.measure_quota)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

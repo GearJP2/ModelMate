@@ -2014,3 +2014,16 @@ Earlier incomplete baseline attempts remain separate from the graded pair.
 Model and token telemetry were null. The baseline review ran after a
 reconnect, and its prior test was historical on resume. No inference-time
 or quota comparison is supported by these observations.
+
+### Native workflow usage measurements — MOCK_VERIFIED
+
+Generated the App Server JSON schemas with installed Codex CLI 0.170.0.
+The workflow summary reads matching `thread/tokenUsage/updated` snapshots
+and counts observed terminal work turns once. It reports thread totals
+as supplied and does not sum repeated counters or infer a reported model.
+The opt-in quota read compares known windows for the same account. Synthetic
+coverage exercises foreign and incomplete token updates, interrupted and
+duplicate terminal observations, account mismatch, resets, missing windows,
+and a matched pre/post window without an additional turn. The full offline
+suite passed 484 tests. No subscription turns were run and the telemetry
+fields have not been confirmed with a live account.

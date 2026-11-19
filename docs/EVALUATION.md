@@ -121,3 +121,13 @@ session. Both used low effort, two attempts and zero rechecks for the graded
 pair. The result covers routing and approval on this staged fixture. Quota
 savings remain unmeasured. See [VERIFICATION.md](VERIFICATION.md) for the
 earlier incomplete baseline attempts and evidence scope.
+
+### Measure the next live pair
+
+For a fresh pair prepared from a runtime with metrics, add `--measure-quota`
+to both executing `routing-pilot.py run` commands. Preserve each arm's report
+and note concurrent account use or quota resets. Use `turnElapsedSeconds` and
+`timedTurns` for the observed work turns, and keep CLI wall time separately.
+An interrupted or resumed arm may have partial timing and a historical thread
+token total. A missing or unchanged window percentage cannot establish the
+arm's quota cost. The metadata read adds no model turn.

@@ -591,3 +591,23 @@ python3 verify.py --probe-recheck-recovery SCRATCH
 ตัวตรวจจำลอง checkpoint ที่ขาด terminal event ในสำเนาแยก อ่าน native metadata เดิม
 ไม่ขอหยุด ไม่เรียกโมเดล และไม่แก้ต้นฉบับ สำเนาจะถูกลบเฉพาะเมื่อผ่านทั้งหมด
 หากไม่ผ่านจะเก็บสำเนาไว้พร้อมแสดง path; native threads เดิมยังอยู่
+
+### วัด usage ของ workflow
+
+Summary ตอนออกจาก native workflow แสดง `turnElapsedSeconds` สำหรับ turn
+ของ work thread ที่เห็นสถานะสุดท้าย และ `timedTurns` เป็นจำนวน turn ที่วัดได้
+ตัวเลขนี้วัดตั้งแต่ส่งคำขอจน client รับ terminal event รวมเวลาเครื่องมือและการส่งข้อมูล
+ส่วน `elapsedSeconds` เป็นเวลาของ CLI session รวมเวลาที่ผู้ใช้รอหรือกรอกคำสั่ง
+
+`tokenUsage` คือ snapshot ล่าสุดจาก event ที่ตรงกับ work thread และ turn
+ที่ส่งใน CLI session นี้ โดย `total` เป็นยอดสะสมตามที่ Codex รายงานใน thread
+เดิมซึ่งอาจรวมประวัติก่อน resume และ `last` เป็นค่าที่ Codex รายงานล่าสุด
+ตัวเลข cached/reasoning แสดงแยกตามข้อมูลที่ส่งมา โดยไม่บวกซ้ำเข้ายอดรวม
+เวลาของ recheck thread แยกไม่ถูกรวมในเวลาที่วัดของ work thread
+หากไม่มีข้อมูลจาก Codex ค่าที่เกี่ยวข้องจะแสดงเป็น null
+
+เพิ่ม `--measure-quota` คู่กับ `--execute-workflow` เพื่อเก็บ quota ก่อน turn
+แรกและอ่าน metadata อีกครั้งก่อนปิด หากเป็นบัญชีและ bucket เดียวกัน มี
+window duration และ reset เดียวกันที่ยังไม่ถึงเวลา reset โปรแกรมแสดงผลต่างเป็น
+percentage points ใน `quotaWindowChanges` ข้อมูลที่เทียบไม่ได้แสดงเป็น null
+ผลต่างเป็นการเปลี่ยนแปลงระดับบัญชีในช่วงที่สังเกต และอาจรวมการใช้งานจาก client อื่น

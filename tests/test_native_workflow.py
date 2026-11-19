@@ -14,8 +14,9 @@ from modelmate import NativeWorkflowConnection, WorkflowController, ProbeError, 
 from test_routing import CATALOG, PLAN, POLICY
 
 SERVER = r'''
-import json,sys
+import json,sys,time
 trace,mode=sys.argv[1:]
+quota_reset=int(time.time())+3600
 turn=0
 quota_reads=0
 catalog=[{'model':'synthetic-'+r,'defaultReasoningEffort':'low',
@@ -36,6 +37,8 @@ for line in sys.stdin:
    'ordinaryUsageAllowed':mode!='quota' and not (mode=='quota-after-connect' and quota_reads>=3),
    'rateLimits':{'primary':{'usedPercent':10}}}
   if mode=='unknown-after-connect' and quota_reads>=3:result.pop('ordinaryUsageAllowed')
+  if mode=='metrics':result['rateLimits']['primary'].update(
+   usedPercent=10+turn,windowDurationMins=300,resetsAt=quota_reset)
  elif method=='thread/start':result={'thread':{'id':'thread','cwd':req['params']['cwd'],
   'ephemeral':req['params'].get('ephemeral',True),'modelProvider':'openai'},'approvalPolicy':'on-request','approvalsReviewer':'user',
   'sandbox':{'type':'workspaceWrite' if mode=='permissions' else 'readOnly'}}
@@ -52,6 +55,12 @@ for line in sys.stdin:
    for thread_id,turn_id in (('foreign',str(turn)),('thread','foreign'),('thread',str(turn)),('thread',str(turn))):
     emit({'method':'item/completed','params':{'threadId':thread_id,'turnId':turn_id,
      'item':{'id':'answer','type':'agentMessage','text':'SYNTHETIC_ANSWER all tests passed DONE' if (thread_id,turn_id)==('thread',str(turn)) else 'FOREIGN_ANSWER'}}})
+  if mode=='metrics':
+   total={'inputTokens':9,'cachedInputTokens':3,'outputTokens':2,'reasoningOutputTokens':1,'totalTokens':11}
+   for thread_id, turn_id, value in [('thread',str(turn),total),('other',str(turn),dict(total,totalTokens=99)),
+                                     ('thread','old',dict(total,totalTokens=99))]:
+    emit({'method':'thread/tokenUsage/updated','params':{'threadId':thread_id,'turnId':turn_id,
+     'tokenUsage':{'last':value,'total':value}}})
   if mode=='approval':emit({'id':'approval','method':'item/commandExecution/requestApproval',
    'params':{'threadId':'thread','turnId':str(turn),'itemId':'tool','command':'write','cwd':'/synthetic'}})
   elif mode!='text-only':emit({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':str(turn),'status':'completed'}}})
@@ -96,6 +105,20 @@ class NativeWorkflowTests(unittest.TestCase):
         self.assertEqual(start['approvalPolicy'], 'on-request')
         self.assertTrue(start['ephemeral'])
         self.assertEqual(start['config']['web_search'], 'disabled')
+
+    def test_summary_uses_only_matching_native_token_events(self):
+        backend = self.backend('metrics')
+        backend.measure_quota = True
+        self.start(backend)
+        backend.drain()
+        summary = backend.workflow_measurements()
+        self.assertEqual(summary['timedTurns'], 1)
+        self.assertGreaterEqual(summary['turnElapsedSeconds'], 0)
+        self.assertEqual(summary['tokenUsage']['total']['totalTokens'], 11)
+        self.assertEqual(summary['tokenUsage']['last']['cachedInputTokens'], 3)
+        self.assertEqual(summary['tokenUsage']['last']['reasoningOutputTokens'], 1)
+        self.assertEqual(summary['quotaWindowChanges'][0]['deltaPercentagePoints'], 1)
+        self.assertEqual(sum(row.get('method') == 'turn/start' for row in self.records()), 1)
 
     def test_auth_quota_and_permission_mismatch_start_no_turn(self):
         for mode in ('api','quota','permissions'):
