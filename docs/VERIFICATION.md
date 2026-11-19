@@ -2140,3 +2140,14 @@ checks, and `modelTurnsRequested: 0`. This confirms read-only inspection of
 that known completed native work turn. The historical count does not
 revalidate the current project files. The transcript did not include a
 runtime checksum.
+
+### Resume checkpoint preservation — MOCK_VERIFIED
+
+Native workflow resume holds the session writer lock, inspects project and
+thread identity, turn history, and returned permissions, then commits the
+restored checkpoint. Rejected resumes preserve the original metadata
+byte for byte. Fake App Server cases cover project, activity, ephemeral
+state, provider, permission weakening, turn identity, malformed status
+and missing history. The existing crash-gap protection continues to clear
+the old turn ID atomically when reserving a new attempt. No native turn
+was requested for this regression.

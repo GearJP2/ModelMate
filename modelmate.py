@@ -3134,9 +3134,10 @@ class NativeWorkflowConnection(Connection):
         self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
         return self.host
 
-    def _attach(self, controller, fresh):
+    def _attach(self, controller, fresh, *, persist_initial=True):
         attachment = self.store.workflow(self.session_id, fresh['quota'], fresh['checked_at'],
-                                         fresh['catalog'], self.role_policy, controller=controller)
+                                         fresh['catalog'], self.role_policy, controller=controller,
+                                         persist_initial=persist_initial)
         restored = attachment.__enter__()
         self.controller = restored
         self._attachment = attachment
@@ -3152,7 +3153,7 @@ class NativeWorkflowConnection(Connection):
         self.role_policy = copy.deepcopy(role_policy)
         fresh = self.preflight()
         self.store, self.session_id = store, session_id
-        controller = self._attach(None, fresh)
+        controller = self._attach(None, fresh, persist_initial=False)
         if any(op['status'] in ('pending', 'unknown') for op in controller.recheck_operations()):
             raise ProbeError('Unresolved recheck retained; inspect --show-workflow before native recovery. No replay.')
         record = store.read(session_id)
@@ -3180,13 +3181,16 @@ class NativeWorkflowConnection(Connection):
         LiveChatConnection._check_thread(self, result.get('thread'), tid)
         if not native_permissions_confirmed(result):
             raise ProbeError('Resumed workflow permissions were not confirmed.')
-        self.thread_id = tid
-        self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
+        host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
         if latest is not None:
-            self.host._seen.add((tid, latest['id']))
+            host._seen.add((tid, latest['id']))
         if active is not None:
-            self.host.reconcile({'thread_id': tid, 'turn_id': latest['id']}, latest['status'])
-        return self.host
+            host.reconcile({'thread_id': tid, 'turn_id': latest['id']}, latest['status'])
+        if active is None or active['status'] == 'completed':
+            # A previously running attempt was already saved by reconciliation.
+            store.save_workflow(session_id, controller)
+        self.thread_id, self.host = tid, host
+        return host
 
     def open_recheck(self, evidence_id, spec, selection, on_change):
         if (self._closed or self.store is None or self._attachment is None or self.host is None
@@ -3966,11 +3970,14 @@ class SessionStore:
         self.save(record)
 
     @contextmanager
-    def workflow(self, session_id, quota, checked_at, catalog, role_policy=None, *, controller=None):
-        """Hold one writer lock and persist every controller transition before returning to its caller."""
+    def workflow(self, session_id, quota, checked_at, catalog, role_policy=None, *, controller=None,
+                 persist_initial=True):
+        """Hold the writer lock for transitions and optionally defer the initial resume checkpoint."""
         import hashlib
         with self._lock(session_id):
             record = self.read(session_id)
+            if record.get('deletion_state') != 'none':
+                raise ProbeError('Cannot attach a workflow to unbound or deleting metadata.')
             decision = quota_decision(quota, checked_at)
             if decision['state'] != 'allow':
                 raise ProbeError('Workflow attachment paused: ' + decision['reason'])
@@ -3985,7 +3992,8 @@ class SessionStore:
                 raise ProbeError('Workflow is already attached or closed; restore its checkpoint instead.')
             elif controller._account_id is None:
                 controller._account_id = decision['account_id']
-            self.save_workflow(session_id, controller)
+            if persist_initial:
+                self.save_workflow(session_id, controller)
             controller._persist = lambda current: self.save_workflow(session_id, current)
             try:
                 yield controller

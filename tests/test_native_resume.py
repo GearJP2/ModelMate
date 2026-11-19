@@ -147,11 +147,14 @@ class NativeResumeTests(unittest.TestCase):
 
     def test_recovery_refuses_project_active_ephemeral_permission_and_turn_mismatch(self):
         sid,_=self.completed_first()
+        path = self.store.directory / (sid + '.json')
+        before = path.read_bytes()
         for mode in ('project','active','ephemeral','permissions','turn_mismatch','provider','status_shape','resume_active','empty_history'):
             with self.subTest(mode=mode):
                 connection=self.backend(mode)
                 with self.assertRaises(ProbeError):connection.resume(self.store,sid,self.project,POLICY,self.raw)
                 connection.close()
+                self.assertEqual(path.read_bytes(), before)
         self.assertEqual(sum(r.get('method')=='turn/start' for r in self.records()),1)
         self.assertEqual(sum(r.get('method')=='thread/start' for r in self.records()),1)
 
