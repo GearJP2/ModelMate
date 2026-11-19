@@ -2278,3 +2278,12 @@ was excluded. Runtime SHA-256
 `35b5ab2598f64839e5f034dddbd593626c7877ced4ede3d8147af3f669065b24`
 matched the checkout. See EVALUATION.md for aggregate token and timing
 measurements. Account utilization and reset timestamps are omitted.
+
+### First-pass outcome and acceptance time — MOCK_VERIFIED
+
+Workflow metrics derive first-pass counts from evaluated first attempts.
+Pending, interrupted, and unassessed attempts are tracked as unknown.
+A subsequent successful retry does not erase the original failure.
+Acceptance time is captured on DONE and excludes time spent in the CLI
+after acceptance. Synthetic tests verified pending, failed-then-passed,
+and durable CLI report cases. No new inference was requested.

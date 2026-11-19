@@ -236,6 +236,26 @@ class WorkflowEntryTests(unittest.TestCase):
         for start, now in ((True, 12), (10, 9), (10, float('nan'))):
             with self.assertRaises(ProbeError):workflow_statistics(c, start, now=now)
 
+    def test_outcome_statistics_keep_first_failure_and_stop_clock_at_acceptance(self):
+        controller = WorkflowController(json.dumps(self.plan), CATALOG, POLICY)
+        for result in ('fail', 'pass'):
+            attempt = controller.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)['dispatch']['attempt_id']
+            controller.finish_attempt(attempt, 'completed')
+            evidence = controller.record_check(attempt, 0, origin='manual', result=result,
+                reference='user check', finding='observed')
+            if result == 'fail':
+                pending = workflow_statistics(controller, 10, now=11)
+                self.assertEqual(pending['firstPassSteps'], {'passed': 0, 'failed': 0, 'unknown': 1})
+                self.assertIsNone(pending['firstPassRate'])
+            controller.evaluate_attempt(attempt)
+        with patch('modelmate.time.monotonic', return_value=12):
+            controller.finish_task({0: [evidence['id']]})
+        stats = workflow_statistics(controller, 10, now=20)
+        self.assertEqual(stats['firstPassSteps'], {'passed': 0, 'failed': 1, 'unknown': 0})
+        self.assertEqual(stats['firstPassRate'], 0)
+        self.assertEqual(stats['timeToAcceptanceSeconds'], 2)
+        self.assertEqual(stats['elapsedSeconds'], 10)
+
     def test_full_cli_tty_accepts_typed_and_multiline_pasted_confirmation(self):
         import pty
         source = 'import sys;sys.path.insert(0,'+repr(str(ROOT))+');import modelmate\n'
@@ -331,6 +351,9 @@ sys.exit(modelmate.main())
         logged = json.loads(metrics.read_text())
         self.assertEqual((logged['state'], logged['attempts']), ('DONE', 1))
         self.assertEqual(logged['workTurnMeasurements'], stats['workTurnMeasurements'])
+        self.assertEqual(logged['firstPassRate'], 1)
+        self.assertIsNotNone(logged['timeToAcceptanceSeconds'])
+        self.assertLessEqual(logged['timeToAcceptanceSeconds'], logged['elapsedSeconds'])
         self.assertNotIn(evidence, metrics.read_text())
         with SessionStore(self.root,self.root/'state',read_only=True) as store:
             records=store.list_sessions()

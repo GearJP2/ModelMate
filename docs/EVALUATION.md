@@ -261,3 +261,12 @@ shorter. The secondary window showed no visible change for either arm;
 there was no comparable primary window reported by the routed arm.
 The cache differed and the runs were sequential. The two observations
 do not establish a quota saving or a general latency advantage.
+
+Compare `firstPassSteps` and `firstPassRate` for workflows that recorded
+their checks. Unknown first attempts are shown separately. To compare
+`timeToAcceptanceSeconds`, run both arms to DONE and record their rubric
+and criterion coverage before exit. The timer includes user wait and
+corrections in the CLI session and stops at acceptance. When a prior
+attempt was made in another session, the comparison tool suppresses this
+timing delta. Earlier pilots that exited before final assessment retain
+their independent grades and have no in-workflow acceptance time.
