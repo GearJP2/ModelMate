@@ -202,3 +202,8 @@ The shared-server probe passed on Codex CLI 0.171.0. The installed recovery
 command still opens a separate App Server, where live observations have
 disagreed with the owning server during an active turn. The shared transport
 is currently available in the verifier.
+
+With `--disconnect-recheck-owner`, the same probe also passed after closing
+the recheck owner connection. The turn stayed active on the shared server,
+and a surviving client stopped it and reconciled its terminal state. The
+shared server and parent workflow client were running throughout.

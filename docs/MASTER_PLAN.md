@@ -1020,3 +1020,10 @@ and observes the same binding through the surviving connection. Offline
 tests cover a surviving active turn and a terminal turn. Next eligible live
 evidence is the opt-in owner-disconnect run in VERIFICATION.md. Approval
 ownership remains a separate shared-server check.
+
+P12 shared-server owner disconnect evidence (2026-11-21): the user-run probe
+at `ee5bc76` passed all nine checks on Codex CLI 0.171.0. The recheck turn
+remained active after owner disconnect and a surviving client interrupted
+it without replay. Next eligible P12 work is a synthetic shared-server
+approval routing and owner-loss probe that grants no approval. This evidence
+does not widen runtime transport or permission policy. See VERIFICATION.md.

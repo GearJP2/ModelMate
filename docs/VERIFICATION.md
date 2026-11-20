@@ -2620,3 +2620,22 @@ immediately terminal observation establishes the status at that read;
 it does not alone establish the cause. The server and parent workflow
 client remain connected through recovery. The probe covers owner connection
 loss only, not server loss, approval ownership or production transport.
+
+### Shared-server owner disconnect with a surviving turn — scoped LIVE_VERIFIED
+
+The user ran source `ee5bc76` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. The checkout matched runtime SHA-256
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier SHA-256
+`e3091bee9a0cab0bdb281fdedf70f2f789b44b5978f6535d7b51d216bdeb98dc`.
+All nine disconnect probe checks passed. The observer saw the exact
+bound turn active both before and after the owner disconnected. It sent
+STOP through the surviving connection, received acknowledgement, and
+then observed interrupted status. The retained checkpoint was UNVERIFIED
+with an unknown finish followed by an interrupted reconcile event.
+The sentinel was intact.
+
+This covers the surviving-active branch with the App Server and parent
+workflow client still running. Shared-server approval routing and pending
+approval behavior on connection loss remain unverified, as do server
+loss and installed runtime recovery through a shared transport.
