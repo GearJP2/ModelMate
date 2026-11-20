@@ -2496,3 +2496,23 @@ existing cleanup can cancel the synthetic turn through the owner. That
 cleanup does not count as an observer STOP. A stopped owner at the second
 read leaves a timing race possible. The fake suite exercises disagreement
 without changing the production recovery decision.
+
+### Owner activation race in the retained STOP probe
+
+The user ran source `76e6ad7` with Codex CLI `0.171.0` and requested
+`gpt-6.1-sol/low`. The runtime hash
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier hash
+`d57ba0c3c44da5c02fae5e3db9caa4621c70b7c15825092277c16abca58517be`
+matched. The owner moved from `idle` before the inspection to `active`
+afterward, while the independent observer reported `interrupted`.
+The sentinel was intact. No independent STOP was acknowledged. This run
+does not show how the independent observer reports a turn already active
+before inspection.
+
+The revised probe waits up to two seconds for owner activation before any
+independent native thread or turn observation. It reports the initial owner
+state and the last owner state before inspection. If activation is not
+observed, it reports `owner_active_not_observed` and skips the independent
+inspection and STOP. The offline probe tests cover delayed activation and
+the bounded wait. The next live check uses the same opt-in STOP command.

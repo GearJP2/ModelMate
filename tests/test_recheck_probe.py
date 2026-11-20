@@ -19,6 +19,7 @@ trace,mode=sys.argv[1:]
 state=Path(trace+'.state')
 data=json.loads(state.read_text()) if state.exists() else {'threads':{},'threadCount':0,'turnCount':0}
 recheck_reads=0
+owner_reads=0
 observer=False
 def emit(value):print(json.dumps(value),flush=True)
 for line in sys.stdin:
@@ -46,6 +47,10 @@ for line in sys.stdin:
   result={'thread':data['threads'][params['threadId']]['thread'],'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'readOnly'}}
   if mode=='stop_observer_terminal' and observer and params['threadId']=='thread2':
    result['thread']=dict(result['thread'],status={'type':'notLoaded'})
+  if mode in ('stop_owner_starting','stop_owner_never_active') and not observer and params['threadId']=='thread2':
+   owner_reads+=1
+   if owner_reads==1 or mode=='stop_owner_never_active':
+    result['thread']=dict(result['thread'],status={'type':'idle'})
  elif method=='thread/turns/list':
   latest=data['threads'][params['threadId']]['latest'];result={'data':[] if latest is None else [latest]}
   if mode=='stop_observer_terminal' and observer and params['threadId']=='thread2':
@@ -232,6 +237,18 @@ class RecheckProbeTests(unittest.TestCase):
         self.assertEqual(result['ownerStatusAfterInspection'], 'active')
         self.assertEqual(result['activeRecheckObserved'], 'unverified')
         self.assertEqual(result['nativeRecheckStopped'], 'unverified')
+        self.assertNotIn('stopRpcAcknowledged', result)
+
+    def test_stop_probe_waits_for_owner_to_become_active(self):
+        result = self.probe('stop_owner_starting', stop=True)
+        self.assertEqual(result['ownerInitialStatus'], 'idle')
+        self.assertEqual(result['ownerStatusBeforeInspection'], 'active')
+        self.assertTrue(all(result[key] == 'passed' for key in RECHECK_STOP_KEYS), result)
+
+    def test_stop_probe_does_not_consult_observer_before_owner_is_active(self):
+        result = self.probe('stop_owner_never_active', stop=True)
+        self.assertEqual(result['stopObservationReason'], 'owner_active_not_observed')
+        self.assertNotIn('observedBeforeStop', result)
         self.assertNotIn('stopRpcAcknowledged', result)
 
 

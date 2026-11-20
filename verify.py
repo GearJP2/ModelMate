@@ -891,8 +891,23 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
             # transport open until recovery observes a terminal event.
             with closing(recovery) as observer:
                 recovery = None
-                owner_thread = read_recovery_thread(child, str(project), child.thread_id)
-                result['ownerStatusBeforeInspection'] = owner_thread['status']['type']
+                owner_deadline = time.monotonic() + min(timeout, 2)
+                owner_timeout = child.timeout
+                try:
+                    while (remaining := owner_deadline - time.monotonic()) > 0:
+                        child.timeout = min(owner_timeout, remaining)
+                        owner_thread = read_recovery_thread(child, str(project), child.thread_id)
+                        owner_status = owner_thread['status']['type']
+                        result.setdefault('ownerInitialStatus', owner_status)
+                        result['ownerStatusBeforeInspection'] = owner_status
+                        if owner_status == 'active':
+                            break
+                        time.sleep(min(.05, max(0, owner_deadline - time.monotonic())))
+                    else:
+                        result['stopObservationReason'] = 'owner_active_not_observed'
+                        return result
+                finally:
+                    child.timeout = owner_timeout
                 report = observer.inspect_recheck(store, sid)
                 result['observedBeforeStop'] = report.get('status') or report['state']
                 if 'reason' in report:

@@ -984,3 +984,9 @@ unverified. The revised opt-in probe samples the owning connection around
 the outside observation to diagnose cross-process disagreement separately
 from a turn that settles early. The next eligible live check is the
 diagnostic STOP run in VERIFICATION.md.
+
+P12 STOP activation timing (2026-11-21): the user-run diagnostic showed the
+owner transition from idle to active across the outside observation. The probe
+now waits for owner activation before the outside read. Live retained STOP
+is still unverified. Next evidence is an outside observation bracketed by
+owner activation, or an acknowledged STOP followed by interrupted status.
