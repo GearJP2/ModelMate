@@ -2516,3 +2516,30 @@ state and the last owner state before inspection. If activation is not
 observed, it reports `owner_active_not_observed` and skips the independent
 inspection and STOP. The offline probe tests cover delayed activation and
 the bounded wait. The next live check uses the same opt-in STOP command.
+
+### Separate App Servers disagree about an active recheck — scoped live observation
+
+The user ran source `3fecef1` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. Hashes matched runtime
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier
+`a52250f63da57855459dd1ed4a967844a44ee15838a7eaf2ed76e1d6df2225bf`.
+The owner progressed from idle to active, and reported active both before
+and after the independent observer reported interrupted. No observer STOP
+was attempted. The retained checkpoint was UNVERIFIED and its last event
+was a finish with interrupted status and no exit code after owner cleanup.
+The scratch sentinel was intact. This establishes a disagreement in the
+tested topology. It does not establish a general rule for all Codex threads
+or verify the retained STOP path.
+
+The installed CLI offers a Unix listener and a stdio proxy with a socket
+override. A metadata-only smoke attempt used a temporary private socket,
+with no managed daemon changes or model turns. In the sandbox the server
+exited before creating a socket with a read-only-filesystem diagnostic.
+In the approved run the socket appeared but neither proxy completed
+initialize within its three-second deadline. This leaves shared-server
+client initialization unverified. Before any further inference probe,
+verify two clients can initialize on the same private server, including
+its intended disconnect and approval ownership behavior. Repeat inference
+against the current independent stdio topology only if new evidence
+justifies it.

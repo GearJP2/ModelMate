@@ -990,3 +990,10 @@ owner transition from idle to active across the outside observation. The probe
 now waits for owner activation before the outside read. Live retained STOP
 is still unverified. Next evidence is an outside observation bracketed by
 owner activation, or an acknowledged STOP followed by interrupted status.
+
+P12 cross-server STOP result (2026-11-21): at `3fecef1` the owner was active
+on both sides of an interrupted observation from the separate App Server.
+Retained STOP remains unverified on the current transport. The next eligible
+P12 work is a metadata-only shared-server connection spike. The initial
+private Unix-socket smoke produced a listener but neither proxy initialized.
+See VERIFICATION.md. The separate missing-thread-ID case remains open.
