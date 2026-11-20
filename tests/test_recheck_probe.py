@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from modelmate import (NativeWorkflowConnection, NativeRecheckConnection, RecheckRecoveryConnection,
                        ChatShell, ProbeError, WorkflowController)
-from verify import probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, main
+from verify import probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, RECHECK_DISCONNECT_KEYS, main
 
 
 SERVER = r'''
@@ -39,7 +39,7 @@ for line in sys.stdin:
   data['threads'][tid]={'thread':thread,'latest':None}
   result={'thread':thread,'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'workspaceWrite' if mode=='permissions' and data['threadCount']==2 else 'readOnly'}}
  elif method in ('thread/read','thread/resume'):
-  if mode=='stop_race' and observer and params['threadId']=='thread2':
+  if mode in ('stop_race','stop_disconnect_terminal') and observer and params['threadId']=='thread2':
    recheck_reads+=1
    if recheck_reads==2:
     data['threads']['thread2']['thread']['status']={'type':'idle'}
@@ -96,7 +96,7 @@ class RecheckProbeTests(unittest.TestCase):
         self.root=Path(self.temp.name);self.scratch=self.root/'scratch';self.scratch.mkdir()
         self.trace=self.root/'trace'
 
-    def probe(self,mode='normal', *, stop=False):
+    def probe(self,mode='normal', *, stop=False, disconnect_owner=False):
         def parent(command,timeout):
             self.assertIn('forced_login_method="chatgpt"',command)
             return NativeWorkflowConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
@@ -109,7 +109,7 @@ class RecheckProbeTests(unittest.TestCase):
              patch('verify.RecheckRecoveryConnection',new=observer), \
              patch('verify.tempfile.mkdtemp',return_value=str(self.scratch)), \
              patch('sys.stderr',new_callable=io.StringIO):
-            return probe_rechecks('synthetic',1,stop=stop)
+            return probe_rechecks('synthetic',1,stop=stop,disconnect_owner=disconnect_owner)
 
     def records(self):return [json.loads(line) for line in self.trace.read_text().splitlines()]
 
@@ -265,6 +265,22 @@ class RecheckProbeTests(unittest.TestCase):
                  patch('sys.stdout', new_callable=io.StringIO):
                 self.assertEqual(main(), 0)
             probe.assert_called_once_with('synthetic', 120)
+
+    def test_owner_disconnect_reconciles_terminal_without_sending_stop(self):
+        result = self.probe('stop_disconnect_terminal', stop=True, disconnect_owner=True)
+        self.assertTrue(all(result[key] == 'passed' for key in RECHECK_DISCONNECT_KEYS), result)
+        self.assertEqual(result['observedAfterOwnerDisconnect'], 'interrupted')
+        self.assertFalse(any(r['method'] == 'turn/interrupt' for r in self.records()))
+
+    def test_owner_disconnect_stops_only_if_the_bound_turn_survives(self):
+        result = self.probe('stop_active', stop=True, disconnect_owner=True)
+        self.assertTrue(all(result[key] == 'passed' for key in RECHECK_DISCONNECT_KEYS), result)
+        self.assertEqual(result['observedAfterOwnerDisconnect'], 'active')
+        self.assertTrue(result['stopRpcAcknowledged'])
+        starts = [r for r in self.records() if r['method'] == 'turn/start']
+        stops = [r['params'] for r in self.records() if r['method'] == 'turn/interrupt']
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(stops, [{'threadId': 'thread2', 'turnId': 'turn2'}])
 
 
 if __name__=='__main__':unittest.main()

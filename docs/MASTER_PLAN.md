@@ -1013,3 +1013,10 @@ P12 remains IN_PROGRESS. The next eligible work is scoping shared-server
 ownership and lifecycle, including approval routing and owner disconnect,
 before considering a production transport change. Separate-server STOP and
 missing-thread discovery remain unverified. See VERIFICATION.md.
+
+P12 shared-server owner disconnect probe prepared (2026-11-21): the verifier
+drops the active synthetic recheck owner, checks the unknown checkpoint,
+and observes the same binding through the surviving connection. Offline
+tests cover a surviving active turn and a terminal turn. Next eligible live
+evidence is the opt-in owner-disconnect run in VERIFICATION.md. Approval
+ownership remains a separate shared-server check.

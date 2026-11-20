@@ -2595,3 +2595,28 @@ This is scoped to two connections on the same private server while the
 owner remains connected. Production `--recover-recheck` opens an independent
 App Server. Permission request ownership on shared transport, owner loss,
 runtime adoption and the missing-thread-ID case remain open.
+
+### Shared-server recheck owner disconnect probe — offline verification
+
+The opt-in probe verifies the same native turn is active from the owner and
+observer, then closes the owner connection without sending an interrupt.
+It requires the saved operation to become unknown without command evidence.
+The observer then reads the original binding. If it remains active, the
+probe uses the explicit STOP authorization and requires an acknowledged
+interrupt and observed terminal state. If it is already terminal, the
+probe records historical recovery without sending STOP. Both paths check
+that the work bindings, history, counters and sentinel are preserved.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --stop-retained-recheck --shared-stop-server --disconnect-recheck-owner
+```
+
+This uses at most two synthetic turns and the same diagnostic Python
+WebSocket dependency. The output reports `observedAfterOwnerDisconnect`;
+a pass requires `ownerDetachedWithUnknownCheckpoint`,
+`postDisconnectStateObserved` and `finalCheckpoint` all to pass. An
+immediately terminal observation establishes the status at that read;
+it does not alone establish the cause. The server and parent workflow
+client remain connected through recovery. The probe covers owner connection
+loss only, not server loss, approval ownership or production transport.
