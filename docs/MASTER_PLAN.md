@@ -940,3 +940,9 @@ and start no native process. P12 remains IN_PROGRESS. Discovery requires evidenc
 that uniquely ties a native thread or turn to the saved operation after a crash.
 A project match or recent timestamp alone cannot establish ownership.
 Active retained STOP still needs a live observation of an active binding.
+
+P12 schema inspection (2026-11-21): Codex CLI 0.171.0 exposes a candidate
+correlation field for new `turn_pending` rechecks with a known thread ID.
+Next eligible P12 work is an opt-in synthetic persistence probe for that
+field across reconnect before using it in recovery. `reserved` discovery
+still lacks a verified native correlation mechanism. See VERIFICATION.md.

@@ -2341,3 +2341,28 @@ attempt count and sentinel were preserved. No model turn was requested.
 The other scratch already held an interrupted finish event, and the same
 CLI returned 0 with nothing unresolved. This verifies reconciliation and
 the already-resolved path, while active STOP remains open.
+
+### Missing native recheck bindings — Codex CLI 0.171.0 schema inspection
+
+Generated both regular and experimental App Server bundles with
+`codex app-server generate-json-schema [--experimental] --out DIR`.
+Inspected request and response schemas alongside the recheck dispatch order
+in `modelmate.py`. No App Server session or model turn was started.
+
+- `turn_pending` has a saved native thread ID. The regular schema accepts
+  `turn/start.clientUserMessageId` and exposes nullable
+  `userMessage.clientId` in turn history. A new dispatch could use a
+  controller-owned operation ID as a correlation value. The schema does
+  not establish that the server echoes it in persisted history after
+  reconnect. A synthetic probe must capture the exact match in
+  `thread/turns/list` with `itemsView: full` after reconnect, using a local
+  checkpoint that never received the turn ID. A missing or ambiguous match
+  must leave recovery unresolved. Existing rechecks did not send this value.
+- `reserved` can lack the thread ID because the start reply was lost.
+  Neither generated bundle declares a per-request correlation ID on
+  `thread/start`. The schema describes `threadSource` as analytics
+  classification. A matching directory or timestamp cannot establish
+  ownership. This phase still lacks a verified discovery mechanism.
+
+P12 remains IN_PROGRESS. Active retained STOP still requires live evidence
+of an active binding. No recovery or deletion policy changed.
