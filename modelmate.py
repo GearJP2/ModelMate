@@ -4525,7 +4525,13 @@ def run_recheck_recovery(session_id, input_stream, output):
         if operation is None:
             write('ไม่มี recheck ที่ค้างอยู่ · ไม่เรียกโมเดล');return 0
         if operation['phase'] != 'turn_bound':
-            write('Native binding ไม่ครบ; ผลยังไม่ทราบ ไม่เดา ID หรือ replay · ใช้ --show-workflow ตรวจ metadata');return 2
+            detail = {
+                'reserved': 'ไม่มี thread ID ที่บันทึกไว้ การสร้าง native thread อาจเกิดขึ้นแล้ว',
+                'thread_bound': 'บันทึก thread ID แล้ว แต่ยังไม่ถึงจุดจองส่ง turn',
+                'turn_pending': 'จองส่ง turn แล้ว แต่ไม่มี turn ID ที่บันทึกไว้ ผลการส่งยังไม่ทราบ',
+            }[operation['phase']]
+            write(f"Native binding ไม่ครบ ({operation['phase']}) · {detail} · ใช้ --show-workflow ตรวจ metadata")
+            return 2
         connection = RecheckRecoveryConnection(['codex', 'app-server', '--stdio',
             '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
         try:

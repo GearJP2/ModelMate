@@ -931,3 +931,12 @@ deletion of the two previewed roots in the original synthetic recheck scratch.
 Local inspection found no remaining session and the scratch sentinel was intact.
 Retained recheck STOP, missing-binding discovery and broader crash/network
 recovery remain open. See VERIFICATION.md.
+
+P12 missing-binding diagnostics (2026-11-21): scoped live recovery of a known,
+already interrupted turn is recorded in VERIFICATION.md. Recovery now reports
+the last persisted dispatch phase when a native binding is incomplete.
+Offline coverage checks that all three incomplete phases leave metadata intact
+and start no native process. P12 remains IN_PROGRESS. Discovery requires evidence
+that uniquely ties a native thread or turn to the saved operation after a crash.
+A project match or recent timestamp alone cannot establish ownership.
+Active retained STOP still needs a live observation of an active binding.

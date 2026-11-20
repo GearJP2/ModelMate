@@ -451,5 +451,18 @@ class RecheckRecoveryTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as error:main()
             self.assertEqual(error.exception.code,2);recovery.assert_not_called()
 
+    def test_cli_reports_missing_binding_phase_without_starting_native_process(self):
+        for phase in ('reserved', 'thread_bound', 'turn_pending'):
+            self.make_pending(phase)
+            before = self.store.read(self.sid)
+            output = io.StringIO()
+            with self.subTest(phase=phase), patch.dict(os.environ, {'XDG_STATE_HOME': str(self.home)}), \
+                 patch('modelmate.os.getcwd', return_value=str(self.project)), \
+                 patch('modelmate.RecheckRecoveryConnection') as native:
+                self.assertEqual(run_recheck_recovery(self.sid, io.StringIO('STOP\n'), output), 2)
+                self.assertIn(f'({phase})', output.getvalue())
+                native.assert_not_called()
+                self.assertEqual(self.store.read(self.sid), before)
+
 
 if __name__=='__main__':unittest.main()
