@@ -1409,13 +1409,25 @@ def validate_recheck_ledger(events, evidence):
                 raise ProbeError('Invalid recheck digest, selection or budget counter.')
             counts[eid] = event['number']
             operations[identity] = dict(event, phase='reserved', status='pending',
-                thread_id=None, turn_id=None, exit_code=None, item_id=None)
+                thread_id=None, turn_id=None, exit_code=None, item_id=None, client_message_id=None)
             continue
         identity = event.get('id')
         operation = operations.get(identity) if isinstance(identity, str) else None
         invalidating = kind == 'finish' and event.get('status') == 'unknown'
         if operation is None or (operation['status'] not in ('pending', 'unknown') and not invalidating):
             raise ProbeError('Recheck event has no unresolved reservation.')
+        if kind == 'recover_turn':
+            if (set(event) != {'kind', 'id', 'turn_id', 'status', 'timestamp'}
+                    or operation['phase'] != 'turn_pending' or operation['client_message_id'] is None
+                    or event['status'] not in ('completed', 'failed', 'interrupted')):
+                raise ProbeError('Recovered turn requires a correlated reservation and terminal status.')
+            turn_id = native_id(event['turn_id'])
+            key = (operation['thread_id'], turn_id)
+            if key in turns:
+                raise ProbeError('Recheck reused a native identity.')
+            turns.add(key)
+            operation.update(phase='turn_bound', turn_id=turn_id, status=event['status'])
+            continue
         if kind == 'reconcile':
             if (set(event) != {'kind', 'id', 'status', 'timestamp'} or operation['phase'] != 'turn_bound'
                     or event['status'] not in ('completed', 'failed', 'interrupted')):
@@ -1444,7 +1456,14 @@ def validate_recheck_ledger(events, evidence):
         if kind not in phases or operation['status'] != 'pending':
             raise ProbeError('Unsupported recheck transition.')
         before, after, field = phases[kind]
-        if operation['phase'] != before or set(event) != {'kind', 'id', 'timestamp'} | ({field} if field else set()):
+        expected = {'kind', 'id', 'timestamp'} | ({field} if field else set())
+        if kind == 'turn_reserved' and 'client_message_id' in event:
+            import uuid
+            expected.add('client_message_id')
+            if event['client_message_id'] != str(uuid.UUID(hex=identity)):
+                raise ProbeError('Invalid recheck client message identity.')
+            operation['client_message_id'] = event['client_message_id']
+        if operation['phase'] != before or set(event) != expected:
             raise ProbeError('Recheck binding preceded its reservation or changed phase.')
         if field:
             value = native_id(event[field])
@@ -3254,7 +3273,7 @@ class NativeWorkflowConnection(Connection):
             self.host.role_policy = copy.deepcopy(self.role_policy)
         return dict(quota=quota, checked_at=checked_at, catalog=catalog, role_policy=self.role_policy)
 
-    def dispatch(self, descriptor):
+    def dispatch(self, descriptor, *, client_message_id=None):
         state = self.host.controller.snapshot() if self.host is not None else None
         active = state['active_attempt'] if state is not None else None
         if (active is None or active['id'] != descriptor.get('attempt_id') or active['status'] != 'running'
@@ -3277,11 +3296,14 @@ class NativeWorkflowConnection(Connection):
         self._measured_turn = {'id': None, 'started': time.monotonic(), 'observation': observed}
         if self.measure_quota and self._quota_first is None:
             self._quota_first = self._quota_ready
-        result = self.request('turn/start', {'threadId': self.thread_id, 'model': selection['model'],
+        params = {'threadId': self.thread_id, 'model': selection['model'],
             'effort': selection['effort'], 'input': [{'type': 'text', 'text': json.dumps({
                 'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step'],
                 'verification_commands': verification,
-                'verification_instructions': 'After completing the step, use the native command tool to run each verification command exactly once in its specified cwd. Do not retry commands within this attempt. If execution is unavailable, report that limitation; do not claim a check passed.'}, ensure_ascii=False)}]})
+                'verification_instructions': 'After completing the step, use the native command tool to run each verification command exactly once in its specified cwd. Do not retry commands within this attempt. If execution is unavailable, report that limitation; do not claim a check passed.'}, ensure_ascii=False)}]}
+        if client_message_id is not None:
+            params['clientUserMessageId'] = client_message_id
+        result = self.request('turn/start', params)
         turn = result.get('turn')
         if not isinstance(turn, dict) or not isinstance(turn.get('id'), str) or not turn['id']:
             raise ProbeError('Missing workflow turn identity; outcome unknown.')
@@ -3461,6 +3483,8 @@ class NativeRecheckConnection(NativeWorkflowConnection):
             self.on_change(copy.deepcopy(event))
 
     def dispatch(self, descriptor):
+        import uuid
+
         operation = self.operation()
         expected = {(self.controller.snapshot()['steps'][0]['id'], 0): self._spec}
         if (operation is None or operation['phase'] != 'thread_bound' or operation['status'] != 'pending'
@@ -3470,8 +3494,9 @@ class NativeRecheckConnection(NativeWorkflowConnection):
                 or descriptor.get('step') != self.controller.snapshot()['plan']['steps'][0]
                 or recheck_spec_digest(**self._spec) != operation['spec_digest']):
             raise ProbeError('Recheck no longer matches its durable reservation; no turn sent.')
-        self.parent.advance_recheck(self.operation_id, 'turn_reserved')
-        binding = super().dispatch(descriptor)
+        client_message_id = str(uuid.UUID(hex=self.operation_id))
+        self.parent.advance_recheck(self.operation_id, 'turn_reserved', client_message_id=client_message_id)
+        binding = super().dispatch(descriptor, client_message_id=client_message_id)
         self.parent.advance_recheck(self.operation_id, 'turn', turn_id=binding['turn_id'])
         return binding
 
@@ -3548,6 +3573,25 @@ def unresolved_recheck(record):
     return pending[0] if pending else None
 
 
+def correlated_turn_id(history, client_message_id):
+    """A fresh probe thread must contain one complete turn and one matching user item."""
+    turns = history.get('data')
+    if not isinstance(turns, list) or len(turns) != 1 or history.get('nextCursor') is not None:
+        return None
+    turn = turns[0]
+    if (not isinstance(turn, dict) or turn.get('itemsView') != 'full'
+            or turn.get('status') not in ('completed', 'failed', 'interrupted') or not isinstance(turn.get('items'), list)
+            or not isinstance(turn.get('id'), str) or not turn['id']):
+        return None
+    items = turn['items']
+    if any(not isinstance(item, dict) for item in items):
+        return None
+    users = [item for item in items if item.get('type') == 'userMessage']
+    if len(users) == 1 and users[0].get('clientId') == client_message_id:
+        return turn['id']
+    return None
+
+
 class RecheckRecoveryConnection(Connection):
     """Metadata-only recovery; native interruption is the only permitted mutation."""
     allowed_methods = {'initialize', 'account/read', 'account/rateLimits/read',
@@ -3603,21 +3647,37 @@ class RecheckRecoveryConnection(Connection):
             return {'state': 'none'}
         report = {'state': 'unverified', 'operation_id': operation['id'],
                   'thread_id': operation['thread_id'], 'turn_id': operation['turn_id']}
-        if operation['phase'] != 'turn_bound' or not operation['thread_id'] or not operation['turn_id']:
+        discover = operation['phase'] == 'turn_pending' and operation['client_message_id'] is not None
+        if operation['phase'] != 'turn_bound' and not discover:
             return dict(report, reason='missing_native_binding')
         if operation['thread_id'] == record['thread_id']:
             raise ProbeError('Recheck points at the work thread; no native action attempted.')
         self._account(record)
+        if discover:
+            self._read_recovery_thread(store.project, operation['thread_id'])
+            history = self.request('thread/turns/list', {'threadId': operation['thread_id'], 'limit': 2,
+                'sortDirection': 'desc', 'itemsView': 'full'})
+            turn_id = correlated_turn_id(history, operation['client_message_id'])
+            if turn_id is None:
+                return dict(report, reason='native_correlation_unconfirmed')
+            observed = self.inspect_bound_turn(store.project, operation['thread_id'], turn_id, single_turn=True)
+            if observed['state'] != 'terminal':
+                return dict(report, reason='native_status_unconfirmed')
+            return dict(report, **observed, turn_id=turn_id, client_message_id=operation['client_message_id'])
         return dict(report, **self.inspect_bound_turn(store.project, operation['thread_id'], operation['turn_id'],
                                                       single_turn=True))
 
-    def inspect_bound_turn(self, project, thread_id, turn_id, *, single_turn=False):
+    def _read_recovery_thread(self, project, thread_id):
         thread = self.request('thread/read', {'threadId': thread_id, 'includeTurns': False}).get('thread')
         if (not isinstance(thread, dict) or thread.get('id') != thread_id
                 or thread.get('cwd') != project or thread.get('modelProvider') != 'openai'
                 or thread.get('ephemeral') is not False or not isinstance(thread.get('status'), dict)
                 or thread['status'].get('type') not in ('idle', 'notLoaded', 'active')):
             raise ProbeError('Recovery thread identity/project/provider/state is unsafe or unknown.')
+        return thread
+
+    def inspect_bound_turn(self, project, thread_id, turn_id, *, single_turn=False):
+        thread = self._read_recovery_thread(project, thread_id)
         history = self.request('thread/turns/list', {'threadId': thread_id, 'limit': 1,
             'sortDirection': 'desc', 'itemsView': 'summary'})
         turns = history.get('data')
@@ -3982,12 +4042,18 @@ class SessionStore:
         record = self.read(session_id)
         operation = unresolved_recheck(record)
         if (operation is None or not isinstance(report, dict) or report.get('state') != 'terminal'
-                or any(report.get(key) != operation[key] for key in ('thread_id', 'turn_id'))
+                or report.get('thread_id') != operation['thread_id']
                 or report.get('operation_id') != operation['id'] or record['deletion_state'] != 'none'):
             raise ProbeError('Recovery target changed or has no confirmed terminal state.')
         checkpoint = copy.deepcopy(record['workflow'])
-        checkpoint['rechecks'].append({'kind': 'reconcile', 'id': operation['id'],
-            'status': report.get('status'), 'timestamp': datetime.now(timezone.utc).isoformat()})
+        event = {'kind': 'reconcile', 'id': operation['id'], 'status': report.get('status'),
+                 'timestamp': datetime.now(timezone.utc).isoformat()}
+        if (operation['phase'] == 'turn_pending' and operation['client_message_id'] is not None
+                and report.get('client_message_id') == operation['client_message_id']):
+            event.update(kind='recover_turn', turn_id=report.get('turn_id'))
+        elif report.get('turn_id') != operation['turn_id']:
+            raise ProbeError('Recovery turn no longer matches the saved binding.')
+        checkpoint['rechecks'].append(event)
         record['workflow'] = validate_workflow_checkpoint(checkpoint)
         record['summary'] = 'Native recheck terminal state reconciled; saved evidence still requires a fresh check.'
         self.save(record)
@@ -4524,7 +4590,7 @@ def run_recheck_recovery(session_id, input_stream, output):
         operation = unresolved_recheck(store.read(session_id))
         if operation is None:
             write('ไม่มี recheck ที่ค้างอยู่ · ไม่เรียกโมเดล');return 0
-        if operation['phase'] != 'turn_bound':
+        if operation['phase'] != 'turn_bound' and operation['client_message_id'] is None:
             detail = {
                 'reserved': 'ไม่มี thread ID ที่บันทึกไว้ การสร้าง native thread อาจเกิดขึ้นแล้ว',
                 'thread_bound': 'บันทึก thread ID แล้ว แต่ยังไม่ถึงจุดจองส่ง turn',

@@ -44,7 +44,8 @@ def events(command):
 for line in sys.stdin:
  req=json.loads(line);method=req.get('method');params=req.get('params',{})
  saved=json.loads(Path(checkpoint).read_text())
- entry=dict(req,ledgerPhase=(saved['workflow'].get('rechecks') or [{}])[-1].get('kind'),workTurn=saved['turn_id'])
+ latest=(saved['workflow'].get('rechecks') or [{}])[-1]
+ entry=dict(req,ledgerPhase=latest.get('kind'),clientMessageId=latest.get('client_message_id'),workTurn=saved['turn_id'])
  with open(trace,'a') as stream:stream.write(json.dumps(entry)+'\n')
  if method is None or 'id' not in req:continue
  if method=='initialize':result={}
@@ -158,6 +159,8 @@ class NativeRecheckTests(unittest.TestCase):
         self.assertEqual(thread['approvalPolicy'], 'on-request')
         self.assertEqual(starts[1]['params']['model'], 'synthetic-standard')
         self.assertEqual(starts[1]['params']['effort'], 'low')
+        self.assertTrue(starts[1]['clientMessageId'])
+        self.assertEqual(starts[1]['params']['clientUserMessageId'], starts[1]['clientMessageId'])
         self.assertFalse(any(r['method'] == 'command/exec' for r in self.records()))
 
     def test_child_observer_cannot_emit_authoritative_workflow_events_for_parent(self):

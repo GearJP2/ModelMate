@@ -953,3 +953,12 @@ a checkpoint without a native turn ID, then looks up the client ID across a
 fresh connection. All 24 verifier tests and 521 offline tests passed, covering
 matching, missing and ambiguous history and the live opt-in. The next P12
 gate is the user-run probe in VERIFICATION.md.
+
+P12 correlated terminal recovery (2026-11-21): the user-run correlation
+probe at `59bc1f0` passed on Codex CLI 0.171.0. New rechecks durably record
+the client message ID before turn/start. Explicit recovery can now reconcile
+a uniquely matched terminal turn in a known native thread. This integration
+is MOCK_VERIFIED. The opt-in integration probe now simulates a missing turn ID
+on an isolated copy after a completed synthetic recheck. The next eligible
+P12 gate is the user-run probe documented in VERIFICATION.md. The case
+without a saved thread ID remains open.

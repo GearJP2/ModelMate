@@ -2393,3 +2393,38 @@ exits 1 and the phase identifies where the check stopped. Record the installed
 `codex --version` with the sanitized JSON. The probe simulates the missing
 checkpoint field after a completed turn. It does not simulate loss of the
 start response or verify active interruption.
+
+### Persisted turn message ID — scoped LIVE_VERIFIED
+
+The user ran the one-turn probe from source `59bc1f0` with Codex CLI
+`0.171.0` and `gpt-6.1-sol`. It reported
+`persistedTurnCorrelation: passed`, `phase: complete`, and
+`modelTurnsRequested: 1`. Source hashes matched the reported runtime
+`5bda823643d0e635cddfadf2ef393027484079c99a7e8a5199ed531c476c2768`
+and verifier
+`0fb92a5247c1f3a9d70051f1aca9b28a50ec6bc26f8522978720bfeba3269302`.
+
+The runtime integration saves the UUID before dispatch and can reconcile a
+uniquely correlated terminal turn on a known recheck thread. It records binding
+and terminal status together without changing work attempts or restoring stale
+tool evidence. Legacy reservations without a marker, ambiguous history, and
+active turns without a saved native turn ID remain unresolved. Runtime
+integration is offline-tested. Recovery after an actual lost turn/start reply
+and active retained STOP still require live coverage.
+
+To exercise the new recovery integration on a normal authenticated Terminal:
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --simulate-lost-recheck-binding
+```
+
+This uses at most two synthetic turns. It retains the original probe scratch
+and native threads. On an isolated copy, it drops the saved turn binding and
+terminal result, then tests recovery with metadata RPCs only. A successful
+run exits 0 and all four `missingBindingRecovery` checks report `passed`:
+`nativeTerminalObserved`, `metadataReconciled`, `historicalResultOnly`, and
+`sourceUnchanged`. The recovery phase requests zero model turns and leaves
+the original checkpoint unchanged. This checks the missing-metadata path
+after completion. A real dropped reply and active interruption are separate
+conditions.

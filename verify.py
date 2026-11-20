@@ -17,7 +17,7 @@ from pathlib import Path
 from modelmate import (Connection, ProbeError, inspect, ensure_quota, refresh_quota,
                        select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS, NativeWorkflowConnection, WorkflowController, diagnostic_code,
                        RecheckRecoveryConnection, validate_recheck_ledger, workflow_saved_evidence,
-                       native_permissions_confirmed, native_thread_options)
+                       native_permissions_confirmed, native_thread_options, correlated_turn_id)
 
 
 APPROVALS = {
@@ -788,7 +788,7 @@ RECHECK_STOP_KEYS = ('initialToolEvidence', 'durableResume', 'restoredEvidenceGa
                      'finalCheckpoint', 'sentinelUnchanged')
 
 
-def probe_rechecks(model, timeout, *, stop=False):
+def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
     """At most two synthetic model turns; retain native threads and scratch metadata."""
     directory = Path(tempfile.mkdtemp(prefix='modelmate-recheck-'))
     project = directory / 'project'; project.mkdir(mode=0o700)
@@ -929,6 +929,11 @@ def probe_rechecks(model, timeout, *, stop=False):
                 and len(operations) == 1 and operations[0]['number'] == 1):
             result['finalCheckpoint'] = 'passed'
         else:result['finalCheckpoint'] = 'failed'
+        if lost_binding and result['finalCheckpoint'] == 'passed':
+            child.close();child = None
+            connection.close();connection = None
+            result['phase'] = 'simulated_missing_binding'
+            result['missingBindingRecovery'] = probe_recheck_recovery(directory, timeout, lost_binding=True)
         result['phase'] = 'finished'
         return result
     except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -957,7 +962,7 @@ def probe_rechecks(model, timeout, *, stop=False):
 RECOVERY_PROBE_KEYS = ('nativeTerminalObserved', 'metadataReconciled', 'historicalResultOnly', 'sourceUnchanged')
 
 
-def probe_recheck_recovery(scratch, timeout):
+def probe_recheck_recovery(scratch, timeout, *, lost_binding=False):
     """Inspect retained synthetic IDs on a copy, without native start/interrupt/delete requests."""
     source = target = connection = None
     directory = original = source_id = None
@@ -968,6 +973,9 @@ def probe_recheck_recovery(scratch, timeout):
         scope='Metadata-only terminal reconciliation on a copy of a successful synthetic recheck probe. '
               'Original metadata not written; no native start/interrupt/delete requests. Not active interruption, missing-binding discovery, '
               'crash/network recovery, current test evidence or scoped deletion proof.')
+    if lost_binding:
+        result['scope'] = ('Terminal correlation on an isolated copy truncated before the turn binding. '
+                           'Zero model turns or native mutations during recovery.')
     try:
         result['phase'] = 'source_validation'
         root = Path(scratch).resolve(strict=True)
@@ -985,6 +993,8 @@ def probe_recheck_recovery(scratch, timeout):
         operations = validate_recheck_ledger(flow.get('rechecks', []), workflow_saved_evidence(flow))
         if len(operations) != 1 or operations[0]['status'] != 'completed' or operations[0]['exit_code'] != 0:
             raise ProbeError('Source lacks one successful native recheck binding.')
+        if lost_binding and operations[0]['client_message_id'] is None:
+            raise ProbeError('Source was dispatched without a client message ID.')
         check_session_sentinel(project, project / 'sentinel.txt')
 
         directory = Path(tempfile.mkdtemp(prefix='modelmate-recovery-copy-'))
@@ -994,6 +1004,12 @@ def probe_recheck_recovery(scratch, timeout):
         staged = copy.deepcopy(original);staged['id'] = created['id']
         staged.update(state='UNVERIFIED', pause_reason=None, summary='Isolated metadata-only recovery probe copy.')
         staged['workflow'].update(state='UNVERIFIED', reason='simulated_lost_recheck_terminal')
+        expected_event = 'reconcile'
+        if lost_binding:
+            events = staged['workflow']['rechecks']
+            binding_index = next(i for i, event in enumerate(events) if event['kind'] == 'turn')
+            del events[binding_index:]
+            expected_event = 'recover_turn'
         from datetime import datetime, timezone
         staged['workflow']['rechecks'].append({'kind': 'finish', 'id': operations[0]['id'],
             'status': 'unknown', 'exit_code': None, 'item_id': None,
@@ -1014,12 +1030,13 @@ def probe_recheck_recovery(scratch, timeout):
             target.record_recheck_recovery(created['id'], report)
             after = target.read(created['id'])['workflow']
             if (after['rechecks'][:-1] != staged['workflow']['rechecks']
-                    or after['rechecks'][-1]['kind'] != 'reconcile'
+                    or after['rechecks'][-1]['kind'] != expected_event
                     or any(after[key] != flow[key] for key in ('steps', 'history', 'baseline', 'criterion_evidence'))):
                 result['metadataReconciled'] = 'failed';return result
             result['metadataReconciled'] = 'passed'
             recovered = validate_recheck_ledger(after['rechecks'], workflow_saved_evidence(after))[0]
-            if after['state'] != 'DONE' and recovered['exit_code'] is None and recovered['item_id'] is None:
+            if (after['state'] != 'DONE' and recovered['exit_code'] is None and recovered['item_id'] is None
+                    and recovered['turn_id'] == operations[0]['turn_id']):
                 result['historicalResultOnly'] = 'passed'
             else:result['historicalResultOnly'] = 'failed'
         result['phase'] = 'finished'
@@ -1044,25 +1061,6 @@ def probe_recheck_recovery(scratch, timeout):
                 except OSError:pass
             if result['copyRetained']:
                 print('Recovery probe metadata copy retained (original untouched): ' + str(directory), file=sys.stderr)
-
-
-def correlated_turn_id(history, client_message_id):
-    """A fresh probe thread must contain one complete turn and one matching user item."""
-    turns = history.get('data')
-    if not isinstance(turns, list) or len(turns) != 1 or history.get('nextCursor') is not None:
-        return None
-    turn = turns[0]
-    if (not isinstance(turn, dict) or turn.get('itemsView') != 'full'
-            or turn.get('status') != 'completed' or not isinstance(turn.get('items'), list)
-            or not isinstance(turn.get('id'), str) or not turn['id']):
-        return None
-    items = turn['items']
-    if any(not isinstance(item, dict) for item in items):
-        return None
-    users = [item for item in items if item.get('type') == 'userMessage']
-    if len(users) == 1 and users[0].get('clientId') == client_message_id:
-        return turn['id']
-    return None
 
 
 def probe_turn_correlation(model, timeout):
@@ -1147,12 +1145,17 @@ def main():
                         help='one synthetic turn to check persisted client message ID across reconnect')
     parser.add_argument('--stop-retained-recheck', action='store_true',
                         help='explicitly stop only the synthetic recheck created by --probe-rechecks')
+    parser.add_argument('--simulate-lost-recheck-binding', action='store_true',
+                        help='after --probe-rechecks, exercise terminal recovery on a copy without the turn ID')
     parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
                         help='metadata-only recovery on an isolated copy of a completed --probe-rechecks scratch; no inference')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if args.stop_retained_recheck and not (args.run_live and args.probe_rechecks):
         parser.error('--stop-retained-recheck requires --run-live and --probe-rechecks')
+    if args.simulate_lost_recheck_binding and not (
+            args.run_live and args.probe_rechecks and not args.stop_retained_recheck):
+        parser.error('--simulate-lost-recheck-binding requires --run-live and --probe-rechecks without STOP')
     if args.probe_recheck_recovery:
         if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
                                 args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks,
@@ -1181,9 +1184,15 @@ def main():
             print(json.dumps(result, indent=2))
             return 0 if result['persistedTurnCorrelation'] == 'passed' else 1
         if args.probe_rechecks:
-            result = probe_rechecks(args.probe_rechecks, args.timeout, stop=args.stop_retained_recheck)
+            if args.simulate_lost_recheck_binding:
+                result = probe_rechecks(args.probe_rechecks, args.timeout, lost_binding=True)
+            else:
+                result = probe_rechecks(args.probe_rechecks, args.timeout, stop=args.stop_retained_recheck)
             print(json.dumps(result, indent=2))
             keys = RECHECK_STOP_KEYS if args.stop_retained_recheck else RECHECK_PROBE_KEYS
+            if args.simulate_lost_recheck_binding and not all(
+                    result.get('missingBindingRecovery', {}).get(key) == 'passed' for key in RECOVERY_PROBE_KEYS):
+                return 1
             return 0 if all(result.get(key) == 'passed' for key in keys) else 1
         if args.probe_workflow_resume:
             result = probe_workflow_resume(args.probe_workflow_resume, args.timeout)
