@@ -250,7 +250,8 @@ threads ที่ผูกใน ledger และ descendants ของแต่
 พิมพ์ `DELETE TOKEN` ตามที่แสดงแล้วกด Enter หรือใช้ `CANCEL` เพื่อยกเลิก
 หากพบ thread ที่ active, ต่างโปรเจกต์, มี session อื่นถือ binding เดียวกัน
 หรือ binding ไม่ครบ ระบบจะพักก่อนลบ สำหรับ recheck ที่กำลังทำงานและมี binding ครบ
-ใช้ `--recover-recheck SESSION_ID` และยืนยัน `STOP` แยกจากการลบ
+ใช้การยกเลิกใน session ที่เริ่ม recheck หากยังเปิดอยู่ การยืนยัน `STOP` ผ่าน
+App Server แยกยังมีข้อจำกัดตามหัวข้อกู้สถานะด้านล่าง
 
 โปรแกรมบันทึกผลตอบรับแยกแต่ละ root และลบ metadata เมื่อทุก root ได้รับการยืนยัน
 หากขอบเขตเปลี่ยนหลังลบได้บางส่วน ให้ขอ preview ใหม่สำหรับส่วนที่เหลือ
@@ -582,11 +583,17 @@ Resume verifier แยก userMessage/metadata ออกจาก tool items ต
 python3 modelmate.py --recover-recheck SESSION_ID
 ```
 
-อ่านสถานะ native thread/turn เดิมเท่านั้น หากยังทำงานอยู่จะให้เลือก `STOP` หรือ
+อ่านสถานะ native thread/turn เดิมเท่านั้น หาก App Server รายงานว่า active จะให้เลือก `STOP` หรือ
 `PAUSE` และตรวจสถานะจริงหลังขอหยุด การตอบรับคำขอหยุดอย่างเดียวไม่ถือว่าหยุดสำเร็จ
 สถานะที่จบแล้วบันทึกเป็นประวัติ; หลักฐานเดิมยัง stale และ counter ไม่ถูกรีเซ็ต
-ต้องอนุมัติ `/recheck` ใหม่เพื่อรับหลักฐานปัจจุบัน หาก ID ไม่ครบหรือสถานะไม่ตรงจะไม่เดา
+ต้องอนุมัติ `/recheck` ใหม่เพื่อรับหลักฐานปัจจุบัน หากมี thread ID และ client message ID
+ที่บันทึกไว้ สามารถกู้ turn ที่จบแล้วเมื่อพบรายการตรงกันเพียงรายการเดียว
 คำสั่งนี้ไม่เริ่ม model turn และใช้ได้เมื่อโควตาหมดแต่ยังยืนยันบัญชีเดิมได้
+
+ผลทดสอบสดยืนยัน STOP ผ่านสอง connection บน App Server เดียวกันใน verifier
+ส่วนคำสั่งนี้เปิด App Server แยก ซึ่งในการทดสอบเคยรายงาน `interrupted`
+ขณะที่ฝั่งที่เริ่ม recheck ยังรายงาน `active` หาก session เดิมยังเปิดอยู่
+ให้ยกเลิกจาก session นั้น [หลักฐานการทดสอบ](VERIFICATION.md)
 
 ตรวจ recovery แบบอ่าน metadata จาก scratch ของ probe rechecks ที่เคยผ่าน:
 

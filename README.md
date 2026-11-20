@@ -164,13 +164,15 @@ python3 modelmate.py --live --resume SESSION_ID --model gpt-6.1-sol --effort low
 แทน `SESSION_ID` ด้วย local ID จากรายการ คำสั่ง `--live --resume` ใช้กับ manual chat;
 workflow ใช้ `--resume-workflow` และตรวจหลักฐานใหม่ตาม [คู่มือ](docs/USAGE.md)
 
-Recovery ของ recheck ที่บันทึก native thread/turn ID ครบ:
+Recovery ของ recheck ที่มี native binding หรือ client message ID ที่ตรวจสอบได้:
 
 ```bash
 python3 modelmate.py --recover-recheck SESSION_ID
 ```
 
-ไม่เริ่ม model turn ใหม่ หากยัง active จะถาม `STOP` / `PAUSE` ก่อนดำเนินการ
+ไม่เริ่ม model turn ใหม่ หาก App Server รายงานว่า active จะถาม `STOP` / `PAUSE`
+ผล STOP สดครอบคลุม verifier ที่เชื่อมกับ server เดียวกัน
+คำสั่ง recovery ใน runtime ใช้ App Server แยก [ข้อจำกัด](docs/NATIVE_RECHECK.md)
 สถานะที่จบแล้วเป็นประวัติ ไม่ทำให้ผลตรวจเก่ากลายเป็นหลักฐานปัจจุบัน
 ใช้ `python3 modelmate.py --delete-session SESSION_ID` จากโปรเจกต์เดิมเพื่อดูขอบเขต
 work thread, recheck threads และ descendants แล้วพิมพ์รหัสยืนยันที่แสดง

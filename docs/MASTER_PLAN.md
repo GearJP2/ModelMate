@@ -1005,3 +1005,11 @@ two clients and kept the first usable after the second disconnected, with
 zero inference. The opt-in shared-server STOP probe is ready for scoped live
 verification. Production transport and the separate-server STOP gate are
 unchanged. See VERIFICATION.md.
+
+P12 shared-server STOP evidence (2026-11-21): the user-run probe at
+`b92db7b` passed all eight checks on Codex CLI 0.171.0. The live scope is
+two connections to one private server while the recheck owner is connected.
+P12 remains IN_PROGRESS. The next eligible work is scoping shared-server
+ownership and lifecycle, including approval routing and owner disconnect,
+before considering a production transport change. Separate-server STOP and
+missing-thread discovery remain unverified. See VERIFICATION.md.

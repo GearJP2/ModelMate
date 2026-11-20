@@ -2577,3 +2577,21 @@ A pass requires `transport: shared_private_unix_websocket`,
 `activeRecheckObserved: passed`, `stopRpcAcknowledged: true`,
 `nativeRecheckStopped: passed`, `finalCheckpoint: passed`, and an intact
 sentinel. This probe covers the shared-server topology only.
+
+### Shared private App Server STOP — scoped LIVE_VERIFIED
+
+The user ran source `b92db7b` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. The runtime hash
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier hash
+`d42af0eff5ad5e2d4b9b6877a2c06a9a99178d2c0b4e50156da69a3c139f21e9`
+matched the checkout. With transport `shared_private_unix_websocket`, the
+owner and observer both reported active. The interrupt was acknowledged
+and the observer then reported interrupted. All eight STOP probe checks
+passed, including the final checkpoint and unchanged sentinel. The initial
+turn had one matching command start and completion. Scratch was retained.
+
+This is scoped to two connections on the same private server while the
+owner remains connected. Production `--recover-recheck` opens an independent
+App Server. Permission request ownership on shared transport, owner loss,
+runtime adoption and the missing-thread-ID case remain open.
