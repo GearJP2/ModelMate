@@ -6,11 +6,80 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from modelmate import ProbeError
-from verify import VerificationConnection, choose_models, verify
+from verify import VerificationConnection, choose_models, correlated_turn_id, main, probe_turn_correlation, verify
 from modelmate import ensure_quota
 
 
 GOOD_QUOTA = {'ordinaryUsageAllowed': True, 'accountId': 'synthetic-account', 'rateLimits': {'primary': {'usedPercent': 30}}}
+
+
+class TurnCorrelationTests(unittest.TestCase):
+    def test_requires_unique_full_persisted_user_item(self):
+        user = {'type': 'userMessage', 'clientId': 'marker'}
+        turn = {'id': 'turn', 'itemsView': 'full', 'status': 'completed', 'items': [user]}
+        self.assertEqual(correlated_turn_id({'data': [turn]}, 'marker'), 'turn')
+        for history in (
+            {'data': [turn], 'nextCursor': 'more'},
+            {'data': [turn, turn]},
+            {'data': [dict(turn, itemsView='summary')]},
+            {'data': [dict(turn, status='inProgress')]},
+            {'data': [dict(turn, items=[user, user])]},
+            {'data': [dict(turn, items=[dict(user, clientId=None)])]},
+            {'data': [dict(turn, items=[dict(user, type='agentMessage')])]},
+        ):
+            with self.subTest(history=history):
+                self.assertIsNone(correlated_turn_id(history, 'marker'))
+
+    def test_probe_only_reconnects_after_synthetic_turn_and_redacts_ids(self):
+        sender, reader = Mock(), Mock()
+        sender.denials = []
+        sender.turn_evidence = [{'toolsObserved': []}]
+        sender.quota_status = {'state': 'allow'}
+        reader.inspect_bound_turn.return_value = {'state': 'terminal', 'status': 'completed'}
+
+        def start(method, params):
+            self.assertEqual(method, 'thread/start')
+            self.assertIs(params['ephemeral'], False)
+            return {'approvalPolicy': 'on-request', 'approvalsReviewer': 'user',
+                    'sandbox': {'type': 'readOnly'}, 'thread': {
+                        'id': 'native-thread', 'cwd': params['cwd'], 'ephemeral': False,
+                        'modelProvider': 'openai', 'status': {'type': 'idle'}}}
+
+        def history(method, params):
+            sender.close.assert_called_once()
+            self.assertEqual(method, 'thread/turns/list')
+            self.assertEqual(params['itemsView'], 'full')
+            saved = reader._account.call_args.args[0]
+            self.assertEqual(set(saved), {'thread_id', 'client_id', 'account_hash'})
+            self.assertEqual(saved['thread_id'], params['threadId'])
+            marker = sender.run_turn.call_args.kwargs['client_message_id']
+            self.assertEqual(marker, saved['client_id'])
+            return {'data': [{'id': 'native-turn', 'itemsView': 'full', 'status': 'completed',
+                              'items': [{'type': 'userMessage', 'clientId': marker}]}]}
+
+        sender.request.side_effect = start
+        reader.request.side_effect = history
+        with patch('verify.VerificationConnection', return_value=sender), \
+             patch('verify.RecheckRecoveryConnection', return_value=reader), \
+             patch('verify.inspect', return_value={'models': []}), \
+             patch('verify.select_model', return_value={'model': 'test'}), \
+             patch('verify.refresh_quota', return_value={'state': 'allow', 'account_id': 'account'}):
+            report = probe_turn_correlation('test', 1)
+        self.assertEqual(report['persistedTurnCorrelation'], 'passed')
+        self.assertEqual(report['modelTurnsRequested'], 1)
+        sender.run_turn.assert_called_once()
+        reader.close.assert_called_once()
+        self.assertNotIn('native-', json.dumps(report))
+
+    def test_cli_requires_live_opt_in(self):
+        with patch('verify.probe_turn_correlation') as probe, patch('sys.stdout'):
+            with patch('sys.argv', ['verify.py', '--probe-turn-correlation', 'test']):
+                self.assertEqual(main(), 0)
+                probe.assert_not_called()
+            probe.return_value = {'persistedTurnCorrelation': 'failed'}
+            with patch('sys.argv', ['verify.py', '--run-live', '--probe-turn-correlation', 'test']):
+                self.assertEqual(main(), 1)
+                probe.assert_called_once_with('test', 120)
 
 
 class VerificationTests(unittest.TestCase):
@@ -65,7 +134,8 @@ class VerificationTests(unittest.TestCase):
                 'threadId': 'thread', 'turn': {'id': 'turn', 'status': 'completed'}}})
             return {'turn': {'id': 'turn'}}
         c.request = Mock(side_effect=request)
-        self.assertEqual(c.run_turn('prompt', 'one', 'low'), ('answer', set()))
+        self.assertEqual(c.run_turn('prompt', 'one', 'low', client_message_id='marker'), ('answer', set()))
+        self.assertEqual(c.request.call_args.args[1]['clientUserMessageId'], 'marker')
         self.assertIsNone(c.turn_id)
 
     def test_unknown_quota_prevents_turn_start(self):

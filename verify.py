@@ -16,7 +16,8 @@ from pathlib import Path
 
 from modelmate import (Connection, ProbeError, inspect, ensure_quota, refresh_quota,
                        select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS, NativeWorkflowConnection, WorkflowController, diagnostic_code,
-                       RecheckRecoveryConnection, validate_recheck_ledger, workflow_saved_evidence)
+                       RecheckRecoveryConnection, validate_recheck_ledger, workflow_saved_evidence,
+                       native_permissions_confirmed, native_thread_options)
 
 
 APPROVALS = {
@@ -80,7 +81,7 @@ class VerificationConnection(Connection):
             if len(self.events) > 10000:
                 raise ProbeError('Too many events; stopping verification.')
 
-    def run_turn(self, prompt, model, effort):
+    def run_turn(self, prompt, model, effort, *, client_message_id=None):
         if self.start_pending or self.turn_id:
             raise ProbeError('Previous turn outcome unknown; no new turn started.')
         self.quota_status = refresh_quota(self, self.account_id)
@@ -93,10 +94,13 @@ class VerificationConnection(Connection):
         self.settings_observed.clear()
         deadline = time.monotonic() + self.timeout
         self.start_pending = True
-        result = self.request('turn/start', {
+        params = {
             'threadId': self.thread_id, 'model': model, 'effort': effort,
             'input': [{'type': 'text', 'text': prompt}],
-        })
+        }
+        if client_message_id is not None:
+            params['clientUserMessageId'] = client_message_id
+        result = self.request('turn/start', params)
         turn_id = result.get('turn', {}).get('id')
         if not isinstance(turn_id, str) or not turn_id or (self.turn_id and self.turn_id != turn_id):
             raise ProbeError('Invalid or conflicting turn ID; outcome unknown.')
@@ -1042,6 +1046,89 @@ def probe_recheck_recovery(scratch, timeout):
                 print('Recovery probe metadata copy retained (original untouched): ' + str(directory), file=sys.stderr)
 
 
+def correlated_turn_id(history, client_message_id):
+    """A fresh probe thread must contain one complete turn and one matching user item."""
+    turns = history.get('data')
+    if not isinstance(turns, list) or len(turns) != 1 or history.get('nextCursor') is not None:
+        return None
+    turn = turns[0]
+    if (not isinstance(turn, dict) or turn.get('itemsView') != 'full'
+            or turn.get('status') != 'completed' or not isinstance(turn.get('items'), list)
+            or not isinstance(turn.get('id'), str) or not turn['id']):
+        return None
+    items = turn['items']
+    if any(not isinstance(item, dict) for item in items):
+        return None
+    users = [item for item in items if item.get('type') == 'userMessage']
+    if len(users) == 1 and users[0].get('clientId') == client_message_id:
+        return turn['id']
+    return None
+
+
+def probe_turn_correlation(model, timeout):
+    """Test persisted client message correlation with one synthetic turn."""
+    import uuid
+
+    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"']
+    report = {'persistedTurnCorrelation': 'unverified', 'phase': 'preflight',
+              'modelTurnsRequested': 0,
+              'runtimeSha256': hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+              'verifierSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    try:
+        with tempfile.TemporaryDirectory(prefix='modelmate-turn-correlation-') as scratch:
+            project = Path(scratch).resolve() / 'project'
+            project.mkdir(mode=0o700)
+            checkpoint = project.parent / 'pending.json'
+            with closing(VerificationConnection(command, timeout)) as sender:
+                metadata = inspect(sender)
+                selection = select_model(metadata['models'], model, 'low')
+                quota = refresh_quota(sender, None)
+                if quota['state'] != 'allow':
+                    raise ProbeError('Probe quota unavailable.')
+                sender.account_id = quota['account_id']
+                fingerprint = hashlib.sha256(sender.account_id.encode()).hexdigest()
+                report['phase'] = 'thread_start'
+                result = sender.request('thread/start', dict(native_thread_options(selection, str(project)),
+                                                             ephemeral=False))
+                thread = result.get('thread')
+                if (not native_permissions_confirmed(result) or not isinstance(thread, dict)
+                        or not isinstance(thread.get('id'), str) or not thread['id']):
+                    raise ProbeError('Probe thread permissions or identity unconfirmed.')
+                sender.cwd = str(project)
+                LiveChatConnection._check_thread(sender, thread, thread['id'])
+                sender.thread_id = thread['id']
+                client_id = str(uuid.uuid4())
+                checkpoint.write_text(json.dumps({'thread_id': sender.thread_id,
+                                                  'client_id': client_id, 'account_hash': fingerprint}))
+                report['phase'] = 'synthetic_turn'
+                try:
+                    sender.run_turn('Reply only ACK. Do not use tools, read files, or use the network.',
+                                    model, 'low', client_message_id=client_id)
+                finally:
+                    report['modelTurnsRequested'] = int(getattr(sender, 'quota_status', {}).get('state') == 'allow')
+                if sender.denials or sender.turn_evidence[0]['toolsObserved']:
+                    raise ProbeError('Probe turn attempted a tool.')
+            report['phase'] = 'reconnect'
+            saved = json.loads(checkpoint.read_text())
+            with closing(RecheckRecoveryConnection(command, timeout)) as reader:
+                reader._account(saved)
+                history = reader.request('thread/turns/list', {
+                    'threadId': saved['thread_id'], 'limit': 2,
+                    'sortDirection': 'desc', 'itemsView': 'full'})
+                turn_id = correlated_turn_id(history, saved['client_id'])
+                if turn_id is None or reader.inspect_bound_turn(str(project), saved['thread_id'], turn_id,
+                                                               single_turn=True) != {
+                                                                   'state': 'terminal', 'status': 'completed'}:
+                    report['persistedTurnCorrelation'] = 'failed'
+                    return report
+            report.update(persistedTurnCorrelation='passed', phase='complete')
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        # Native errors and history can contain identifiers or local paths.
+        return report
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
@@ -1056,6 +1143,8 @@ def main():
                         help='two synthetic durable workflow turns across reconnect; scratch/thread retained')
     parser.add_argument('--probe-rechecks', metavar='MODEL',
                         help='at most two synthetic native tool turns across reconnect; scratch/threads retained')
+    parser.add_argument('--probe-turn-correlation', metavar='MODEL',
+                        help='one synthetic turn to check persisted client message ID across reconnect')
     parser.add_argument('--stop-retained-recheck', action='store_true',
                         help='explicitly stop only the synthetic recheck created by --probe-rechecks')
     parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
@@ -1066,7 +1155,8 @@ def main():
         parser.error('--stop-retained-recheck requires --run-live and --probe-rechecks')
     if args.probe_recheck_recovery:
         if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
-                                args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks)):
+                                args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks,
+                                args.probe_turn_correlation)):
             parser.error('--probe-recheck-recovery is metadata-only; select it alone without --run-live')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             parser.error('--timeout must be finite and positive')
@@ -1079,12 +1169,17 @@ def main():
     if not args.run_live:
         parser.print_help()
         return 0
-    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks)) != 1:
-        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL, --probe-workflow-resume MODEL, --probe-rechecks MODEL')
+    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow,
+                                    args.probe_workflow_resume, args.probe_rechecks, args.probe_turn_correlation)) != 1:
+        parser.error('choose exactly one live verification mode')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_turn_correlation:
+            result = probe_turn_correlation(args.probe_turn_correlation, args.timeout)
+            print(json.dumps(result, indent=2))
+            return 0 if result['persistedTurnCorrelation'] == 'passed' else 1
         if args.probe_rechecks:
             result = probe_rechecks(args.probe_rechecks, args.timeout, stop=args.stop_retained_recheck)
             print(json.dumps(result, indent=2))

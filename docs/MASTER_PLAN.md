@@ -946,3 +946,10 @@ correlation field for new `turn_pending` rechecks with a known thread ID.
 Next eligible P12 work is an opt-in synthetic persistence probe for that
 field across reconnect before using it in recovery. `reserved` discovery
 still lacks a verified native correlation mechanism. See VERIFICATION.md.
+
+P12 turn correlation probe prepared (2026-11-21): the opt-in
+`--probe-turn-correlation MODEL` verifier exercises one synthetic turn using
+a checkpoint without a native turn ID, then looks up the client ID across a
+fresh connection. All 24 verifier tests and 521 offline tests passed, covering
+matching, missing and ambiguous history and the live opt-in. The next P12
+gate is the user-run probe in VERIFICATION.md.

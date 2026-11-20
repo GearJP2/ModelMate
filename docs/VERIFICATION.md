@@ -2366,3 +2366,30 @@ in `modelmate.py`. No App Server session or model turn was started.
 
 P12 remains IN_PROGRESS. Active retained STOP still requires live evidence
 of an active binding. No recovery or deletion policy changed.
+
+### One-turn correlation probe — offline verification
+
+From a normal Terminal logged in with a ChatGPT subscription, run:
+
+```sh
+python3 verify.py --run-live --probe-turn-correlation gpt-6.1-sol
+```
+
+The selected model must be in the account catalog and support low effort.
+The verifier checks subscription quota, creates a private local scratch project
+and one durable native thread, and sends at most one synthetic turn with a
+random client message ID. Its local checkpoint stores the thread binding,
+client message ID and account fingerprint before dispatch. After the sender
+closes, a fresh connection verifies the same account and looks up full history
+using that checkpoint, which has no native turn ID. A pass requires a single
+completed turn with a matching user-message client ID and verified thread
+identity and terminal status. Local scratch is temporary. The native thread
+is retained. Reports include source hashes and omit client, account and native
+IDs, prompts, history and scratch paths.
+
+Success is exit 0 with `persistedTurnCorrelation: passed`,
+`phase: complete` and `modelTurnsRequested: 1`. A failed or unverified result
+exits 1 and the phase identifies where the check stopped. Record the installed
+`codex --version` with the sanitized JSON. The probe simulates the missing
+checkpoint field after a completed turn. It does not simulate loss of the
+start response or verify active interruption.
