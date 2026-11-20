@@ -251,5 +251,20 @@ class RecheckProbeTests(unittest.TestCase):
         self.assertNotIn('observedBeforeStop', result)
         self.assertNotIn('stopRpcAcknowledged', result)
 
+    def test_shared_stop_requires_full_live_opt_in(self):
+        args = ['verify.py', '--probe-rechecks', 'synthetic', '--shared-stop-server']
+        with patch('verify.probe_shared_recheck_stop') as probe, patch('sys.stderr', new_callable=io.StringIO):
+            for options in ([], ['--run-live'], ['--stop-retained-recheck']):
+                with self.subTest(options=options), patch('sys.argv', args + options):
+                    with self.assertRaises(SystemExit) as error:
+                        main()
+                    self.assertEqual(error.exception.code, 2)
+            probe.assert_not_called()
+            probe.return_value = dict.fromkeys(RECHECK_STOP_KEYS, 'passed')
+            with patch('sys.argv', args + ['--run-live', '--stop-retained-recheck']), \
+                 patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(main(), 0)
+            probe.assert_called_once_with('synthetic', 120)
+
 
 if __name__=='__main__':unittest.main()

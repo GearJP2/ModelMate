@@ -9,6 +9,7 @@ import json
 import math
 import secrets
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -788,7 +789,7 @@ RECHECK_STOP_KEYS = ('initialToolEvidence', 'durableResume', 'restoredEvidenceGa
                      'finalCheckpoint', 'sentinelUnchanged')
 
 
-def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
+def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=None):
     """At most two synthetic model turns; retain native threads and scratch metadata."""
     directory = Path(tempfile.mkdtemp(prefix='modelmate-recheck-'))
     project = directory / 'project'; project.mkdir(mode=0o700)
@@ -816,8 +817,9 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
                    'Do not change files, use the network or retry. Summarize the observed result briefly.',
                    'role': 'standard', 'effort': 'low', 'risk': 'normal', 'reason': 'Explicit synthetic probe',
                    'checks': [{'kind': 'test', 'criterion': 'Native registered command exits with zero'}]}]})
-    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
-               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
+    if command is None:
+        command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+                   '-c', 'model_provider="openai"', '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
     try:
         result['phase'] = 'initial_tool_turn'
         store = SessionStore(project, directory / 'state')
@@ -1158,6 +1160,63 @@ def probe_turn_correlation(model, timeout):
     return report
 
 
+UNIX_WEBSOCKET_BRIDGE = """\
+import sys
+from threading import Thread
+from websockets.sync.client import unix_connect
+
+def read_requests(socket):
+    try:
+        for line in sys.stdin.buffer:
+            socket.send(line.decode('utf-8').rstrip('\\n'))
+    finally:
+        socket.close()
+
+with unix_connect(sys.argv[1], open_timeout=5, close_timeout=1,
+                  max_size=4 * 1024 * 1024, compression=None) as socket:
+    Thread(target=read_requests, args=(socket,), daemon=True).start()
+    for message in socket:
+        if not isinstance(message, str) or '\\n' in message or '\\r' in message:
+            raise ValueError('Expected one JSON text record per WebSocket message.')
+        sys.stdout.buffer.write(message.encode('utf-8') + b'\\n')
+        sys.stdout.buffer.flush()
+"""
+
+
+def probe_shared_recheck_stop(model, timeout):
+    """Run the existing STOP probe with clients sharing a private App Server."""
+    try:
+        from websockets.sync.client import unix_connect
+    except ImportError:
+        raise ProbeError('Shared STOP probe requires Python websockets with sync Unix support.') from None
+    if not callable(unix_connect):
+        raise ProbeError('Shared STOP probe requires Python websockets with sync Unix support.')
+    with tempfile.TemporaryDirectory(prefix='modelmate-shared-stop-') as scratch:
+        socket = Path(scratch) / 'observer.sock'
+        server_command = ['codex', 'app-server', '--listen', f'unix://{socket}',
+                          '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
+                          '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
+        bridge = [sys.executable, '-c', UNIX_WEBSOCKET_BRIDGE, str(socket)]
+        with subprocess.Popen(server_command, cwd=scratch, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as server:
+            try:
+                deadline = time.monotonic() + min(timeout, 5)
+                while not socket.is_socket():
+                    if server.poll() is not None or time.monotonic() >= deadline:
+                        raise ProbeError('Private App Server socket unavailable; no model turn requested.')
+                    time.sleep(.05)
+                result = probe_rechecks(model, timeout, stop=True, command=bridge)
+                result['transport'] = 'shared_private_unix_websocket'
+                return result
+            finally:
+                if server.poll() is None:
+                    server.terminate()
+                    try:
+                        server.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        server.kill()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
@@ -1176,6 +1235,8 @@ def main():
                         help='one synthetic turn to check persisted client message ID across reconnect')
     parser.add_argument('--stop-retained-recheck', action='store_true',
                         help='explicitly stop only the synthetic recheck created by --probe-rechecks')
+    parser.add_argument('--shared-stop-server', action='store_true',
+                        help='run the STOP probe with clients on one temporary private App Server')
     parser.add_argument('--simulate-lost-recheck-binding', action='store_true',
                         help='after --probe-rechecks, exercise terminal recovery on a copy without the turn ID')
     parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
@@ -1184,6 +1245,8 @@ def main():
     args = parser.parse_args()
     if args.stop_retained_recheck and not (args.run_live and args.probe_rechecks):
         parser.error('--stop-retained-recheck requires --run-live and --probe-rechecks')
+    if args.shared_stop_server and not (args.run_live and args.probe_rechecks and args.stop_retained_recheck):
+        parser.error('--shared-stop-server requires --run-live, --probe-rechecks and --stop-retained-recheck')
     if args.simulate_lost_recheck_binding and not (
             args.run_live and args.probe_rechecks and not args.stop_retained_recheck):
         parser.error('--simulate-lost-recheck-binding requires --run-live and --probe-rechecks without STOP')
@@ -1215,7 +1278,9 @@ def main():
             print(json.dumps(result, indent=2))
             return 0 if result['persistedTurnCorrelation'] == 'passed' else 1
         if args.probe_rechecks:
-            if args.simulate_lost_recheck_binding:
+            if args.shared_stop_server:
+                result = probe_shared_recheck_stop(args.probe_rechecks, args.timeout)
+            elif args.simulate_lost_recheck_binding:
                 result = probe_rechecks(args.probe_rechecks, args.timeout, lost_binding=True)
             else:
                 result = probe_rechecks(args.probe_rechecks, args.timeout, stop=args.stop_retained_recheck)

@@ -997,3 +997,11 @@ Retained STOP remains unverified on the current transport. The next eligible
 P12 work is a metadata-only shared-server connection spike. The initial
 private Unix-socket smoke produced a listener but neither proxy initialized.
 See VERIFICATION.md. The separate missing-thread-ID case remains open.
+
+P12 shared-server connection spike (2026-11-21): the previous proxy smoke
+sent newline JSON to a WebSocket listener. The diagnostic bridge now uses
+WebSocket frames over the private Unix socket. Codex CLI 0.171.0 initialized
+two clients and kept the first usable after the second disconnected, with
+zero inference. The opt-in shared-server STOP probe is ready for scoped live
+verification. Production transport and the separate-server STOP gate are
+unchanged. See VERIFICATION.md.

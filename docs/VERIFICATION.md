@@ -2543,3 +2543,37 @@ verify two clients can initialize on the same private server, including
 its intended disconnect and approval ownership behavior. Repeat inference
 against the current independent stdio topology only if new evidence
 justifies it.
+
+### Shared private App Server transport smoke and STOP probe
+
+Codex's Unix listener speaks WebSocket. The CLI proxy forwards raw bytes;
+newline-delimited JSON sent directly to the proxy never performed the
+WebSocket handshake. The diagnostic bridge translates one stdio JSON record
+to one WebSocket text message. See the upstream
+[Unix transport implementation](https://github.com/openai/codex/blob/main/codex-rs/app-server-transport/src/transport/unix_socket.rs).
+
+A local metadata-only smoke with Codex CLI 0.171.0 and Python websockets
+16.0 confirmed that two bridge clients initialized concurrently. The
+second client read account metadata, disconnected, and the first client
+then completed its own account read. The temporary server was stopped and
+zero model turns were requested. No daemon settings or default ModelMate
+transport were changed. This proves basic shared connectivity, with live
+interruption and active-turn permission routing still outside that smoke.
+
+To check scoped interruption through a second connection to the same server,
+use the new opt-in verifier mode. It requires Python with
+`websockets.sync.client.unix_connect` available for the diagnostic bridge.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --stop-retained-recheck --shared-stop-server
+```
+
+The probe uses a temporary private Unix socket and requests up to two
+synthetic model turns. It keeps read-only/on-request settings, and the
+verification flow grants no tool approval. The socket server is cleaned up
+at exit. Native threads and the synthetic project scratch are retained.
+A pass requires `transport: shared_private_unix_websocket`,
+`activeRecheckObserved: passed`, `stopRpcAcknowledged: true`,
+`nativeRecheckStopped: passed`, `finalCheckpoint: passed`, and an intact
+sentinel. This probe covers the shared-server topology only.
