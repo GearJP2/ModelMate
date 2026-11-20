@@ -2428,3 +2428,23 @@ run exits 0 and all four `missingBindingRecovery` checks report `passed`:
 the original checkpoint unchanged. This checks the missing-metadata path
 after completion. A real dropped reply and active interruption are separate
 conditions.
+
+### Correlated terminal recovery with a missing turn ID — scoped LIVE_VERIFIED
+
+The user ran the two-turn integration probe at `b9349f0` on Codex CLI
+`0.171.0`, requesting `gpt-6.1-sol/low`. The reported runtime hash
+`8a89cad64f094d4dcfe6e02b6752214c772e5240809e022cbb429081242bf482`
+and verifier hash
+`ea2290e522fd7c983ab5774ac65bc4896de91752c56c34cb51e8fd26eb74f3ed`
+matched the checked-out source. The main seven checks passed. Each turn
+completed with one command start, one completion, and zero command or cwd
+mismatches. All four missing-binding recovery checks passed with terminal
+status completed, zero recovery model turns, no native deletion, and no
+retained recovery copy. The original synthetic scratch was retained.
+
+A separate offline integration test now closes a fake native server before
+it sends the turn/start reply. Recovery uses the original checkpoint and a
+fresh connection. The fake history echoes the client ID from the dispatched
+request. The test checks that the unknown operation gets one terminal
+recovery record, with the work checkpoint intact and no replay or interruption.
+Live coverage remains scoped to the isolated copy after a completed recheck.

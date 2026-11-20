@@ -962,3 +962,10 @@ is MOCK_VERIFIED. The opt-in integration probe now simulates a missing turn ID
 on an isolated copy after a completed synthetic recheck. The next eligible
 P12 gate is the user-run probe documented in VERIFICATION.md. The case
 without a saved thread ID remains open.
+
+P12 scoped live integration evidence (2026-11-21): the user-run probe at
+`b9349f0` passed all four missing-turn-ID recovery checks on Codex CLI
+0.171.0, with zero recovery model turns. The fake-server suite separately
+covers loss of the turn/start reply before local binding. The next eligible
+P12 gate is active retained STOP on a confirmed active binding. A session
+without a saved thread ID still lacks a verified correlation mechanism.
