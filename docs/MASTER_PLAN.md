@@ -977,3 +977,10 @@ and a terminal interrupted observation. The 13 focused probe tests and all
 527 offline tests passed, including the race where the turn settles before
 STOP is sent. The next eligible gate is the user-run STOP probe documented
 in VERIFICATION.md.
+
+P12 prewarmed STOP live result (2026-11-21): at `f864913` the independent
+observer again reported interrupted before STOP. The live gate remains
+unverified. The revised opt-in probe samples the owning connection around
+the outside observation to diagnose cross-process disagreement separately
+from a turn that settles early. The next eligible live check is the
+diagnostic STOP run in VERIFICATION.md.

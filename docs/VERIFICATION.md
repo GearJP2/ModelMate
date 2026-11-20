@@ -2474,3 +2474,25 @@ A pass exits 0 with `activeRecheckObserved: passed`,
 `observedAfterStop: interrupted`, and intact checkpoint and sentinel checks.
 An interrupted result before the RPC or a non-active initial observation
 leaves this gate unverified. Return the sanitized JSON and CLI version.
+
+### Prewarmed STOP live attempt and owner-side diagnostics
+
+The user ran the prewarmed observer probe at `f864913` with Codex CLI
+`0.171.0` and requested `gpt-6.1-sol/low`. The source hashes matched
+runtime `b9c447c6b637f37fc65fa423d787a774bfc2a2c692583155a666f4b597861bd0`
+and verifier `dc8383ebe10e572902d945b90a7dc28d8c257328f243328ba54748a176b35601`.
+The independent observer returned `interrupted` before STOP. The scratch
+checkpoint retained an unknown finish and its sentinel was intact. No
+observer STOP was acknowledged. The result cannot determine whether the
+owning App Server still had an active turn when the observer read history.
+
+The same opt-in STOP command now reports `ownerStatusBeforeInspection` and,
+when the independent observer does not see an active turn,
+`ownerStatusAfterInspection`. These reads use the connection that started
+the recheck and report only thread-state enums after validating identity.
+If both owner reads are active while the outside observer reports
+interrupted, the probe leaves the retained STOP gate unverified and its
+existing cleanup can cancel the synthetic turn through the owner. That
+cleanup does not count as an observer STOP. A stopped owner at the second
+read leaves a timing race possible. The fake suite exercises disagreement
+without changing the production recovery decision.

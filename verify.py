@@ -17,7 +17,7 @@ from pathlib import Path
 from modelmate import (Connection, ProbeError, inspect, ensure_quota, refresh_quota,
                        select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS, NativeWorkflowConnection, WorkflowController, diagnostic_code,
                        RecheckRecoveryConnection, validate_recheck_ledger, workflow_saved_evidence,
-                       native_permissions_confirmed, native_thread_options, correlated_turn_id)
+                       native_permissions_confirmed, native_thread_options, correlated_turn_id, read_recovery_thread)
 
 
 APPROVALS = {
@@ -891,12 +891,17 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
             # transport open until recovery observes a terminal event.
             with closing(recovery) as observer:
                 recovery = None
+                owner_thread = read_recovery_thread(child, str(project), child.thread_id)
+                result['ownerStatusBeforeInspection'] = owner_thread['status']['type']
                 report = observer.inspect_recheck(store, sid)
                 result['observedBeforeStop'] = report.get('status') or report['state']
                 if 'reason' in report:
                     result['stopObservationReason'] = report['reason']
                 if report['state'] != 'active':
-                    if report['state'] == 'terminal':
+                    owner_thread = read_recovery_thread(
+                        child, str(project), child.thread_id)
+                    result['ownerStatusAfterInspection'] = owner_thread['status']['type']
+                    if report['state'] == 'terminal' and owner_thread['status']['type'] != 'active':
                         child.close()
                         child = None
                     return result

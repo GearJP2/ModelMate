@@ -19,13 +19,16 @@ trace,mode=sys.argv[1:]
 state=Path(trace+'.state')
 data=json.loads(state.read_text()) if state.exists() else {'threads':{},'threadCount':0,'turnCount':0}
 recheck_reads=0
+observer=False
 def emit(value):print(json.dumps(value),flush=True)
 for line in sys.stdin:
  req=json.loads(line);method=req.get('method');params=req.get('params',{})
  with open(trace,'a') as stream:stream.write(json.dumps(req)+'\n')
  if method is None or 'id' not in req:continue
  if mode.startswith('stop_') and state.exists():data=json.loads(state.read_text())
- if method=='initialize':result={}
+ if method=='initialize':
+  observer=params['clientInfo']['name']=='modelmate_recheck_recovery'
+  result={}
  elif method=='account/read':result={'account':{'type':'chatgpt'}}
  elif method=='account/rateLimits/read':result={'accountId':'synthetic','ordinaryUsageAllowed':True,'rateLimits':{'primary':{'usedPercent':5}}}
  elif method=='model/list':result={'data':[{'model':'synthetic','defaultReasoningEffort':'low','supportedReasoningEfforts':[{'reasoningEffort':'low'}]}]}
@@ -35,14 +38,18 @@ for line in sys.stdin:
   data['threads'][tid]={'thread':thread,'latest':None}
   result={'thread':thread,'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'workspaceWrite' if mode=='permissions' and data['threadCount']==2 else 'readOnly'}}
  elif method in ('thread/read','thread/resume'):
-  if mode=='stop_race' and params['threadId']=='thread2':
+  if mode=='stop_race' and observer and params['threadId']=='thread2':
    recheck_reads+=1
    if recheck_reads==2:
     data['threads']['thread2']['thread']['status']={'type':'idle'}
     data['threads']['thread2']['latest']['status']='interrupted'
   result={'thread':data['threads'][params['threadId']]['thread'],'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'readOnly'}}
+  if mode=='stop_observer_terminal' and observer and params['threadId']=='thread2':
+   result['thread']=dict(result['thread'],status={'type':'notLoaded'})
  elif method=='thread/turns/list':
   latest=data['threads'][params['threadId']]['latest'];result={'data':[] if latest is None else [latest]}
+  if mode=='stop_observer_terminal' and observer and params['threadId']=='thread2':
+   result['data']=[dict(latest,status='interrupted')]
  elif method=='turn/start':
   data['turnCount']+=1;turn='turn'+str(data['turnCount']);tid=params['threadId']
   data['threads'][tid]['latest']={'id':turn,'status':'completed'}
@@ -217,6 +224,15 @@ class RecheckProbeTests(unittest.TestCase):
         self.assertEqual(result['observedAfterStop'], 'interrupted')
         self.assertNotEqual(result['nativeRecheckStopped'], 'passed')
         self.assertFalse(any(r['method'] == 'turn/interrupt' for r in self.records()))
+
+    def test_stop_probe_reports_owner_active_when_observer_only_sees_interrupted(self):
+        result = self.probe('stop_observer_terminal', stop=True)
+        self.assertEqual(result['ownerStatusBeforeInspection'], 'active')
+        self.assertEqual(result['observedBeforeStop'], 'interrupted')
+        self.assertEqual(result['ownerStatusAfterInspection'], 'active')
+        self.assertEqual(result['activeRecheckObserved'], 'unverified')
+        self.assertEqual(result['nativeRecheckStopped'], 'unverified')
+        self.assertNotIn('stopRpcAcknowledged', result)
 
 
 if __name__=='__main__':unittest.main()

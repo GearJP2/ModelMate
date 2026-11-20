@@ -3592,6 +3592,16 @@ def correlated_turn_id(history, client_message_id):
     return None
 
 
+def read_recovery_thread(connection, project, thread_id):
+    thread = connection.request('thread/read', {'threadId': thread_id, 'includeTurns': False}).get('thread')
+    if (not isinstance(thread, dict) or thread.get('id') != thread_id
+            or thread.get('cwd') != project or thread.get('modelProvider') != 'openai'
+            or thread.get('ephemeral') is not False or not isinstance(thread.get('status'), dict)
+            or thread['status'].get('type') not in ('idle', 'notLoaded', 'active')):
+        raise ProbeError('Recovery thread identity/project/provider/state is unsafe or unknown.')
+    return thread
+
+
 class RecheckRecoveryConnection(Connection):
     """Metadata-only recovery; native interruption is the only permitted mutation."""
     allowed_methods = {'initialize', 'account/read', 'account/rateLimits/read',
@@ -3654,7 +3664,7 @@ class RecheckRecoveryConnection(Connection):
             raise ProbeError('Recheck points at the work thread; no native action attempted.')
         self._account(record)
         if discover:
-            self._read_recovery_thread(store.project, operation['thread_id'])
+            read_recovery_thread(self, store.project, operation['thread_id'])
             history = self.request('thread/turns/list', {'threadId': operation['thread_id'], 'limit': 2,
                 'sortDirection': 'desc', 'itemsView': 'full'})
             turn_id = correlated_turn_id(history, operation['client_message_id'])
@@ -3667,17 +3677,8 @@ class RecheckRecoveryConnection(Connection):
         return dict(report, **self.inspect_bound_turn(store.project, operation['thread_id'], operation['turn_id'],
                                                       single_turn=True))
 
-    def _read_recovery_thread(self, project, thread_id):
-        thread = self.request('thread/read', {'threadId': thread_id, 'includeTurns': False}).get('thread')
-        if (not isinstance(thread, dict) or thread.get('id') != thread_id
-                or thread.get('cwd') != project or thread.get('modelProvider') != 'openai'
-                or thread.get('ephemeral') is not False or not isinstance(thread.get('status'), dict)
-                or thread['status'].get('type') not in ('idle', 'notLoaded', 'active')):
-            raise ProbeError('Recovery thread identity/project/provider/state is unsafe or unknown.')
-        return thread
-
     def inspect_bound_turn(self, project, thread_id, turn_id, *, single_turn=False):
-        thread = self._read_recovery_thread(project, thread_id)
+        thread = read_recovery_thread(self, project, thread_id)
         history = self.request('thread/turns/list', {'threadId': thread_id, 'limit': 1,
             'sortDirection': 'desc', 'itemsView': 'summary'})
         turns = history.get('data')
