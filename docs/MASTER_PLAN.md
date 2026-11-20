@@ -969,3 +969,11 @@ P12 scoped live integration evidence (2026-11-21): the user-run probe at
 covers loss of the turn/start reply before local binding. The next eligible
 P12 gate is active retained STOP on a confirmed active binding. A session
 without a saved thread ID still lacks a verified correlation mechanism.
+
+P12 active retained STOP probe prepared (2026-11-21): the recovery connection
+is initialized before recheck dispatch and still checks fresh identity
+before interruption. The probe requires proof of an acknowledged STOP RPC
+and a terminal interrupted observation. The 13 focused probe tests and all
+527 offline tests passed, including the race where the turn settles before
+STOP is sent. The next eligible gate is the user-run STOP probe documented
+in VERIFICATION.md.

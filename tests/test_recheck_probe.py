@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from modelmate import NativeWorkflowConnection, NativeRecheckConnection, ChatShell, ProbeError, WorkflowController
+from modelmate import (NativeWorkflowConnection, NativeRecheckConnection, RecheckRecoveryConnection,
+                       ChatShell, ProbeError, WorkflowController)
 from verify import probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, main
 
 
@@ -17,11 +18,13 @@ from pathlib import Path
 trace,mode=sys.argv[1:]
 state=Path(trace+'.state')
 data=json.loads(state.read_text()) if state.exists() else {'threads':{},'threadCount':0,'turnCount':0}
+recheck_reads=0
 def emit(value):print(json.dumps(value),flush=True)
 for line in sys.stdin:
  req=json.loads(line);method=req.get('method');params=req.get('params',{})
  with open(trace,'a') as stream:stream.write(json.dumps(req)+'\n')
  if method is None or 'id' not in req:continue
+ if mode.startswith('stop_') and state.exists():data=json.loads(state.read_text())
  if method=='initialize':result={}
  elif method=='account/read':result={'account':{'type':'chatgpt'}}
  elif method=='account/rateLimits/read':result={'accountId':'synthetic','ordinaryUsageAllowed':True,'rateLimits':{'primary':{'usedPercent':5}}}
@@ -32,19 +35,34 @@ for line in sys.stdin:
   data['threads'][tid]={'thread':thread,'latest':None}
   result={'thread':thread,'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'workspaceWrite' if mode=='permissions' and data['threadCount']==2 else 'readOnly'}}
  elif method in ('thread/read','thread/resume'):
+  if mode=='stop_race' and params['threadId']=='thread2':
+   recheck_reads+=1
+   if recheck_reads==2:
+    data['threads']['thread2']['thread']['status']={'type':'idle'}
+    data['threads']['thread2']['latest']['status']='interrupted'
   result={'thread':data['threads'][params['threadId']]['thread'],'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'readOnly'}}
  elif method=='thread/turns/list':
   latest=data['threads'][params['threadId']]['latest'];result={'data':[] if latest is None else [latest]}
  elif method=='turn/start':
   data['turnCount']+=1;turn='turn'+str(data['turnCount']);tid=params['threadId']
   data['threads'][tid]['latest']={'id':turn,'status':'completed'}
+  if mode.startswith('stop_') and tid=='thread2':
+   data['threads'][tid]['thread']['status']={'type':'active'}
+   data['threads'][tid]['latest']['status']='inProgress'
   result={'turn':{'id':turn}}
- elif method=='turn/interrupt':result={}
+ elif method=='turn/interrupt':
+  if mode.startswith('stop_'):
+   target=data['threads'][params['threadId']]
+   assert target['latest']['id']==params['turnId']
+   target['thread']['status']={'type':'idle'}
+   target['latest']['status']='interrupted'
+  result={}
  else:raise RuntimeError(method)
  state.write_text(json.dumps(data))
  emit({'id':req['id'],'result':result})
  if method=='turn/start':
   count=data['turnCount'];spec=json.loads(params['input'][0]['text'])['verification_commands'][0]
+  if mode.startswith('stop_') and count==2:continue
   event={'threadId':tid,'turnId':turn}
   if mode=='approval' and count==2:
    emit({'id':99,'method':'item/commandExecution/requestApproval','params':dict(event,itemId='approval')});continue
@@ -66,17 +84,20 @@ class RecheckProbeTests(unittest.TestCase):
         self.root=Path(self.temp.name);self.scratch=self.root/'scratch';self.scratch.mkdir()
         self.trace=self.root/'trace'
 
-    def probe(self,mode='normal'):
+    def probe(self,mode='normal', *, stop=False):
         def parent(command,timeout):
             self.assertIn('forced_login_method="chatgpt"',command)
             return NativeWorkflowConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
         def child(command,timeout):
             return NativeRecheckConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
+        def observer(command,timeout):
+            return RecheckRecoveryConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
         with patch('verify.NativeWorkflowConnection',new=parent), \
              patch('modelmate.NativeRecheckConnection',new=child), \
+             patch('verify.RecheckRecoveryConnection',new=observer), \
              patch('verify.tempfile.mkdtemp',return_value=str(self.scratch)), \
              patch('sys.stderr',new_callable=io.StringIO):
-            return probe_rechecks('synthetic',1)
+            return probe_rechecks('synthetic',1,stop=stop)
 
     def records(self):return [json.loads(line) for line in self.trace.read_text().splitlines()]
 
@@ -176,6 +197,26 @@ class RecheckProbeTests(unittest.TestCase):
              patch('verify.probe_rechecks', return_value=result) as probe:
             self.assertEqual(main(), 1)
         probe.assert_called_once_with('synthetic', 120, stop=True)
+
+    def test_stop_probe_prewarmed_observer_interrupts_only_the_active_recheck(self):
+        result = self.probe('stop_active', stop=True)
+        self.assertTrue(all(result[key] == 'passed' for key in RECHECK_STOP_KEYS), result)
+        self.assertTrue(result['stopRpcAcknowledged'])
+        records = self.records()
+        interrupts = [r['params'] for r in records if r['method'] == 'turn/interrupt']
+        self.assertEqual(interrupts, [{'threadId': 'thread2', 'turnId': 'turn2'}])
+        starts = [i for i, r in enumerate(records) if r['method'] == 'turn/start']
+        initializations = [i for i, r in enumerate(records) if r['method'] == 'initialize']
+        self.assertEqual(len(starts), 2)
+        self.assertLess(max(initializations), starts[1])
+
+    def test_stop_probe_rejects_interrupted_when_no_interrupt_rpc_was_sent(self):
+        result = self.probe('stop_race', stop=True)
+        self.assertEqual(result['activeRecheckObserved'], 'passed')
+        self.assertFalse(result['stopRpcAcknowledged'])
+        self.assertEqual(result['observedAfterStop'], 'interrupted')
+        self.assertNotEqual(result['nativeRecheckStopped'], 'passed')
+        self.assertFalse(any(r['method'] == 'turn/interrupt' for r in self.records()))
 
 
 if __name__=='__main__':unittest.main()

@@ -3710,13 +3710,13 @@ class RecheckRecoveryConnection(Connection):
                 if any(report.get(key) != expected.get(key) for key in ('operation_id', 'thread_id', 'turn_id')):
                     return dict(current, state='unverified', reason='recovery_target_changed')
                 if report['state'] != 'active':
-                    return report
+                    return dict(report, interruptAcknowledged=True)
                 time.sleep(min(.1, max(0, self._poll_deadline - time.monotonic())))
         except (ProbeError, OSError):
             pass
         finally:
             self._poll_deadline = None
-        return dict(current, state='unverified', reason='interruption_unconfirmed')
+        return dict(current, state='unverified', reason='interruption_unconfirmed', interruptAcknowledged=True)
 
 
 SESSION_FIELDS = {'version', 'id', 'project', 'thread_id', 'title', 'goal', 'criteria',

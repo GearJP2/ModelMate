@@ -2448,3 +2448,29 @@ fresh connection. The fake history echoes the client ID from the dispatched
 request. The test checks that the unknown operation gets one terminal
 recovery record, with the work checkpoint intact and no replay or interruption.
 Live coverage remains scoped to the isolated copy after a completed recheck.
+
+### Active retained STOP probe update — offline verification
+
+The STOP probe now initializes and account-checks its separate recovery
+connection before confirming the synthetic recheck. This removes observer
+startup from the interval between dispatch and status inspection. The
+observer still validates fresh account and native binding state immediately
+before requesting interruption. A pass requires an active observation,
+an acknowledged scoped interrupt request and a separate terminal interrupted
+observation. The fake-server test rejects a race where the turn is already
+interrupted at the second read and no interrupt RPC is sent.
+
+From a normal authenticated Terminal:
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --stop-retained-recheck
+```
+
+This requests at most two synthetic model turns, authorizes interruption of
+the probe-created recheck only, and retains the scratch and native threads.
+A pass exits 0 with `activeRecheckObserved: passed`,
+`stopRpcAcknowledged: true`, `nativeRecheckStopped: passed`,
+`observedAfterStop: interrupted`, and intact checkpoint and sentinel checks.
+An interrupted result before the RPC or a non-active initial observation
+leaves this gate unverified. Return the sanitized JSON and CLI version.

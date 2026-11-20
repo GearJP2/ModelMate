@@ -793,7 +793,7 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
     directory = Path(tempfile.mkdtemp(prefix='modelmate-recheck-'))
     project = directory / 'project'; project.mkdir(mode=0o700)
     sentinel = project / 'sentinel.txt'; sentinel.write_text('synthetic sentinel\n')
-    connection = child = store = None
+    connection = child = store = recovery = None
     stop_attempted = False
     result = dict.fromkeys(RECHECK_STOP_KEYS if stop else RECHECK_PROBE_KEYS, 'unverified')
     result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None, scratchRetained=True,
@@ -872,6 +872,10 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
         if pending is None or shell.recheck is not None or controller.recheck_operations():
             result['consentGate'] = 'failed';return result
         result['consentGate'] = 'passed'
+        if stop:
+            result['phase'] = 'stop_observer_preflight'
+            recovery = RecheckRecoveryConnection(command, timeout)
+            recovery._account(store.read(sid))
         result['phase'] = 'native_recheck'
         shell.line('/confirm-recheck ' + pending['token'])
         child = shell.recheck
@@ -885,9 +889,12 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
             result['phase'] = 'retained_active_stop'
             # The work connection still holds the writer lock. Keep the child
             # transport open until recovery observes a terminal event.
-            with closing(RecheckRecoveryConnection(command, timeout)) as recovery:
-                report = recovery.inspect_recheck(store, sid)
+            with closing(recovery) as observer:
+                recovery = None
+                report = observer.inspect_recheck(store, sid)
                 result['observedBeforeStop'] = report.get('status') or report['state']
+                if 'reason' in report:
+                    result['stopObservationReason'] = report['reason']
                 if report['state'] != 'active':
                     if report['state'] == 'terminal':
                         child.close()
@@ -895,9 +902,11 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
                     return result
                 result['activeRecheckObserved'] = 'passed'
                 stop_attempted = True
-                report = recovery.interrupt_recheck(store, sid, report)
+                report = observer.interrupt_recheck(store, sid, report)
+                result['stopRpcAcknowledged'] = report.get('interruptAcknowledged') is True
                 result['observedAfterStop'] = report.get('status') or report['state']
-                if report['state'] != 'terminal' or report['status'] != 'interrupted':
+                if (not result['stopRpcAcknowledged'] or report['state'] != 'terminal'
+                        or report['status'] != 'interrupted'):
                     return result
                 result['nativeRecheckStopped'] = 'passed'
                 child.close()
@@ -940,6 +949,8 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False):
         result['diagnostic'] = diagnostic_code(exc)
         return result
     finally:
+        if recovery is not None:
+            recovery.close()
         for backend in (child, connection):
             if backend is None:continue
             try:
