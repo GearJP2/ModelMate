@@ -9,6 +9,7 @@ import json
 import math
 import secrets
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -16,7 +17,8 @@ from pathlib import Path
 
 from modelmate import (Connection, ProbeError, inspect, ensure_quota, refresh_quota,
                        select_model, LiveChatConnection, ChatShell, SessionStore, THREAD_SOURCE_KINDS, NativeWorkflowConnection, WorkflowController, diagnostic_code,
-                       RecheckRecoveryConnection, validate_recheck_ledger, workflow_saved_evidence)
+                       RecheckRecoveryConnection, validate_recheck_ledger, workflow_saved_evidence,
+                       native_permissions_confirmed, native_thread_options, correlated_turn_id, read_recovery_thread)
 
 
 APPROVALS = {
@@ -80,7 +82,7 @@ class VerificationConnection(Connection):
             if len(self.events) > 10000:
                 raise ProbeError('Too many events; stopping verification.')
 
-    def run_turn(self, prompt, model, effort):
+    def run_turn(self, prompt, model, effort, *, client_message_id=None):
         if self.start_pending or self.turn_id:
             raise ProbeError('Previous turn outcome unknown; no new turn started.')
         self.quota_status = refresh_quota(self, self.account_id)
@@ -93,10 +95,13 @@ class VerificationConnection(Connection):
         self.settings_observed.clear()
         deadline = time.monotonic() + self.timeout
         self.start_pending = True
-        result = self.request('turn/start', {
+        params = {
             'threadId': self.thread_id, 'model': model, 'effort': effort,
             'input': [{'type': 'text', 'text': prompt}],
-        })
+        }
+        if client_message_id is not None:
+            params['clientUserMessageId'] = client_message_id
+        result = self.request('turn/start', params)
         turn_id = result.get('turn', {}).get('id')
         if not isinstance(turn_id, str) or not turn_id or (self.turn_id and self.turn_id != turn_id):
             raise ProbeError('Invalid or conflicting turn ID; outcome unknown.')
@@ -784,12 +789,12 @@ RECHECK_STOP_KEYS = ('initialToolEvidence', 'durableResume', 'restoredEvidenceGa
                      'finalCheckpoint', 'sentinelUnchanged')
 
 
-def probe_rechecks(model, timeout, *, stop=False):
+def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=None):
     """At most two synthetic model turns; retain native threads and scratch metadata."""
     directory = Path(tempfile.mkdtemp(prefix='modelmate-recheck-'))
     project = directory / 'project'; project.mkdir(mode=0o700)
     sentinel = project / 'sentinel.txt'; sentinel.write_text('synthetic sentinel\n')
-    connection = child = store = None
+    connection = child = store = recovery = None
     stop_attempted = False
     result = dict.fromkeys(RECHECK_STOP_KEYS if stop else RECHECK_PROBE_KEYS, 'unverified')
     result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None, scratchRetained=True,
@@ -812,8 +817,9 @@ def probe_rechecks(model, timeout, *, stop=False):
                    'Do not change files, use the network or retry. Summarize the observed result briefly.',
                    'role': 'standard', 'effort': 'low', 'risk': 'normal', 'reason': 'Explicit synthetic probe',
                    'checks': [{'kind': 'test', 'criterion': 'Native registered command exits with zero'}]}]})
-    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
-               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
+    if command is None:
+        command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+                   '-c', 'model_provider="openai"', '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
     try:
         result['phase'] = 'initial_tool_turn'
         store = SessionStore(project, directory / 'state')
@@ -868,6 +874,10 @@ def probe_rechecks(model, timeout, *, stop=False):
         if pending is None or shell.recheck is not None or controller.recheck_operations():
             result['consentGate'] = 'failed';return result
         result['consentGate'] = 'passed'
+        if stop:
+            result['phase'] = 'stop_observer_preflight'
+            recovery = RecheckRecoveryConnection(command, timeout)
+            recovery._account(store.read(sid))
         result['phase'] = 'native_recheck'
         shell.line('/confirm-recheck ' + pending['token'])
         child = shell.recheck
@@ -881,19 +891,44 @@ def probe_rechecks(model, timeout, *, stop=False):
             result['phase'] = 'retained_active_stop'
             # The work connection still holds the writer lock. Keep the child
             # transport open until recovery observes a terminal event.
-            with closing(RecheckRecoveryConnection(command, timeout)) as recovery:
-                report = recovery.inspect_recheck(store, sid)
+            with closing(recovery) as observer:
+                recovery = None
+                owner_deadline = time.monotonic() + min(timeout, 2)
+                owner_timeout = child.timeout
+                try:
+                    while (remaining := owner_deadline - time.monotonic()) > 0:
+                        child.timeout = min(owner_timeout, remaining)
+                        owner_thread = read_recovery_thread(child, str(project), child.thread_id)
+                        owner_status = owner_thread['status']['type']
+                        result.setdefault('ownerInitialStatus', owner_status)
+                        result['ownerStatusBeforeInspection'] = owner_status
+                        if owner_status == 'active':
+                            break
+                        time.sleep(min(.05, max(0, owner_deadline - time.monotonic())))
+                    else:
+                        result['stopObservationReason'] = 'owner_active_not_observed'
+                        return result
+                finally:
+                    child.timeout = owner_timeout
+                report = observer.inspect_recheck(store, sid)
                 result['observedBeforeStop'] = report.get('status') or report['state']
+                if 'reason' in report:
+                    result['stopObservationReason'] = report['reason']
                 if report['state'] != 'active':
-                    if report['state'] == 'terminal':
+                    owner_thread = read_recovery_thread(
+                        child, str(project), child.thread_id)
+                    result['ownerStatusAfterInspection'] = owner_thread['status']['type']
+                    if report['state'] == 'terminal' and owner_thread['status']['type'] != 'active':
                         child.close()
                         child = None
                     return result
                 result['activeRecheckObserved'] = 'passed'
                 stop_attempted = True
-                report = recovery.interrupt_recheck(store, sid, report)
+                report = observer.interrupt_recheck(store, sid, report)
+                result['stopRpcAcknowledged'] = report.get('interruptAcknowledged') is True
                 result['observedAfterStop'] = report.get('status') or report['state']
-                if report['state'] != 'terminal' or report['status'] != 'interrupted':
+                if (not result['stopRpcAcknowledged'] or report['state'] != 'terminal'
+                        or report['status'] != 'interrupted'):
                     return result
                 result['nativeRecheckStopped'] = 'passed'
                 child.close()
@@ -925,12 +960,19 @@ def probe_rechecks(model, timeout, *, stop=False):
                 and len(operations) == 1 and operations[0]['number'] == 1):
             result['finalCheckpoint'] = 'passed'
         else:result['finalCheckpoint'] = 'failed'
+        if lost_binding and result['finalCheckpoint'] == 'passed':
+            child.close();child = None
+            connection.close();connection = None
+            result['phase'] = 'simulated_missing_binding'
+            result['missingBindingRecovery'] = probe_recheck_recovery(directory, timeout, lost_binding=True)
         result['phase'] = 'finished'
         return result
     except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         result['diagnostic'] = diagnostic_code(exc)
         return result
     finally:
+        if recovery is not None:
+            recovery.close()
         for backend in (child, connection):
             if backend is None:continue
             try:
@@ -953,7 +995,7 @@ def probe_rechecks(model, timeout, *, stop=False):
 RECOVERY_PROBE_KEYS = ('nativeTerminalObserved', 'metadataReconciled', 'historicalResultOnly', 'sourceUnchanged')
 
 
-def probe_recheck_recovery(scratch, timeout):
+def probe_recheck_recovery(scratch, timeout, *, lost_binding=False):
     """Inspect retained synthetic IDs on a copy, without native start/interrupt/delete requests."""
     source = target = connection = None
     directory = original = source_id = None
@@ -964,6 +1006,9 @@ def probe_recheck_recovery(scratch, timeout):
         scope='Metadata-only terminal reconciliation on a copy of a successful synthetic recheck probe. '
               'Original metadata not written; no native start/interrupt/delete requests. Not active interruption, missing-binding discovery, '
               'crash/network recovery, current test evidence or scoped deletion proof.')
+    if lost_binding:
+        result['scope'] = ('Terminal correlation on an isolated copy truncated before the turn binding. '
+                           'Zero model turns or native mutations during recovery.')
     try:
         result['phase'] = 'source_validation'
         root = Path(scratch).resolve(strict=True)
@@ -981,6 +1026,8 @@ def probe_recheck_recovery(scratch, timeout):
         operations = validate_recheck_ledger(flow.get('rechecks', []), workflow_saved_evidence(flow))
         if len(operations) != 1 or operations[0]['status'] != 'completed' or operations[0]['exit_code'] != 0:
             raise ProbeError('Source lacks one successful native recheck binding.')
+        if lost_binding and operations[0]['client_message_id'] is None:
+            raise ProbeError('Source was dispatched without a client message ID.')
         check_session_sentinel(project, project / 'sentinel.txt')
 
         directory = Path(tempfile.mkdtemp(prefix='modelmate-recovery-copy-'))
@@ -990,6 +1037,12 @@ def probe_recheck_recovery(scratch, timeout):
         staged = copy.deepcopy(original);staged['id'] = created['id']
         staged.update(state='UNVERIFIED', pause_reason=None, summary='Isolated metadata-only recovery probe copy.')
         staged['workflow'].update(state='UNVERIFIED', reason='simulated_lost_recheck_terminal')
+        expected_event = 'reconcile'
+        if lost_binding:
+            events = staged['workflow']['rechecks']
+            binding_index = next(i for i, event in enumerate(events) if event['kind'] == 'turn')
+            del events[binding_index:]
+            expected_event = 'recover_turn'
         from datetime import datetime, timezone
         staged['workflow']['rechecks'].append({'kind': 'finish', 'id': operations[0]['id'],
             'status': 'unknown', 'exit_code': None, 'item_id': None,
@@ -1010,12 +1063,13 @@ def probe_recheck_recovery(scratch, timeout):
             target.record_recheck_recovery(created['id'], report)
             after = target.read(created['id'])['workflow']
             if (after['rechecks'][:-1] != staged['workflow']['rechecks']
-                    or after['rechecks'][-1]['kind'] != 'reconcile'
+                    or after['rechecks'][-1]['kind'] != expected_event
                     or any(after[key] != flow[key] for key in ('steps', 'history', 'baseline', 'criterion_evidence'))):
                 result['metadataReconciled'] = 'failed';return result
             result['metadataReconciled'] = 'passed'
             recovered = validate_recheck_ledger(after['rechecks'], workflow_saved_evidence(after))[0]
-            if after['state'] != 'DONE' and recovered['exit_code'] is None and recovered['item_id'] is None:
+            if (after['state'] != 'DONE' and recovered['exit_code'] is None and recovered['item_id'] is None
+                    and recovered['turn_id'] == operations[0]['turn_id']):
                 result['historicalResultOnly'] = 'passed'
             else:result['historicalResultOnly'] = 'failed'
         result['phase'] = 'finished'
@@ -1042,6 +1096,127 @@ def probe_recheck_recovery(scratch, timeout):
                 print('Recovery probe metadata copy retained (original untouched): ' + str(directory), file=sys.stderr)
 
 
+def probe_turn_correlation(model, timeout):
+    """Test persisted client message correlation with one synthetic turn."""
+    import uuid
+
+    command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
+               '-c', 'model_provider="openai"', '-c', 'web_search="disabled"']
+    report = {'persistedTurnCorrelation': 'unverified', 'phase': 'preflight',
+              'modelTurnsRequested': 0,
+              'runtimeSha256': hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+              'verifierSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    try:
+        with tempfile.TemporaryDirectory(prefix='modelmate-turn-correlation-') as scratch:
+            project = Path(scratch).resolve() / 'project'
+            project.mkdir(mode=0o700)
+            checkpoint = project.parent / 'pending.json'
+            with closing(VerificationConnection(command, timeout)) as sender:
+                metadata = inspect(sender)
+                selection = select_model(metadata['models'], model, 'low')
+                quota = refresh_quota(sender, None)
+                if quota['state'] != 'allow':
+                    raise ProbeError('Probe quota unavailable.')
+                sender.account_id = quota['account_id']
+                fingerprint = hashlib.sha256(sender.account_id.encode()).hexdigest()
+                report['phase'] = 'thread_start'
+                result = sender.request('thread/start', dict(native_thread_options(selection, str(project)),
+                                                             ephemeral=False))
+                thread = result.get('thread')
+                if (not native_permissions_confirmed(result) or not isinstance(thread, dict)
+                        or not isinstance(thread.get('id'), str) or not thread['id']):
+                    raise ProbeError('Probe thread permissions or identity unconfirmed.')
+                sender.cwd = str(project)
+                LiveChatConnection._check_thread(sender, thread, thread['id'])
+                sender.thread_id = thread['id']
+                client_id = str(uuid.uuid4())
+                checkpoint.write_text(json.dumps({'thread_id': sender.thread_id,
+                                                  'client_id': client_id, 'account_hash': fingerprint}))
+                report['phase'] = 'synthetic_turn'
+                try:
+                    sender.run_turn('Reply only ACK. Do not use tools, read files, or use the network.',
+                                    model, 'low', client_message_id=client_id)
+                finally:
+                    report['modelTurnsRequested'] = int(getattr(sender, 'quota_status', {}).get('state') == 'allow')
+                if sender.denials or sender.turn_evidence[0]['toolsObserved']:
+                    raise ProbeError('Probe turn attempted a tool.')
+            report['phase'] = 'reconnect'
+            saved = json.loads(checkpoint.read_text())
+            with closing(RecheckRecoveryConnection(command, timeout)) as reader:
+                reader._account(saved)
+                history = reader.request('thread/turns/list', {
+                    'threadId': saved['thread_id'], 'limit': 2,
+                    'sortDirection': 'desc', 'itemsView': 'full'})
+                turn_id = correlated_turn_id(history, saved['client_id'])
+                if turn_id is None or reader.inspect_bound_turn(str(project), saved['thread_id'], turn_id,
+                                                               single_turn=True) != {
+                                                                   'state': 'terminal', 'status': 'completed'}:
+                    report['persistedTurnCorrelation'] = 'failed'
+                    return report
+            report.update(persistedTurnCorrelation='passed', phase='complete')
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        # Native errors and history can contain identifiers or local paths.
+        return report
+    return report
+
+
+UNIX_WEBSOCKET_BRIDGE = """\
+import sys
+from threading import Thread
+from websockets.sync.client import unix_connect
+
+def read_requests(socket):
+    try:
+        for line in sys.stdin.buffer:
+            socket.send(line.decode('utf-8').rstrip('\\n'))
+    finally:
+        socket.close()
+
+with unix_connect(sys.argv[1], open_timeout=5, close_timeout=1,
+                  max_size=4 * 1024 * 1024, compression=None) as socket:
+    Thread(target=read_requests, args=(socket,), daemon=True).start()
+    for message in socket:
+        if not isinstance(message, str) or '\\n' in message or '\\r' in message:
+            raise ValueError('Expected one JSON text record per WebSocket message.')
+        sys.stdout.buffer.write(message.encode('utf-8') + b'\\n')
+        sys.stdout.buffer.flush()
+"""
+
+
+def probe_shared_recheck_stop(model, timeout):
+    """Run the existing STOP probe with clients sharing a private App Server."""
+    try:
+        from websockets.sync.client import unix_connect
+    except ImportError:
+        raise ProbeError('Shared STOP probe requires Python websockets with sync Unix support.') from None
+    if not callable(unix_connect):
+        raise ProbeError('Shared STOP probe requires Python websockets with sync Unix support.')
+    with tempfile.TemporaryDirectory(prefix='modelmate-shared-stop-') as scratch:
+        socket = Path(scratch) / 'observer.sock'
+        server_command = ['codex', 'app-server', '--listen', f'unix://{socket}',
+                          '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
+                          '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
+        bridge = [sys.executable, '-c', UNIX_WEBSOCKET_BRIDGE, str(socket)]
+        with subprocess.Popen(server_command, cwd=scratch, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as server:
+            try:
+                deadline = time.monotonic() + min(timeout, 5)
+                while not socket.is_socket():
+                    if server.poll() is not None or time.monotonic() >= deadline:
+                        raise ProbeError('Private App Server socket unavailable; no model turn requested.')
+                    time.sleep(.05)
+                result = probe_rechecks(model, timeout, stop=True, command=bridge)
+                result['transport'] = 'shared_private_unix_websocket'
+                return result
+            finally:
+                if server.poll() is None:
+                    server.terminate()
+                    try:
+                        server.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        server.kill()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-live', action='store_true', help='explicitly run inference using subscription quota')
@@ -1056,17 +1231,29 @@ def main():
                         help='two synthetic durable workflow turns across reconnect; scratch/thread retained')
     parser.add_argument('--probe-rechecks', metavar='MODEL',
                         help='at most two synthetic native tool turns across reconnect; scratch/threads retained')
+    parser.add_argument('--probe-turn-correlation', metavar='MODEL',
+                        help='one synthetic turn to check persisted client message ID across reconnect')
     parser.add_argument('--stop-retained-recheck', action='store_true',
                         help='explicitly stop only the synthetic recheck created by --probe-rechecks')
+    parser.add_argument('--shared-stop-server', action='store_true',
+                        help='run the STOP probe with clients on one temporary private App Server')
+    parser.add_argument('--simulate-lost-recheck-binding', action='store_true',
+                        help='after --probe-rechecks, exercise terminal recovery on a copy without the turn ID')
     parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
                         help='metadata-only recovery on an isolated copy of a completed --probe-rechecks scratch; no inference')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if args.stop_retained_recheck and not (args.run_live and args.probe_rechecks):
         parser.error('--stop-retained-recheck requires --run-live and --probe-rechecks')
+    if args.shared_stop_server and not (args.run_live and args.probe_rechecks and args.stop_retained_recheck):
+        parser.error('--shared-stop-server requires --run-live, --probe-rechecks and --stop-retained-recheck')
+    if args.simulate_lost_recheck_binding and not (
+            args.run_live and args.probe_rechecks and not args.stop_retained_recheck):
+        parser.error('--simulate-lost-recheck-binding requires --run-live and --probe-rechecks without STOP')
     if args.probe_recheck_recovery:
         if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
-                                args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks)):
+                                args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks,
+                                args.probe_turn_correlation)):
             parser.error('--probe-recheck-recovery is metadata-only; select it alone without --run-live')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             parser.error('--timeout must be finite and positive')
@@ -1079,16 +1266,29 @@ def main():
     if not args.run_live:
         parser.print_help()
         return 0
-    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks)) != 1:
-        parser.error('choose one of --models FIRST SECOND, --probe-read-approval MODEL, --probe-sessions MODEL, --probe-workflow MODEL, --probe-workflow-resume MODEL, --probe-rechecks MODEL')
+    if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow,
+                                    args.probe_workflow_resume, args.probe_rechecks, args.probe_turn_correlation)) != 1:
+        parser.error('choose exactly one live verification mode')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_turn_correlation:
+            result = probe_turn_correlation(args.probe_turn_correlation, args.timeout)
+            print(json.dumps(result, indent=2))
+            return 0 if result['persistedTurnCorrelation'] == 'passed' else 1
         if args.probe_rechecks:
-            result = probe_rechecks(args.probe_rechecks, args.timeout, stop=args.stop_retained_recheck)
+            if args.shared_stop_server:
+                result = probe_shared_recheck_stop(args.probe_rechecks, args.timeout)
+            elif args.simulate_lost_recheck_binding:
+                result = probe_rechecks(args.probe_rechecks, args.timeout, lost_binding=True)
+            else:
+                result = probe_rechecks(args.probe_rechecks, args.timeout, stop=args.stop_retained_recheck)
             print(json.dumps(result, indent=2))
             keys = RECHECK_STOP_KEYS if args.stop_retained_recheck else RECHECK_PROBE_KEYS
+            if args.simulate_lost_recheck_binding and not all(
+                    result.get('missingBindingRecovery', {}).get(key) == 'passed' for key in RECOVERY_PROBE_KEYS):
+                return 1
             return 0 if all(result.get(key) == 'passed' for key in keys) else 1
         if args.probe_workflow_resume:
             result = probe_workflow_resume(args.probe_workflow_resume, args.timeout)

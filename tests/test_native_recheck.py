@@ -44,7 +44,8 @@ def events(command):
 for line in sys.stdin:
  req=json.loads(line);method=req.get('method');params=req.get('params',{})
  saved=json.loads(Path(checkpoint).read_text())
- entry=dict(req,ledgerPhase=(saved['workflow'].get('rechecks') or [{}])[-1].get('kind'),workTurn=saved['turn_id'])
+ latest=(saved['workflow'].get('rechecks') or [{}])[-1]
+ entry=dict(req,ledgerPhase=latest.get('kind'),clientMessageId=latest.get('client_message_id'),workTurn=saved['turn_id'])
  with open(trace,'a') as stream:stream.write(json.dumps(entry)+'\n')
  if method is None or 'id' not in req:continue
  if method=='initialize':result={}
@@ -60,7 +61,17 @@ for line in sys.stdin:
   result={'thread':thread(params['threadId'])}
   if mode=='work_project':result['thread']['cwd']='/foreign'
   if mode=='work_busy':result['thread']['status']={'type':'active'}
- elif method=='thread/turns/list':result={'data':[{'id':'work-turn','status':'completed'}]}
+ elif method=='thread/turns/list':
+  result={'data':[{'id':'work-turn','status':'completed'}]}
+  if mode=='recover_lost_reply':
+   accepted=[r['params'] for line in Path(trace).read_text().splitlines()
+             if (r:=json.loads(line))['method']=='turn/start']
+   assert len(accepted)==1 and params['threadId']==accepted[0]['threadId']==tid
+   recovered={'id':turn,'status':'completed'}
+   if params.get('itemsView')=='full':
+    recovered.update(itemsView='full',items=[
+     {'type':'userMessage','clientId':accepted[0]['clientUserMessageId']}])
+   result={'data':[recovered]}
  elif method=='thread/resume':result={'thread':thread(params['threadId']),'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'readOnly'}}
  elif method=='thread/start':
   if mode=='thread_error':emit({'id':req['id'],'error':{'code':-32000,'message':'PRIVATE_ERROR'}});continue
@@ -69,6 +80,7 @@ for line in sys.stdin:
   if mode=='ephemeral':result['thread']['ephemeral']=True
   if mode=='provider':result['thread']['modelProvider']='foreign'
  elif method=='turn/start':
+  if mode=='lost_reply':break
   result={'turn':{} if mode=='unknown_turn' else {'id':turn}}
  elif method=='turn/interrupt':result={}
  else:raise RuntimeError(method)
@@ -158,6 +170,8 @@ class NativeRecheckTests(unittest.TestCase):
         self.assertEqual(thread['approvalPolicy'], 'on-request')
         self.assertEqual(starts[1]['params']['model'], 'synthetic-standard')
         self.assertEqual(starts[1]['params']['effort'], 'low')
+        self.assertTrue(starts[1]['clientMessageId'])
+        self.assertEqual(starts[1]['params']['clientUserMessageId'], starts[1]['clientMessageId'])
         self.assertFalse(any(r['method'] == 'command/exec' for r in self.records()))
 
     def test_child_observer_cannot_emit_authoritative_workflow_events_for_parent(self):
@@ -251,6 +265,38 @@ class NativeRecheckTests(unittest.TestCase):
             self.assertIn(self.evidence['id'], parent.snapshot()['stale_evidence'])
             connection.close()
         self.assertEqual(sum(r['method'] == 'turn/start' for r in self.records()), 1)
+
+    def test_lost_start_reply_recovers_from_original_checkpoint_after_reconnect(self):
+        from modelmate import RecheckRecoveryConnection
+
+        with self.attach() as parent:
+            connection = self.backend('lost_reply')
+            with self.assertRaises(ProbeError):
+                self.start(connection, parent)
+            operation = connection.operation()
+            self.assertEqual((operation['phase'], operation['status'], operation['turn_id']),
+                             ('turn_pending', 'unknown', None))
+            self.assertIn(self.evidence['id'], parent.snapshot()['stale_evidence'])
+            connection.close()
+
+        before = self.store.read(self.sid)
+        recovery = RecheckRecoveryConnection([sys.executable, '-u', '-c', SERVER,
+            str(self.trace), str(self.checkpoint), str(self.project), 'recover_lost_reply'], .5)
+        self.addCleanup(recovery.close)
+        with self.store._lock(self.sid):
+            report = recovery.inspect_recheck(self.store, self.sid)
+            self.assertEqual(report['state'], 'terminal')
+            self.store.record_recheck_recovery(self.sid, report)
+            self.assertEqual(recovery.inspect_recheck(self.store, self.sid), {'state': 'none'})
+        after = self.store.read(self.sid)
+        self.assertEqual(after['turn_id'], before['turn_id'])
+        self.assertEqual(after['workflow']['steps'], before['workflow']['steps'])
+        event = after['workflow']['rechecks'][-1]
+        self.assertEqual((event['kind'], event['turn_id'], event['status']),
+                         ('recover_turn', 'recheck-turn', 'completed'))
+        methods = [r['method'] for r in self.records()]
+        self.assertEqual(methods.count('turn/start'), 1)
+        self.assertNotIn('turn/interrupt', methods)
 
     def test_approval_requests_decline_without_certifying_or_replaying(self):
         with self.attach() as parent:

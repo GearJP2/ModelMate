@@ -155,14 +155,16 @@ nonce, model prose, native/account IDs and local paths. This is a scoped happy-p
 probe, not interactive Terminal timing, all permissions, unknown recovery or deletion
 proof. Interactive input/event-loop behavior is currently checked offline.
 
-## Known-binding recovery (offline verified)
+## Recheck recovery
 
 `modelmate.py --recover-recheck SESSION_ID` holds the session writer lock and uses
 only initialize/account/quota reads, thread/read, thread/turns/list and, following
 explicit STOP, turn/interrupt. It never starts/resumes a thread or starts a model
 turn. Account, project, provider, durable identity and latest single-turn history
 must match the retained binding. Known exhausted quota permits metadata recovery;
-unknown account/quota does not. Missing IDs remain unresolved without discovery.
+unknown account/quota does not. If the thread ID is saved but the turn ID is
+missing, newly dispatched rechecks can recover a uniquely correlated terminal
+turn from the saved client message ID. A missing thread ID remains unresolved.
 
 An active turn offers STOP/PAUSE; EOF is not consent. STOP rechecks the displayed
 binding and waits for an observed terminal status. An acknowledgement alone cannot
@@ -182,12 +184,13 @@ discovery, current command results or scoped native cleanup.
 User Terminal evidence at source 65d15f2 passed all four metadata recovery checks
 with completed native status and zero requested model turns. The source remained
 unchanged and only the owned successful metadata copy was removed. See
-[VERIFICATION.md](VERIFICATION.md) for exact hashes and limits. Active-stop recovery
-and missing-binding discovery remain unverified. Scoped deletion has offline coverage and a live two-root confirmation.
+[VERIFICATION.md](VERIFICATION.md) for exact hashes and limits. The completed
+turn correlation path also passed live with a missing turn ID on an isolated
+checkpoint copy. Scoped deletion has a live two-root confirmation.
 
 ### Opt-in active STOP probe
 
-Run `python3 verify.py --run-live --probe-rechecks MODEL --stop-retained-recheck`
+Run `python3 verify.py --run-live --probe-rechecks MODEL --stop-retained-recheck --shared-stop-server`
 to exercise the recovery API against the synthetic recheck created in that run.
 The flag explicitly authorizes the probe to interrupt that recheck. The probe
 uses at most two model turns and a registered local command with a fixed
@@ -195,3 +198,7 @@ eight-second delay. It observes the native binding while the child transport
 is still open and requires a confirmed interrupted terminal status before
 recording recovery. The probe retains its scratch directory and native threads.
 Interactive Terminal behavior is covered separately by offline tests.
+The shared-server probe passed on Codex CLI 0.171.0. The installed recovery
+command still opens a separate App Server, where live observations have
+disagreed with the owning server during an active turn. The shared transport
+is currently available in the verifier.

@@ -931,3 +931,85 @@ deletion of the two previewed roots in the original synthetic recheck scratch.
 Local inspection found no remaining session and the scratch sentinel was intact.
 Retained recheck STOP, missing-binding discovery and broader crash/network
 recovery remain open. See VERIFICATION.md.
+
+P12 missing-binding diagnostics (2026-11-21): scoped live recovery of a known,
+already interrupted turn is recorded in VERIFICATION.md. Recovery now reports
+the last persisted dispatch phase when a native binding is incomplete.
+Offline coverage checks that all three incomplete phases leave metadata intact
+and start no native process. P12 remains IN_PROGRESS. Discovery requires evidence
+that uniquely ties a native thread or turn to the saved operation after a crash.
+A project match or recent timestamp alone cannot establish ownership.
+Active retained STOP still needs a live observation of an active binding.
+
+P12 schema inspection (2026-11-21): Codex CLI 0.171.0 exposes a candidate
+correlation field for new `turn_pending` rechecks with a known thread ID.
+Next eligible P12 work is an opt-in synthetic persistence probe for that
+field across reconnect before using it in recovery. `reserved` discovery
+still lacks a verified native correlation mechanism. See VERIFICATION.md.
+
+P12 turn correlation probe prepared (2026-11-21): the opt-in
+`--probe-turn-correlation MODEL` verifier exercises one synthetic turn using
+a checkpoint without a native turn ID, then looks up the client ID across a
+fresh connection. All 24 verifier tests and 521 offline tests passed, covering
+matching, missing and ambiguous history and the live opt-in. The next P12
+gate is the user-run probe in VERIFICATION.md.
+
+P12 correlated terminal recovery (2026-11-21): the user-run correlation
+probe at `59bc1f0` passed on Codex CLI 0.171.0. New rechecks durably record
+the client message ID before turn/start. Explicit recovery can now reconcile
+a uniquely matched terminal turn in a known native thread. This integration
+is MOCK_VERIFIED. The opt-in integration probe now simulates a missing turn ID
+on an isolated copy after a completed synthetic recheck. The next eligible
+P12 gate is the user-run probe documented in VERIFICATION.md. The case
+without a saved thread ID remains open.
+
+P12 scoped live integration evidence (2026-11-21): the user-run probe at
+`b9349f0` passed all four missing-turn-ID recovery checks on Codex CLI
+0.171.0, with zero recovery model turns. The fake-server suite separately
+covers loss of the turn/start reply before local binding. The next eligible
+P12 gate is active retained STOP on a confirmed active binding. A session
+without a saved thread ID still lacks a verified correlation mechanism.
+
+P12 active retained STOP probe prepared (2026-11-21): the recovery connection
+is initialized before recheck dispatch and still checks fresh identity
+before interruption. The probe requires proof of an acknowledged STOP RPC
+and a terminal interrupted observation. The 13 focused probe tests and all
+527 offline tests passed, including the race where the turn settles before
+STOP is sent. The next eligible gate is the user-run STOP probe documented
+in VERIFICATION.md.
+
+P12 prewarmed STOP live result (2026-11-21): at `f864913` the independent
+observer again reported interrupted before STOP. The live gate remains
+unverified. The revised opt-in probe samples the owning connection around
+the outside observation to diagnose cross-process disagreement separately
+from a turn that settles early. The next eligible live check is the
+diagnostic STOP run in VERIFICATION.md.
+
+P12 STOP activation timing (2026-11-21): the user-run diagnostic showed the
+owner transition from idle to active across the outside observation. The probe
+now waits for owner activation before the outside read. Live retained STOP
+is still unverified. Next evidence is an outside observation bracketed by
+owner activation, or an acknowledged STOP followed by interrupted status.
+
+P12 cross-server STOP result (2026-11-21): at `3fecef1` the owner was active
+on both sides of an interrupted observation from the separate App Server.
+Retained STOP remains unverified on the current transport. The next eligible
+P12 work is a metadata-only shared-server connection spike. The initial
+private Unix-socket smoke produced a listener but neither proxy initialized.
+See VERIFICATION.md. The separate missing-thread-ID case remains open.
+
+P12 shared-server connection spike (2026-11-21): the previous proxy smoke
+sent newline JSON to a WebSocket listener. The diagnostic bridge now uses
+WebSocket frames over the private Unix socket. Codex CLI 0.171.0 initialized
+two clients and kept the first usable after the second disconnected, with
+zero inference. The opt-in shared-server STOP probe is ready for scoped live
+verification. Production transport and the separate-server STOP gate are
+unchanged. See VERIFICATION.md.
+
+P12 shared-server STOP evidence (2026-11-21): the user-run probe at
+`b92db7b` passed all eight checks on Codex CLI 0.171.0. The live scope is
+two connections to one private server while the recheck owner is connected.
+P12 remains IN_PROGRESS. The next eligible work is scoping shared-server
+ownership and lifecycle, including approval routing and owner disconnect,
+before considering a production transport change. Separate-server STOP and
+missing-thread discovery remain unverified. See VERIFICATION.md.

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from unittest.mock import patch
 
 from modelmate import SessionStore, WorkflowController, RecheckRecoveryConnection
@@ -37,7 +38,8 @@ class RecoveryProbeTests(unittest.TestCase):
             op=c.reserve_recheck(evidence['id'],'printf synthetic',str(self.project),
                 {'model':'synthetic-standard','effort':'low'},QUOTA,time.monotonic(),CATALOG,POLICY)
             c.advance_recheck(op['id'],'thread',thread_id='check-thread')
-            c.advance_recheck(op['id'],'turn_reserved')
+            self.marker = str(uuid.UUID(hex=op['id']))
+            c.advance_recheck(op['id'],'turn_reserved', client_message_id=self.marker)
             c.advance_recheck(op['id'],'turn',turn_id='check-turn')
             c.advance_recheck(op['id'],'finish',status='completed',exit_code=0,item_id='check-item')
             c.finish_task({0:[evidence['id']]})
@@ -46,13 +48,14 @@ class RecoveryProbeTests(unittest.TestCase):
         self.copy=self.root/'copy';self.copy.mkdir()
         self.trace=self.root/'trace'
 
-    def probe(self,mode='complete'):
+    def probe(self,mode='complete', *, lost_binding=False):
         def factory(command,timeout):
-            return RecheckRecoveryConnection([sys.executable,'-u','-c',SERVER,str(self.trace),str(self.project),mode],timeout)
+            return RecheckRecoveryConnection(
+                [sys.executable,'-u','-c',SERVER,str(self.trace),str(self.project),mode,self.marker],timeout)
         with patch('verify.RecheckRecoveryConnection',new=factory), \
              patch('verify.tempfile.mkdtemp',return_value=str(self.copy)), \
              patch('sys.stderr',new_callable=io.StringIO):
-            result=probe_recheck_recovery(self.source,1)
+            result=probe_recheck_recovery(self.source,1,lost_binding=lost_binding)
         self.assertEqual(self.path.read_bytes(),self.original)
         self.assertNotIn(str(self.source),json.dumps(result))
         self.assertNotIn('check-thread',json.dumps(result))
@@ -78,6 +81,13 @@ class RecoveryProbeTests(unittest.TestCase):
         self.assertEqual(result['sourceUnchanged'],'passed')
         self.assertTrue(result['copyRetained']);self.assertTrue(self.copy.exists())
         self.assertFalse(any(r.get('method')=='turn/interrupt' for r in self.records()))
+
+    def test_lost_binding_copy_recovers_through_full_history(self):
+        result = self.probe(lost_binding=True)
+        self.assertTrue(all(result[key] == 'passed' for key in RECOVERY_PROBE_KEYS), result)
+        reads = [r['params']['itemsView'] for r in self.records() if r['method'] == 'thread/turns/list']
+        self.assertEqual(reads, ['full', 'summary'])
+        self.assertFalse(any(r['method'] in ('turn/start', 'turn/interrupt') for r in self.records()))
 
     def test_history_mismatch_does_not_reconcile_or_guess(self):
         result=self.probe('turn_id')

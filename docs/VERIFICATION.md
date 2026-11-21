@@ -2341,3 +2341,257 @@ attempt count and sentinel were preserved. No model turn was requested.
 The other scratch already held an interrupted finish event, and the same
 CLI returned 0 with nothing unresolved. This verifies reconciliation and
 the already-resolved path, while active STOP remains open.
+
+### Missing native recheck bindings — Codex CLI 0.171.0 schema inspection
+
+Generated both regular and experimental App Server bundles with
+`codex app-server generate-json-schema [--experimental] --out DIR`.
+Inspected request and response schemas alongside the recheck dispatch order
+in `modelmate.py`. No App Server session or model turn was started.
+
+- `turn_pending` has a saved native thread ID. The regular schema accepts
+  `turn/start.clientUserMessageId` and exposes nullable
+  `userMessage.clientId` in turn history. A new dispatch could use a
+  controller-owned operation ID as a correlation value. The schema does
+  not establish that the server echoes it in persisted history after
+  reconnect. A synthetic probe must capture the exact match in
+  `thread/turns/list` with `itemsView: full` after reconnect, using a local
+  checkpoint that never received the turn ID. A missing or ambiguous match
+  must leave recovery unresolved. Existing rechecks did not send this value.
+- `reserved` can lack the thread ID because the start reply was lost.
+  Neither generated bundle declares a per-request correlation ID on
+  `thread/start`. The schema describes `threadSource` as analytics
+  classification. A matching directory or timestamp cannot establish
+  ownership. This phase still lacks a verified discovery mechanism.
+
+P12 remains IN_PROGRESS. Active retained STOP still requires live evidence
+of an active binding. No recovery or deletion policy changed.
+
+### One-turn correlation probe — offline verification
+
+From a normal Terminal logged in with a ChatGPT subscription, run:
+
+```sh
+python3 verify.py --run-live --probe-turn-correlation gpt-6.1-sol
+```
+
+The selected model must be in the account catalog and support low effort.
+The verifier checks subscription quota, creates a private local scratch project
+and one durable native thread, and sends at most one synthetic turn with a
+random client message ID. Its local checkpoint stores the thread binding,
+client message ID and account fingerprint before dispatch. After the sender
+closes, a fresh connection verifies the same account and looks up full history
+using that checkpoint, which has no native turn ID. A pass requires a single
+completed turn with a matching user-message client ID and verified thread
+identity and terminal status. Local scratch is temporary. The native thread
+is retained. Reports include source hashes and omit client, account and native
+IDs, prompts, history and scratch paths.
+
+Success is exit 0 with `persistedTurnCorrelation: passed`,
+`phase: complete` and `modelTurnsRequested: 1`. A failed or unverified result
+exits 1 and the phase identifies where the check stopped. Record the installed
+`codex --version` with the sanitized JSON. The probe simulates the missing
+checkpoint field after a completed turn. It does not simulate loss of the
+start response or verify active interruption.
+
+### Persisted turn message ID — scoped LIVE_VERIFIED
+
+The user ran the one-turn probe from source `59bc1f0` with Codex CLI
+`0.171.0` and `gpt-6.1-sol`. It reported
+`persistedTurnCorrelation: passed`, `phase: complete`, and
+`modelTurnsRequested: 1`. Source hashes matched the reported runtime
+`5bda823643d0e635cddfadf2ef393027484079c99a7e8a5199ed531c476c2768`
+and verifier
+`0fb92a5247c1f3a9d70051f1aca9b28a50ec6bc26f8522978720bfeba3269302`.
+
+The runtime integration saves the UUID before dispatch and can reconcile a
+uniquely correlated terminal turn on a known recheck thread. It records binding
+and terminal status together without changing work attempts or restoring stale
+tool evidence. Legacy reservations without a marker, ambiguous history, and
+active turns without a saved native turn ID remain unresolved. Runtime
+integration is offline-tested. Recovery after an actual lost turn/start reply
+and active retained STOP still require live coverage.
+
+To exercise the new recovery integration on a normal authenticated Terminal:
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --simulate-lost-recheck-binding
+```
+
+This uses at most two synthetic turns. It retains the original probe scratch
+and native threads. On an isolated copy, it drops the saved turn binding and
+terminal result, then tests recovery with metadata RPCs only. A successful
+run exits 0 and all four `missingBindingRecovery` checks report `passed`:
+`nativeTerminalObserved`, `metadataReconciled`, `historicalResultOnly`, and
+`sourceUnchanged`. The recovery phase requests zero model turns and leaves
+the original checkpoint unchanged. This checks the missing-metadata path
+after completion. A real dropped reply and active interruption are separate
+conditions.
+
+### Correlated terminal recovery with a missing turn ID — scoped LIVE_VERIFIED
+
+The user ran the two-turn integration probe at `b9349f0` on Codex CLI
+`0.171.0`, requesting `gpt-6.1-sol/low`. The reported runtime hash
+`8a89cad64f094d4dcfe6e02b6752214c772e5240809e022cbb429081242bf482`
+and verifier hash
+`ea2290e522fd7c983ab5774ac65bc4896de91752c56c34cb51e8fd26eb74f3ed`
+matched the checked-out source. The main seven checks passed. Each turn
+completed with one command start, one completion, and zero command or cwd
+mismatches. All four missing-binding recovery checks passed with terminal
+status completed, zero recovery model turns, no native deletion, and no
+retained recovery copy. The original synthetic scratch was retained.
+
+A separate offline integration test now closes a fake native server before
+it sends the turn/start reply. Recovery uses the original checkpoint and a
+fresh connection. The fake history echoes the client ID from the dispatched
+request. The test checks that the unknown operation gets one terminal
+recovery record, with the work checkpoint intact and no replay or interruption.
+Live coverage remains scoped to the isolated copy after a completed recheck.
+
+### Active retained STOP probe update — offline verification
+
+The STOP probe now initializes and account-checks its separate recovery
+connection before confirming the synthetic recheck. This removes observer
+startup from the interval between dispatch and status inspection. The
+observer still validates fresh account and native binding state immediately
+before requesting interruption. A pass requires an active observation,
+an acknowledged scoped interrupt request and a separate terminal interrupted
+observation. The fake-server test rejects a race where the turn is already
+interrupted at the second read and no interrupt RPC is sent.
+
+From a normal authenticated Terminal:
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --stop-retained-recheck
+```
+
+This requests at most two synthetic model turns, authorizes interruption of
+the probe-created recheck only, and retains the scratch and native threads.
+A pass exits 0 with `activeRecheckObserved: passed`,
+`stopRpcAcknowledged: true`, `nativeRecheckStopped: passed`,
+`observedAfterStop: interrupted`, and intact checkpoint and sentinel checks.
+An interrupted result before the RPC or a non-active initial observation
+leaves this gate unverified. Return the sanitized JSON and CLI version.
+
+### Prewarmed STOP live attempt and owner-side diagnostics
+
+The user ran the prewarmed observer probe at `f864913` with Codex CLI
+`0.171.0` and requested `gpt-6.1-sol/low`. The source hashes matched
+runtime `b9c447c6b637f37fc65fa423d787a774bfc2a2c692583155a666f4b597861bd0`
+and verifier `dc8383ebe10e572902d945b90a7dc28d8c257328f243328ba54748a176b35601`.
+The independent observer returned `interrupted` before STOP. The scratch
+checkpoint retained an unknown finish and its sentinel was intact. No
+observer STOP was acknowledged. The result cannot determine whether the
+owning App Server still had an active turn when the observer read history.
+
+The same opt-in STOP command now reports `ownerStatusBeforeInspection` and,
+when the independent observer does not see an active turn,
+`ownerStatusAfterInspection`. These reads use the connection that started
+the recheck and report only thread-state enums after validating identity.
+If both owner reads are active while the outside observer reports
+interrupted, the probe leaves the retained STOP gate unverified and its
+existing cleanup can cancel the synthetic turn through the owner. That
+cleanup does not count as an observer STOP. A stopped owner at the second
+read leaves a timing race possible. The fake suite exercises disagreement
+without changing the production recovery decision.
+
+### Owner activation race in the retained STOP probe
+
+The user ran source `76e6ad7` with Codex CLI `0.171.0` and requested
+`gpt-6.1-sol/low`. The runtime hash
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier hash
+`d57ba0c3c44da5c02fae5e3db9caa4621c70b7c15825092277c16abca58517be`
+matched. The owner moved from `idle` before the inspection to `active`
+afterward, while the independent observer reported `interrupted`.
+The sentinel was intact. No independent STOP was acknowledged. This run
+does not show how the independent observer reports a turn already active
+before inspection.
+
+The revised probe waits up to two seconds for owner activation before any
+independent native thread or turn observation. It reports the initial owner
+state and the last owner state before inspection. If activation is not
+observed, it reports `owner_active_not_observed` and skips the independent
+inspection and STOP. The offline probe tests cover delayed activation and
+the bounded wait. The next live check uses the same opt-in STOP command.
+
+### Separate App Servers disagree about an active recheck — scoped live observation
+
+The user ran source `3fecef1` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. Hashes matched runtime
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier
+`a52250f63da57855459dd1ed4a967844a44ee15838a7eaf2ed76e1d6df2225bf`.
+The owner progressed from idle to active, and reported active both before
+and after the independent observer reported interrupted. No observer STOP
+was attempted. The retained checkpoint was UNVERIFIED and its last event
+was a finish with interrupted status and no exit code after owner cleanup.
+The scratch sentinel was intact. This establishes a disagreement in the
+tested topology. It does not establish a general rule for all Codex threads
+or verify the retained STOP path.
+
+The installed CLI offers a Unix listener and a stdio proxy with a socket
+override. A metadata-only smoke attempt used a temporary private socket,
+with no managed daemon changes or model turns. In the sandbox the server
+exited before creating a socket with a read-only-filesystem diagnostic.
+In the approved run the socket appeared but neither proxy completed
+initialize within its three-second deadline. This leaves shared-server
+client initialization unverified. Before any further inference probe,
+verify two clients can initialize on the same private server, including
+its intended disconnect and approval ownership behavior. Repeat inference
+against the current independent stdio topology only if new evidence
+justifies it.
+
+### Shared private App Server transport smoke and STOP probe
+
+Codex's Unix listener speaks WebSocket. The CLI proxy forwards raw bytes;
+newline-delimited JSON sent directly to the proxy never performed the
+WebSocket handshake. The diagnostic bridge translates one stdio JSON record
+to one WebSocket text message. See the upstream
+[Unix transport implementation](https://github.com/openai/codex/blob/main/codex-rs/app-server-transport/src/transport/unix_socket.rs).
+
+A local metadata-only smoke with Codex CLI 0.171.0 and Python websockets
+16.0 confirmed that two bridge clients initialized concurrently. The
+second client read account metadata, disconnected, and the first client
+then completed its own account read. The temporary server was stopped and
+zero model turns were requested. No daemon settings or default ModelMate
+transport were changed. This proves basic shared connectivity, with live
+interruption and active-turn permission routing still outside that smoke.
+
+To check scoped interruption through a second connection to the same server,
+use the new opt-in verifier mode. It requires Python with
+`websockets.sync.client.unix_connect` available for the diagnostic bridge.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --stop-retained-recheck --shared-stop-server
+```
+
+The probe uses a temporary private Unix socket and requests up to two
+synthetic model turns. It keeps read-only/on-request settings, and the
+verification flow grants no tool approval. The socket server is cleaned up
+at exit. Native threads and the synthetic project scratch are retained.
+A pass requires `transport: shared_private_unix_websocket`,
+`activeRecheckObserved: passed`, `stopRpcAcknowledged: true`,
+`nativeRecheckStopped: passed`, `finalCheckpoint: passed`, and an intact
+sentinel. This probe covers the shared-server topology only.
+
+### Shared private App Server STOP — scoped LIVE_VERIFIED
+
+The user ran source `b92db7b` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. The runtime hash
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier hash
+`d42af0eff5ad5e2d4b9b6877a2c06a9a99178d2c0b4e50156da69a3c139f21e9`
+matched the checkout. With transport `shared_private_unix_websocket`, the
+owner and observer both reported active. The interrupt was acknowledged
+and the observer then reported interrupted. All eight STOP probe checks
+passed, including the final checkpoint and unchanged sentinel. The initial
+turn had one matching command start and completion. Scratch was retained.
+
+This is scoped to two connections on the same private server while the
+owner remains connected. Production `--recover-recheck` opens an independent
+App Server. Permission request ownership on shared transport, owner loss,
+runtime adoption and the missing-thread-ID case remain open.

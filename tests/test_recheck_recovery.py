@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from unittest.mock import Mock, patch
 
 from modelmate import (Connection, LiveChatConnection, RecheckRecoveryConnection, ProbeError, SessionStore,
@@ -18,7 +19,7 @@ from test_routing import PLAN, CATALOG, POLICY, QUOTA
 
 SERVER = r'''
 import json,sys
-trace,project,mode=sys.argv[1:]
+trace,project,mode,marker=sys.argv[1:]
 interrupted=False;reads=0;quotas=0
 for line in sys.stdin:
  req=json.loads(line);method=req.get('method');p=req.get('params',{})
@@ -46,6 +47,10 @@ for line in sys.stdin:
   if mode=='finished_before_stop' and reads>1:active=False
   status='inProgress' if active else 'interrupted' if interrupted or mode=='interrupted' else 'failed' if mode=='failed' else 'completed'
   result={'data':[{'id':'work-turn' if p['threadId']=='work-thread' else 'check-turn','status':status}],'nextCursor':None}
+  if p.get('itemsView')=='full':
+   result['data'][0].update(itemsView='full',items=[
+    {'type':'userMessage','clientId':None if mode=='missing_marker' else marker}])
+   if mode=='duplicate_marker':result['data'][0]['items']*=2
   if mode=='turn_id' or (mode=='changed' and reads>1):result['data'][0]['id']='foreign'
   if mode=='empty':result['data']=[]
   if mode=='older':result['nextCursor']='older'
@@ -65,7 +70,7 @@ class RecheckRecoveryTests(unittest.TestCase):
         self.store=SessionStore(self.project,self.home);self.addCleanup(self.store.close)
         self.make_pending()
 
-    def make_pending(self,phase='turn_bound'):
+    def make_pending(self,phase='turn_bound', *, correlated=False):
         record=self.store.create('recovery fixture',thread_id='work-thread',
             account_hash=hashlib.sha256(QUOTA['accountId'].encode()).hexdigest())
         self.sid=record['id'];self.plan=json.dumps(PLAN)
@@ -80,13 +85,16 @@ class RecheckRecoveryTests(unittest.TestCase):
             self.op=c.reserve_recheck(self.evidence['id'],'printf synthetic',str(self.project),
                 {'model':'synthetic-standard','effort':'low'},QUOTA,time.monotonic(),CATALOG,POLICY)
             if phase!='reserved':c.advance_recheck(self.op['id'],'thread',thread_id='check-thread')
-            if phase in ('turn_pending','turn_bound'):c.advance_recheck(self.op['id'],'turn_reserved')
+            if phase in ('turn_pending','turn_bound'):
+                fields = {'client_message_id': str(uuid.UUID(hex=self.op['id']))} if correlated else {}
+                c.advance_recheck(self.op['id'],'turn_reserved', **fields)
             if phase=='turn_bound':c.advance_recheck(self.op['id'],'turn',turn_id='check-turn')
             c.advance_recheck(self.op['id'],'finish',status='unknown',exit_code=None,item_id=None)
         self.before=self.store.read(self.sid)
 
     def backend(self,mode='complete'):
-        backend=RecheckRecoveryConnection([sys.executable,'-u','-c',SERVER,str(self.trace),str(self.project),mode],.5)
+        marker = str(uuid.UUID(hex=self.op['id']))
+        backend=RecheckRecoveryConnection([sys.executable,'-u','-c',SERVER,str(self.trace),str(self.project),mode,marker],.5)
         self.addCleanup(backend.close);return backend
 
     def records(self):
@@ -416,6 +424,27 @@ class RecheckRecoveryTests(unittest.TestCase):
         self.assertEqual(self.store.read(self.sid)['workflow']['rechecks'][-1]['kind'],'reconcile')
         self.assertFalse(any(r.get('method') in ('thread/start','turn/start','command/exec') for r in self.records()))
 
+    def test_cli_recovers_correlated_terminal_turn_without_replay(self):
+        self.make_pending('turn_pending', correlated=True)
+        code, output = self.run_cli(b'', mode='complete')
+        self.assertEqual(code, 0, output)
+        flow = self.store.read(self.sid)['workflow']
+        self.assertEqual(flow['rechecks'][-1]['kind'], 'recover_turn')
+        self.assertEqual(flow['rechecks'][-1]['turn_id'], 'check-turn')
+        self.assertEqual(flow['steps'], self.before['workflow']['steps'])
+        self.assertEqual(flow['rechecks'][:-1], self.before['workflow']['rechecks'])
+        self.assertFalse(any(r.get('method') in ('turn/interrupt','thread/start','turn/start','command/exec')
+                             for r in self.records()))
+        self.assertEqual(self.run_cli(b'')[0], 0)
+
+    def test_cli_leaves_missing_duplicate_or_unsettled_correlation_unchanged(self):
+        self.make_pending('turn_pending', correlated=True)
+        for mode in ('missing_marker', 'duplicate_marker', 'older', 'active'):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.run_cli(b'STOP\n', mode=mode)[0], 2)
+                self.assertEqual(self.store.read(self.sid), self.before)
+        self.assertFalse(any(r.get('method') == 'turn/interrupt' for r in self.records()))
+
     def test_cli_stop_reconciles_a_turn_that_finished_during_confirmation(self):
         code, output = self.run_cli(b'STOP\n', mode='finished_before_stop')
         self.assertEqual(code, 0, output)
@@ -450,6 +479,19 @@ class RecheckRecoveryTests(unittest.TestCase):
              patch('sys.stderr',new_callable=io.StringIO),patch('modelmate.run_recheck_recovery') as recovery:
             with self.assertRaises(SystemExit) as error:main()
             self.assertEqual(error.exception.code,2);recovery.assert_not_called()
+
+    def test_cli_reports_missing_binding_phase_without_starting_native_process(self):
+        for phase in ('reserved', 'thread_bound', 'turn_pending'):
+            self.make_pending(phase)
+            before = self.store.read(self.sid)
+            output = io.StringIO()
+            with self.subTest(phase=phase), patch.dict(os.environ, {'XDG_STATE_HOME': str(self.home)}), \
+                 patch('modelmate.os.getcwd', return_value=str(self.project)), \
+                 patch('modelmate.RecheckRecoveryConnection') as native:
+                self.assertEqual(run_recheck_recovery(self.sid, io.StringIO('STOP\n'), output), 2)
+                self.assertIn(f'({phase})', output.getvalue())
+                native.assert_not_called()
+                self.assertEqual(self.store.read(self.sid), before)
 
 
 if __name__=='__main__':unittest.main()
