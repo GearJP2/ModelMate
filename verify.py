@@ -2,7 +2,7 @@
 """Opt-in live Codex checks: handoff, scratch permissions and session lifecycle."""
 import argparse
 import copy
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import io
 import json
@@ -788,15 +788,42 @@ RECHECK_STOP_KEYS = ('initialToolEvidence', 'durableResume', 'restoredEvidenceGa
                      'consentGate', 'activeRecheckObserved', 'nativeRecheckStopped',
                      'finalCheckpoint', 'sentinelUnchanged')
 
+RECHECK_DISCONNECT_KEYS = tuple(key for key in RECHECK_STOP_KEYS if key != 'nativeRecheckStopped') + (
+    'ownerDetachedWithUnknownCheckpoint', 'postDisconnectStateObserved')
+RUNTIME_RECHECK_KEYS = RECHECK_STOP_KEYS + ('ownerDetachedWithUnknownCheckpoint', 'stopConfirmationSingleUse')
 
-def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=None):
+
+def wait_for_recheck_owner(child, project, timeout, result):
+    deadline = time.monotonic() + min(timeout, 2)
+    owner_timeout = child.timeout
+    try:
+        while (remaining := deadline - time.monotonic()) > 0:
+            child.timeout = min(owner_timeout, remaining)
+            owner_thread = read_recovery_thread(child, str(project), child.thread_id)
+            owner_status = owner_thread['status']['type']
+            result.setdefault('ownerInitialStatus', owner_status)
+            result['ownerStatusBeforeInspection'] = owner_status
+            if owner_status == 'active':
+                return True
+            time.sleep(min(.05, max(0, deadline - time.monotonic())))
+    finally:
+        child.timeout = owner_timeout
+    result['stopObservationReason'] = 'owner_active_not_observed'
+    return False
+
+
+def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=None, disconnect_owner=False,
+                   runtime_shared=False):
     """At most two synthetic model turns; retain native threads and scratch metadata."""
     directory = Path(tempfile.mkdtemp(prefix='modelmate-recheck-'))
     project = directory / 'project'; project.mkdir(mode=0o700)
     sentinel = project / 'sentinel.txt'; sentinel.write_text('synthetic sentinel\n')
     connection = child = store = recovery = None
     stop_attempted = False
-    result = dict.fromkeys(RECHECK_STOP_KEYS if stop else RECHECK_PROBE_KEYS, 'unverified')
+    keys = RECHECK_DISCONNECT_KEYS if disconnect_owner else RECHECK_STOP_KEYS if stop else RECHECK_PROBE_KEYS
+    if runtime_shared:
+        keys = RUNTIME_RECHECK_KEYS
+    result = dict.fromkeys(keys, 'unverified')
     result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None, scratchRetained=True,
         runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
         verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -806,6 +833,12 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=No
     if stop:
         result['scope'] = ('At most two synthetic model turns. STOP targets only the retained recheck '
                            'created by this probe. Native threads and scratch are retained.')
+    if disconnect_owner:
+        result['scope'] += ' Disconnects only the recheck owner client. The shared server stays up through recovery.'
+    if runtime_shared:
+        result.update(transport='runtime_private_unix_websocket',
+                      scope='At most two synthetic turns. The attached runtime owns the private recheck server. '
+                            'The probe closes only the recheck client and confirms STOP for its exact binding.')
     policy = {role: model for role in ('economy', 'standard', 'strong')}
     catalog = [{'model': model, 'defaultReasoningEffort': 'low',
                 'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}]
@@ -842,12 +875,14 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=No
         result['initialToolEvidence'] = 'passed'
         controller.finish_task({0: [first['id']]})
         sid, tid = connection.session_id, connection.thread_id
-        work_turn = store.read(sid)['turn_id']
+        original_record = store.read(sid)
+        work_turn = original_record['turn_id']
         connection.close();connection = None
         check_session_sentinel(project, sentinel)
 
         result['phase'] = 'reconnect'
         connection = NativeWorkflowConnection(command, timeout)
+        connection.shared_rechecks = runtime_shared
         host = connection.resume(store, sid, project, policy, raw)
         controller = host.controller;state = controller.snapshot()
         if (connection.thread_id != tid or state['task_id'] != original['task_id']
@@ -871,10 +906,11 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=No
         result['phase'] = 'consent_preview'
         shell.line('/recheck 1.1')
         pending = shell.recheck_pending
-        if pending is None or shell.recheck is not None or controller.recheck_operations():
+        if (pending is None or shell.recheck is not None or controller.recheck_operations()
+                or runtime_shared and connection._recheck_endpoint is not None):
             result['consentGate'] = 'failed';return result
         result['consentGate'] = 'passed'
-        if stop:
+        if stop and not runtime_shared:
             result['phase'] = 'stop_observer_preflight'
             recovery = RecheckRecoveryConnection(command, timeout)
             recovery._account(store.read(sid))
@@ -887,29 +923,59 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=No
             result['recheckReservations'] = len(operations)
             if operations:result['recheckPhase'] = operations[-1]['phase']
             return result
+        if runtime_shared:
+            result['phase'] = 'runtime_owner_disconnect'
+            if not wait_for_recheck_owner(child, project, timeout, result):
+                return result
+            binding = child.operation()
+            child.close()
+            child = None
+            retained = controller.recheck_operations()
+            if (len(retained) != 1 or retained[0]['id'] != binding['id'] or retained[0]['status'] != 'unknown'
+                    or retained[0]['exit_code'] is not None
+                    or store.read(sid)['workflow'] != controller.export_checkpoint()):
+                return result
+            result['ownerDetachedWithUnknownCheckpoint'] = 'passed'
+            shell.show_workflow(render=False)
+            report = shell.recover_shared_recheck('/recover-recheck', [])
+            result['observedBeforeStop'] = report.get('status') or report['state']
+            if (report['state'] != 'active' or shell.recheck_stop_pending is None
+                    or any(report[key] != binding[field] for key, field in (
+                        ('operation_id', 'id'), ('thread_id', 'thread_id'), ('turn_id', 'turn_id')))):
+                return result
+            result['activeRecheckObserved'] = 'passed'
+            token = shell.recheck_stop_pending[0]
+            report = shell.recover_shared_recheck('/stop-recheck', [token])
+            result['stopRpcAcknowledged'] = report.get('interruptAcknowledged') is True
+            result['observedAfterStop'] = report.get('status') or report['state']
+            if not result['stopRpcAcknowledged'] or report.get('status') != 'interrupted':
+                return result
+            result['nativeRecheckStopped'] = 'passed'
+            try:
+                shell.recover_shared_recheck('/stop-recheck', [token])
+            except ProbeError as exc:
+                if not str(exc).startswith('Invalid or expired STOP token'):
+                    raise
+                result['stopConfirmationSingleUse'] = 'passed'
+            saved = store.read(sid)
+            flow = saved['workflow']
+            operations = controller.recheck_operations()
+            reconciled = (flow == controller.export_checkpoint() and flow['steps'] == original['steps']
+                          and flow['history'] == original_record['workflow']['history']
+                          and saved['thread_id'] == tid and saved['turn_id'] == work_turn
+                          and len(operations) == 1 and operations[0]['number'] == 1
+                          and operations[0]['status'] == 'interrupted' and operations[0]['exit_code'] is None
+                          and operations[0]['item_id'] is None and first['id'] in controller.snapshot()['stale_evidence'])
+            result['finalCheckpoint'] = 'passed' if reconciled else 'failed'
+            result['phase'] = 'finished'
+            return result
         if stop:
             result['phase'] = 'retained_active_stop'
-            # The work connection still holds the writer lock. Keep the child
-            # transport open until recovery observes a terminal event.
+            # Keep the writer lock and both clients through the initial active observation.
             with closing(recovery) as observer:
                 recovery = None
-                owner_deadline = time.monotonic() + min(timeout, 2)
-                owner_timeout = child.timeout
-                try:
-                    while (remaining := owner_deadline - time.monotonic()) > 0:
-                        child.timeout = min(owner_timeout, remaining)
-                        owner_thread = read_recovery_thread(child, str(project), child.thread_id)
-                        owner_status = owner_thread['status']['type']
-                        result.setdefault('ownerInitialStatus', owner_status)
-                        result['ownerStatusBeforeInspection'] = owner_status
-                        if owner_status == 'active':
-                            break
-                        time.sleep(min(.05, max(0, owner_deadline - time.monotonic())))
-                    else:
-                        result['stopObservationReason'] = 'owner_active_not_observed'
-                        return result
-                finally:
-                    child.timeout = owner_timeout
+                if not wait_for_recheck_owner(child, project, timeout, result):
+                    return result
                 report = observer.inspect_recheck(store, sid)
                 result['observedBeforeStop'] = report.get('status') or report['state']
                 if 'reason' in report:
@@ -923,24 +989,47 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=No
                         child = None
                     return result
                 result['activeRecheckObserved'] = 'passed'
-                stop_attempted = True
-                report = observer.interrupt_recheck(store, sid, report)
-                result['stopRpcAcknowledged'] = report.get('interruptAcknowledged') is True
-                result['observedAfterStop'] = report.get('status') or report['state']
-                if (not result['stopRpcAcknowledged'] or report['state'] != 'terminal'
-                        or report['status'] != 'interrupted'):
-                    return result
-                result['nativeRecheckStopped'] = 'passed'
-                child.close()
-                child = None
+                if disconnect_owner:
+                    result['phase'] = 'owner_disconnect'
+                    binding = {key: report[key] for key in ('operation_id', 'thread_id', 'turn_id')}
+                    child.close()
+                    child = None
+                    saved = store.read(sid)['workflow']
+                    retained = validate_recheck_ledger(saved['rechecks'], workflow_saved_evidence(saved))
+                    if (len(retained) != 1 or retained[0]['status'] != 'unknown'
+                            or retained[0]['exit_code'] is not None):
+                        return result
+                    result['ownerDetachedWithUnknownCheckpoint'] = 'passed'
+                    report = observer.inspect_recheck(store, sid)
+                    result['observedAfterOwnerDisconnect'] = report.get('status') or report['state']
+                    if (report['state'] not in ('active', 'terminal')
+                            or any(report.get(key) != value for key, value in binding.items())):
+                        result['disconnectObservationReason'] = report.get('reason')
+                        return result
+                    result['postDisconnectStateObserved'] = 'passed'
+                if report['state'] == 'active':
+                    stop_attempted = True
+                    report = observer.interrupt_recheck(store, sid, report)
+                    result['stopRpcAcknowledged'] = report.get('interruptAcknowledged') is True
+                    result['observedAfterStop'] = report.get('status') or report['state']
+                    if (not result['stopRpcAcknowledged'] or report['state'] != 'terminal'
+                            or report['status'] != 'interrupted'):
+                        return result
+                    if not disconnect_owner:
+                        result['nativeRecheckStopped'] = 'passed'
+                if child is not None:
+                    child.close()
+                    child = None
                 store.record_recheck_recovery(sid, report)
                 saved = store.read(sid)
                 flow = saved['workflow']
                 operations = validate_recheck_ledger(flow['rechecks'], workflow_saved_evidence(flow))
-                reconciled = (flow['steps'] == original['steps'] and saved['thread_id'] == tid
+                reconciled = (flow['steps'] == original['steps']
+                              and flow['history'] == original_record['workflow']['history']
+                              and saved['thread_id'] == tid
                               and saved['turn_id'] == work_turn and len(operations) == 1
-                              and operations[0]['status'] == 'interrupted'
-                              and operations[0]['exit_code'] is None)
+                              and operations[0]['status'] == report['status']
+                              and operations[0]['exit_code'] is None and operations[0]['item_id'] is None)
                 result['finalCheckpoint'] = 'passed' if reconciled else 'failed'
             result['phase'] = 'finished'
             return result
@@ -1183,14 +1272,15 @@ with unix_connect(sys.argv[1], open_timeout=5, close_timeout=1,
 """
 
 
-def probe_shared_recheck_stop(model, timeout):
-    """Run the existing STOP probe with clients sharing a private App Server."""
+@contextmanager
+def private_app_server(timeout):
+    """Yield a stdio bridge command for clients of a temporary private server."""
     try:
         from websockets.sync.client import unix_connect
     except ImportError:
-        raise ProbeError('Shared STOP probe requires Python websockets with sync Unix support.') from None
+        raise ProbeError('Shared-server probes require Python websockets with sync Unix support.') from None
     if not callable(unix_connect):
-        raise ProbeError('Shared STOP probe requires Python websockets with sync Unix support.')
+        raise ProbeError('Shared-server probes require Python websockets with sync Unix support.')
     with tempfile.TemporaryDirectory(prefix='modelmate-shared-stop-') as scratch:
         socket = Path(scratch) / 'observer.sock'
         server_command = ['codex', 'app-server', '--listen', f'unix://{socket}',
@@ -1205,9 +1295,7 @@ def probe_shared_recheck_stop(model, timeout):
                     if server.poll() is not None or time.monotonic() >= deadline:
                         raise ProbeError('Private App Server socket unavailable; no model turn requested.')
                     time.sleep(.05)
-                result = probe_rechecks(model, timeout, stop=True, command=bridge)
-                result['transport'] = 'shared_private_unix_websocket'
-                return result
+                yield bridge
             finally:
                 if server.poll() is None:
                     server.terminate()
@@ -1215,6 +1303,129 @@ def probe_shared_recheck_stop(model, timeout):
                         server.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         server.kill()
+
+
+def probe_shared_recheck_stop(model, timeout, *, disconnect_owner=False):
+    with private_app_server(timeout) as bridge:
+        result = probe_rechecks(model, timeout, stop=True, command=bridge, disconnect_owner=disconnect_owner)
+    result['transport'] = 'shared_private_unix_websocket'
+    return result
+
+
+class PendingApprovalOwner(Connection):
+    """Capture one pending request without ever replying to a server request."""
+    allowed_methods = Connection.allowed_methods | {'thread/start', 'turn/start'}
+
+    def __init__(self, command, timeout):
+        super().__init__(command, timeout)
+        self.pending = None
+        self.terminal_seen = False
+
+    def handle_event(self, message):
+        if 'id' in message:
+            if self.pending is not None or message['method'] != 'item/fileChange/requestApproval':
+                raise ProbeError('Unexpected approval request; no response sent.')
+            self.pending = message['params']
+        elif message['method'] == 'turn/completed':
+            self.terminal_seen = True
+
+    def wait_for_approval(self, thread_id, turn_id):
+        deadline = time.monotonic() + self.timeout
+        while self.pending is None and not self.terminal_seen:
+            message = self.receive(deadline)
+            if 'method' not in message:
+                raise ProbeError('Unexpected response while waiting for approval.')
+            self.handle_event(message)
+        pending = self.pending
+        if (self.terminal_seen or not pending or pending.get('threadId') != thread_id
+                or pending.get('turnId') != turn_id or not isinstance(pending.get('itemId'), str)
+                or not pending['itemId']):
+            raise ProbeError('No matching pending file approval observed.')
+
+
+class PassiveApprovalObserver(RecheckRecoveryConnection):
+    allowed_methods = RecheckRecoveryConnection.allowed_methods - {'turn/interrupt'}
+
+    def handle_event(self, message):
+        if 'id' in message:
+            raise ProbeError('Observer received a server request; no response sent.')
+
+
+SHARED_APPROVAL_KEYS = ('ownerPendingApprovalObserved', 'passiveObserverSawActive',
+                        'terminalAfterOwnerDisconnect', 'markerAbsent')
+
+
+def probe_shared_approval(model, timeout, command, *, stop_orphan=False):
+    """One synthetic file approval with a passive, non-subscribing recovery observer."""
+    report = dict.fromkeys(SHARED_APPROVAL_KEYS, 'unverified')
+    report.update(phase='preflight', modelTurnsRequested=0, transport='shared_private_unix_websocket',
+                  runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+                  verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    with tempfile.TemporaryDirectory(prefix='modelmate-shared-approval-') as scratch:
+        project = Path(scratch).resolve()
+        marker = project / 'approval-marker.txt'
+        try:
+            with closing(PassiveApprovalObserver(command, timeout)) as observer:
+                if stop_orphan:
+                    observer.allowed_methods = observer.allowed_methods | {'turn/interrupt'}
+                with closing(PendingApprovalOwner(command, timeout)) as owner:
+                    selection = select_model(inspect(owner)['models'], model, 'low')
+                    quota = refresh_quota(owner)
+                    if quota['state'] != 'allow':
+                        raise ProbeError('Probe quota unavailable.')
+                    fingerprint = hashlib.sha256(quota['account_id'].encode()).hexdigest()
+                    record = {'account_hash': fingerprint}
+                    observer._account(record)
+                    started = owner.request('thread/start', dict(native_thread_options(selection, str(project)),
+                                                                 ephemeral=False))
+                    thread_id = started['thread']['id']
+                    if not native_permissions_confirmed(started) or not isinstance(thread_id, str) or not thread_id:
+                        raise ProbeError('Probe thread permissions or identity unconfirmed.')
+                    read_recovery_thread(observer, str(project), thread_id)
+                    if refresh_quota(owner, quota['account_id'])['state'] != 'allow':
+                        raise ProbeError('Probe quota unavailable before dispatch.')
+                    report.update(phase='owner_pending_approval', modelTurnsRequested=1)
+                    turn = owner.request('turn/start', {
+                        'threadId': thread_id, 'model': model, 'effort': 'low',
+                        'input': [{'type': 'text', 'text': 'Use apply_patch once to create approval-marker.txt '
+                                   'containing only the synthetic word test. Do not use any other tool '
+                                   'or write anywhere else. If unavailable or denied, stop without retrying.'}],
+                    })['turn']
+                    turn_id = turn['id']
+                    if not isinstance(turn_id, str) or not turn_id:
+                        raise ProbeError('Probe turn identity unconfirmed.')
+                    owner.wait_for_approval(thread_id, turn_id)
+                    report['ownerPendingApprovalObserved'] = 'passed'
+                    observed = observer.inspect_bound_turn(str(project), thread_id, turn_id, single_turn=True)
+                    if observed['state'] != 'active':
+                        return report
+                    report['passiveObserverSawActive'] = 'passed'
+                report['phase'] = 'owner_disconnected'
+                deadline = time.monotonic() + min(timeout, 10)
+                observer._poll_deadline = deadline
+                observer._account(record)
+                if stop_orphan:
+                    observed = observer.inspect_bound_turn(str(project), thread_id, turn_id, single_turn=True)
+                    report['observedAfterOwnerDisconnect'] = observed.get('status') or observed['state']
+                    if observed['state'] != 'active':
+                        return report
+                    report['phase'] = 'orphan_stop'
+                    observer.request('turn/interrupt', {'threadId': thread_id, 'turnId': turn_id})
+                    report['orphanStopAcknowledged'] = True
+                while time.monotonic() < deadline:
+                    observed = observer.inspect_bound_turn(str(project), thread_id, turn_id, single_turn=True)
+                    key = 'observedAfterStop' if stop_orphan else 'observedAfterOwnerDisconnect'
+                    report[key] = observed.get('status') or observed['state']
+                    if observed['state'] == 'terminal':
+                        report.update(terminalAfterOwnerDisconnect='passed', observedTerminalStatus=observed['status'],
+                                      phase='finished')
+                        break
+                    time.sleep(min(.1, max(0, deadline - time.monotonic())))
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            report['diagnostic'] = diagnostic_code(exc)
+        finally:
+            report['markerAbsent'] = 'failed' if marker.exists() or marker.is_symlink() else 'passed'
+    return report
 
 
 def main():
@@ -1233,27 +1444,42 @@ def main():
                         help='at most two synthetic native tool turns across reconnect; scratch/threads retained')
     parser.add_argument('--probe-turn-correlation', metavar='MODEL',
                         help='one synthetic turn to check persisted client message ID across reconnect')
+    parser.add_argument('--probe-shared-approval', metavar='MODEL',
+                        help='one synthetic pending approval across owner disconnect on a private shared App Server')
+    parser.add_argument('--stop-orphaned-approval', action='store_true',
+                        help='interrupt only the synthetic approval turn that remains active after owner disconnect')
     parser.add_argument('--stop-retained-recheck', action='store_true',
                         help='explicitly stop only the synthetic recheck created by --probe-rechecks')
     parser.add_argument('--shared-stop-server', action='store_true',
                         help='run the STOP probe with clients on one temporary private App Server')
+    parser.add_argument('--runtime-shared-recheck', action='store_true',
+                        help='test in-session recovery using the runtime-owned private server')
+    parser.add_argument('--disconnect-recheck-owner', action='store_true',
+                        help='drop the active recheck owner connection before observing or stopping the turn')
     parser.add_argument('--simulate-lost-recheck-binding', action='store_true',
                         help='after --probe-rechecks, exercise terminal recovery on a copy without the turn ID')
     parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
                         help='metadata-only recovery on an isolated copy of a completed --probe-rechecks scratch; no inference')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
+    if args.stop_orphaned_approval and not (args.run_live and args.probe_shared_approval):
+        parser.error('--stop-orphaned-approval requires --run-live and --probe-shared-approval')
     if args.stop_retained_recheck and not (args.run_live and args.probe_rechecks):
         parser.error('--stop-retained-recheck requires --run-live and --probe-rechecks')
     if args.shared_stop_server and not (args.run_live and args.probe_rechecks and args.stop_retained_recheck):
         parser.error('--shared-stop-server requires --run-live, --probe-rechecks and --stop-retained-recheck')
+    if args.runtime_shared_recheck and not (args.run_live and args.probe_rechecks and args.stop_retained_recheck
+                                            and not args.shared_stop_server):
+        parser.error('--runtime-shared-recheck requires --run-live, --probe-rechecks and --stop-retained-recheck alone')
+    if args.disconnect_recheck_owner and not args.shared_stop_server:
+        parser.error('--disconnect-recheck-owner requires --shared-stop-server')
     if args.simulate_lost_recheck_binding and not (
             args.run_live and args.probe_rechecks and not args.stop_retained_recheck):
         parser.error('--simulate-lost-recheck-binding requires --run-live and --probe-rechecks without STOP')
     if args.probe_recheck_recovery:
         if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
                                 args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks,
-                                args.probe_turn_correlation)):
+                                args.probe_turn_correlation, args.probe_shared_approval)):
             parser.error('--probe-recheck-recovery is metadata-only; select it alone without --run-live')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             parser.error('--timeout must be finite and positive')
@@ -1267,18 +1493,32 @@ def main():
         parser.print_help()
         return 0
     if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow,
-                                    args.probe_workflow_resume, args.probe_rechecks, args.probe_turn_correlation)) != 1:
+                                    args.probe_workflow_resume, args.probe_rechecks, args.probe_turn_correlation,
+                                    args.probe_shared_approval)) != 1:
         parser.error('choose exactly one live verification mode')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_shared_approval:
+            with private_app_server(args.timeout) as command:
+                result = probe_shared_approval(args.probe_shared_approval, args.timeout, command,
+                                               stop_orphan=args.stop_orphaned_approval)
+            print(json.dumps(result, indent=2))
+            if args.stop_orphaned_approval and (result.get('orphanStopAcknowledged') is not True
+                                                or result.get('observedTerminalStatus') != 'interrupted'):
+                return 1
+            return 0 if all(result.get(key) == 'passed' for key in SHARED_APPROVAL_KEYS) else 1
         if args.probe_turn_correlation:
             result = probe_turn_correlation(args.probe_turn_correlation, args.timeout)
             print(json.dumps(result, indent=2))
             return 0 if result['persistedTurnCorrelation'] == 'passed' else 1
         if args.probe_rechecks:
-            if args.shared_stop_server:
+            if args.runtime_shared_recheck:
+                result = probe_rechecks(args.probe_rechecks, args.timeout, stop=True, runtime_shared=True)
+            elif args.disconnect_recheck_owner:
+                result = probe_shared_recheck_stop(args.probe_rechecks, args.timeout, disconnect_owner=True)
+            elif args.shared_stop_server:
                 result = probe_shared_recheck_stop(args.probe_rechecks, args.timeout)
             elif args.simulate_lost_recheck_binding:
                 result = probe_rechecks(args.probe_rechecks, args.timeout, lost_binding=True)
@@ -1286,6 +1526,10 @@ def main():
                 result = probe_rechecks(args.probe_rechecks, args.timeout, stop=args.stop_retained_recheck)
             print(json.dumps(result, indent=2))
             keys = RECHECK_STOP_KEYS if args.stop_retained_recheck else RECHECK_PROBE_KEYS
+            if args.runtime_shared_recheck:
+                keys = RUNTIME_RECHECK_KEYS
+            if args.disconnect_recheck_owner:
+                keys = RECHECK_DISCONNECT_KEYS
             if args.simulate_lost_recheck_binding and not all(
                     result.get('missingBindingRecovery', {}).get(key) == 'passed' for key in RECOVERY_PROBE_KEYS):
                 return 1

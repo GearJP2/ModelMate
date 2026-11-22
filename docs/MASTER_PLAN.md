@@ -1013,3 +1013,84 @@ P12 remains IN_PROGRESS. The next eligible work is scoping shared-server
 ownership and lifecycle, including approval routing and owner disconnect,
 before considering a production transport change. Separate-server STOP and
 missing-thread discovery remain unverified. See VERIFICATION.md.
+
+P12 shared-server owner disconnect probe prepared (2026-11-21): the verifier
+drops the active synthetic recheck owner, checks the unknown checkpoint,
+and observes the same binding through the surviving connection. Offline
+tests cover a surviving active turn and a terminal turn. Next eligible live
+evidence is the opt-in owner-disconnect run in VERIFICATION.md. Approval
+ownership remains a separate shared-server check.
+
+P12 shared-server owner disconnect evidence (2026-11-21): the user-run probe
+at `ee5bc76` passed all nine checks on Codex CLI 0.171.0. The recheck turn
+remained active after owner disconnect and a surviving client interrupted
+it without replay. Next eligible P12 work is a synthetic shared-server
+approval routing and owner-loss probe that grants no approval. This evidence
+does not widen runtime transport or permission policy. See VERIFICATION.md.
+
+P12 shared-server pending file approval probe prepared (2026-11-22):
+the diagnostic observes one owner-bound request alongside a passive
+metadata client, closes the owner without replying, and checks for terminal
+state and absence of the marker. The next eligible gate is the opt-in
+one-turn run in VERIFICATION.md; active subscribers and other approval
+types remain outside this probe.
+
+P12 shared approval evidence (2026-11-22): the user-run probe at da10207
+established owner receipt and passive observation for one file approval.
+The turn remained active after owner disconnect and the marker was absent.
+The new explicit `--stop-orphaned-approval` probe checks whether the
+surviving client can settle that active binding without an approval reply.
+Next eligible gate is the user-run opt-in check in VERIFICATION.md.
+
+P12 shared approval STOP evidence (2026-11-22): at `00c742f` all four checks
+passed on Codex CLI 0.171.0. A passive observer interrupted an active turn
+after the file-approval owner disconnected without replying. Next eligible
+work is to design a private shared-server lifecycle for the standalone
+runtime, including server lifetime, endpoint identity and approval boundaries.
+Approval routing with additional subscribed clients, server loss and
+missing-thread discovery remain open. See VERIFICATION.md.
+
+P12 private recheck server design (2026-11-22): documented the first runtime
+scope in NATIVE_RECHECK.md. An attached workflow owns the private server and
+writer lock. Recheck execution and passive recovery use that server while the
+parent is open. The next eligible implementation is the offline Unix WebSocket
+and endpoint lifecycle spike for the standalone runtime. Runtime integration,
+process-loss recovery and missing-thread discovery remain open.
+
+P12 private transport spike (2026-11-22): the isolated standard-library
+Unix WebSocket and process lifecycle prototype passed socket tests outside
+the restricted bind environment. A metadata-only Codex CLI 0.171.0 smoke
+initialized two clients and kept the first usable after the second closed.
+Next eligible implementation is integrating the transport with the existing
+JSON-RPC reader and selector without changing approval or ledger ownership.
+See VERIFICATION.md.
+
+P12 shared JSON-RPC integration (2026-11-23): the optional WebSocket wire
+now feeds the existing runtime parser and selector. Offline checks cover
+partial frames, notification/RPC ordering and rejection of observer
+approval requests. The two-client metadata smoke passed on Codex CLI 0.171.0.
+Next eligible work is folding the transport into the single-file runtime
+and wiring experimental rechecks and recovery to the owning workflow.
+See VERIFICATION.md.
+
+P12 experimental runtime wiring (2026-11-23): the private transport lives
+in the single-file runtime. The optional `--experimental-shared-rechecks`
+path gives an attached experimental workflow lifecycle ownership of one
+private recheck server. It keeps the parent available after recheck-client
+loss and offers in-session inspection and single-use STOP confirmation.
+Reconciliation is written through the attached controller so the ledger
+on disk and in memory remains aligned. Next eligible work is an opt-in
+runtime integration verifier for this path, followed by live verification.
+
+P12 runtime-owned STOP probe prepared (2026-11-23): the opt-in verifier now
+drives shared recheck and recovery through the attached runtime's private
+server and ChatShell handlers. The offline fixture checks exact STOP,
+single-use confirmation and coherent historical reconciliation. Next
+eligible evidence is the user-run opt-in probe in VERIFICATION.md.
+
+P12 runtime-owned STOP evidence (2026-11-23): the user-run probe at
+`132d80c` passed all ten checks on Codex CLI 0.171.0. Verified scope is
+the attached runtime and ChatShell handlers after recheck client loss,
+while the workflow and private server stay open. Next eligible work is
+interactive Terminal coverage of the experimental CLI path. Loss of the
+runtime/server and missing-thread-ID discovery remain open.

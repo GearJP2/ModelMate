@@ -1,15 +1,18 @@
 """Two synthetic tool turns across reconnect; never invoke installed Codex."""
 import io
 import json
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from modelmate import (NativeWorkflowConnection, NativeRecheckConnection, RecheckRecoveryConnection,
                        ChatShell, ProbeError, WorkflowController)
-from verify import probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, main
+from verify import (probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, RECHECK_DISCONNECT_KEYS,
+                    PendingApprovalOwner, PassiveApprovalObserver, probe_shared_approval,
+                    SHARED_APPROVAL_KEYS, RUNTIME_RECHECK_KEYS, main)
 
 
 SERVER = r'''
@@ -39,7 +42,7 @@ for line in sys.stdin:
   data['threads'][tid]={'thread':thread,'latest':None}
   result={'thread':thread,'approvalPolicy':'on-request','approvalsReviewer':'user','sandbox':{'type':'workspaceWrite' if mode=='permissions' and data['threadCount']==2 else 'readOnly'}}
  elif method in ('thread/read','thread/resume'):
-  if mode=='stop_race' and observer and params['threadId']=='thread2':
+  if mode in ('stop_race','stop_disconnect_terminal') and observer and params['threadId']=='thread2':
    recheck_reads+=1
    if recheck_reads==2:
     data['threads']['thread2']['thread']['status']={'type':'idle'}
@@ -96,20 +99,95 @@ class RecheckProbeTests(unittest.TestCase):
         self.root=Path(self.temp.name);self.scratch=self.root/'scratch';self.scratch.mkdir()
         self.trace=self.root/'trace'
 
-    def probe(self,mode='normal', *, stop=False):
+    def test_passive_approval_observer_fails_closed_on_server_request(self):
+        observer = object.__new__(PassiveApprovalObserver)
+        observer.send = Mock()
+        with self.assertRaises(ProbeError):
+            observer.handle_event({'id': 4, 'method': 'item/fileChange/requestApproval'})
+        observer.send.assert_not_called()
+        self.assertNotIn('turn/interrupt', observer.allowed_methods)
+
+    def test_owner_captures_only_one_matching_pending_approval_without_reply(self):
+        owner = object.__new__(PendingApprovalOwner)
+        owner.pending, owner.terminal_seen = None, False
+        owner.timeout = 1
+        owner.send = Mock()
+        request = {'id': 4, 'method': 'item/fileChange/requestApproval',
+                   'params': {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch'}}
+        owner.handle_event(request)
+        owner.wait_for_approval('thread', 'turn')
+        with self.assertRaises(ProbeError):
+            owner.wait_for_approval('thread', 'foreign')
+        with self.assertRaises(ProbeError):
+            owner.handle_event(request)
+        owner.send.assert_not_called()
+
+    def test_shared_approval_probe_observes_terminal_only_after_closing_owner(self):
+        self.check_shared_approval_probe(stop_orphan=False)
+
+    def test_shared_approval_probe_can_stop_only_the_active_orphan(self):
+        self.check_shared_approval_probe(stop_orphan=True)
+
+    def check_shared_approval_probe(self, *, stop_orphan):
+        owner, observer = Mock(), Mock()
+        observer.allowed_methods = PassiveApprovalObserver.allowed_methods
+        owner.request.side_effect = [
+            {'thread': {'id': 'thread'}, 'sandbox': {'type': 'readOnly'},
+             'approvalPolicy': 'on-request', 'approvalsReviewer': 'user'},
+            {'turn': {'id': 'turn'}},
+        ]
+
+        def observe(project, thread_id, turn_id, *, single_turn):
+            self.assertEqual((thread_id, turn_id, single_turn), ('thread', 'turn', True))
+            if owner.close.called and (not stop_orphan or observer.request.called):
+                return {'state': 'terminal', 'status': 'interrupted'}
+            return {'state': 'active'}
+
+        observer.inspect_bound_turn.side_effect = observe
+        with patch('verify.PendingApprovalOwner', return_value=owner), \
+             patch('verify.PassiveApprovalObserver', return_value=observer), \
+             patch('verify.inspect', return_value={'models': []}), \
+             patch('verify.select_model', return_value={'model': 'synthetic'}), \
+             patch('verify.read_recovery_thread'), \
+             patch('verify.refresh_quota', return_value={'state': 'allow', 'account_id': 'synthetic'}):
+            report = probe_shared_approval('synthetic', 1, ['bridge'], stop_orphan=stop_orphan)
+        self.assertTrue(all(report[key] == 'passed' for key in SHARED_APPROVAL_KEYS), report)
+        self.assertEqual(report['observedTerminalStatus'], 'interrupted')
+        self.assertEqual(report['modelTurnsRequested'], 1)
+        self.assertEqual([call.args[0] for call in owner.request.call_args_list], ['thread/start', 'turn/start'])
+        owner.send.assert_not_called()
+        observer.send.assert_not_called()
+        if stop_orphan:
+            observer.request.assert_called_once_with('turn/interrupt', {'threadId': 'thread', 'turnId': 'turn'})
+            self.assertEqual(report['observedAfterOwnerDisconnect'], 'active')
+            self.assertTrue(report['orphanStopAcknowledged'])
+        else:
+            observer.request.assert_not_called()
+
+    def test_shared_approval_cli_is_inert_without_live_opt_in(self):
+        with patch('sys.argv', ['verify.py', '--probe-shared-approval', 'synthetic']), \
+             patch('sys.stdout', new_callable=io.StringIO), patch('verify.private_app_server') as server:
+            self.assertEqual(main(), 0)
+            server.assert_not_called()
+
+    def probe(self,mode='normal', *, stop=False, disconnect_owner=False, runtime_shared=False):
         def parent(command,timeout):
             self.assertIn('forced_login_method="chatgpt"',command)
             return NativeWorkflowConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
-        def child(command,timeout):
+        def child(command,timeout,*,websocket=None):
             return NativeRecheckConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
-        def observer(command,timeout):
+        def observer(command,timeout,*,websocket=None):
             return RecheckRecoveryConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
         with patch('verify.NativeWorkflowConnection',new=parent), \
              patch('modelmate.NativeRecheckConnection',new=child), \
+             patch('modelmate.RecheckRecoveryConnection',new=observer), \
+             patch('modelmate.private_recheck_server',return_value=nullcontext(object())), \
+             patch('modelmate.UnixWebSocket'), \
              patch('verify.RecheckRecoveryConnection',new=observer), \
              patch('verify.tempfile.mkdtemp',return_value=str(self.scratch)), \
              patch('sys.stderr',new_callable=io.StringIO):
-            return probe_rechecks('synthetic',1,stop=stop)
+            return probe_rechecks('synthetic',1,stop=stop,disconnect_owner=disconnect_owner,
+                                  runtime_shared=runtime_shared)
 
     def records(self):return [json.loads(line) for line in self.trace.read_text().splitlines()]
 
@@ -265,6 +343,46 @@ class RecheckProbeTests(unittest.TestCase):
                  patch('sys.stdout', new_callable=io.StringIO):
                 self.assertEqual(main(), 0)
             probe.assert_called_once_with('synthetic', 120)
+
+    def test_owner_disconnect_reconciles_terminal_without_sending_stop(self):
+        result = self.probe('stop_disconnect_terminal', stop=True, disconnect_owner=True)
+        self.assertTrue(all(result[key] == 'passed' for key in RECHECK_DISCONNECT_KEYS), result)
+        self.assertEqual(result['observedAfterOwnerDisconnect'], 'interrupted')
+        self.assertFalse(any(r['method'] == 'turn/interrupt' for r in self.records()))
+
+    def test_owner_disconnect_stops_only_if_the_bound_turn_survives(self):
+        result = self.probe('stop_active', stop=True, disconnect_owner=True)
+        self.assertTrue(all(result[key] == 'passed' for key in RECHECK_DISCONNECT_KEYS), result)
+        self.assertEqual(result['observedAfterOwnerDisconnect'], 'active')
+        self.assertTrue(result['stopRpcAcknowledged'])
+        starts = [r for r in self.records() if r['method'] == 'turn/start']
+        stops = [r['params'] for r in self.records() if r['method'] == 'turn/interrupt']
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(stops, [{'threadId': 'thread2', 'turnId': 'turn2'}])
+
+    def test_runtime_shared_recovery_exercises_attached_controller_and_stop_confirmation(self):
+        result = self.probe('stop_active', stop=True, runtime_shared=True)
+        self.assertTrue(all(result[key] == 'passed' for key in RUNTIME_RECHECK_KEYS), result)
+        self.assertEqual(result['transport'], 'runtime_private_unix_websocket')
+        self.assertTrue(result['stopRpcAcknowledged'])
+        self.assertEqual(result['observedAfterStop'], 'interrupted')
+        starts = [r for r in self.records() if r['method'] == 'turn/start']
+        stops = [r['params'] for r in self.records() if r['method'] == 'turn/interrupt']
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(stops, [{'threadId': 'thread2', 'turnId': 'turn2'}])
+
+    def test_runtime_shared_probe_requires_live_stop_and_reports_partial_result(self):
+        args = ['verify.py', '--probe-rechecks', 'synthetic', '--runtime-shared-recheck']
+        with patch('verify.probe_rechecks') as probe, patch('sys.stderr', new_callable=io.StringIO):
+            with patch('sys.argv', args), self.assertRaises(SystemExit):
+                main()
+            probe.assert_not_called()
+            probe.return_value = dict.fromkeys(RUNTIME_RECHECK_KEYS, 'passed')
+            probe.return_value['stopConfirmationSingleUse'] = 'unverified'
+            with patch('sys.argv', args + ['--run-live', '--stop-retained-recheck']), \
+                 patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(main(), 1)
+            probe.assert_called_once_with('synthetic', 120, stop=True, runtime_shared=True)
 
 
 if __name__=='__main__':unittest.main()

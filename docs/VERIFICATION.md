@@ -2595,3 +2595,211 @@ This is scoped to two connections on the same private server while the
 owner remains connected. Production `--recover-recheck` opens an independent
 App Server. Permission request ownership on shared transport, owner loss,
 runtime adoption and the missing-thread-ID case remain open.
+
+### Shared-server recheck owner disconnect probe — offline verification
+
+The opt-in probe verifies the same native turn is active from the owner and
+observer, then closes the owner connection without sending an interrupt.
+It requires the saved operation to become unknown without command evidence.
+The observer then reads the original binding. If it remains active, the
+probe uses the explicit STOP authorization and requires an acknowledged
+interrupt and observed terminal state. If it is already terminal, the
+probe records historical recovery without sending STOP. Both paths check
+that the work bindings, history, counters and sentinel are preserved.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --stop-retained-recheck --shared-stop-server --disconnect-recheck-owner
+```
+
+This uses at most two synthetic turns and the same diagnostic Python
+WebSocket dependency. The output reports `observedAfterOwnerDisconnect`;
+a pass requires `ownerDetachedWithUnknownCheckpoint`,
+`postDisconnectStateObserved` and `finalCheckpoint` all to pass. An
+immediately terminal observation establishes the status at that read;
+it does not alone establish the cause. The server and parent workflow
+client remain connected through recovery. The probe covers owner connection
+loss only, not server loss, approval ownership or production transport.
+
+### Shared-server owner disconnect with a surviving turn — scoped LIVE_VERIFIED
+
+The user ran source `ee5bc76` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. The checkout matched runtime SHA-256
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier SHA-256
+`e3091bee9a0cab0bdb281fdedf70f2f789b44b5978f6535d7b51d216bdeb98dc`.
+All nine disconnect probe checks passed. The observer saw the exact
+bound turn active both before and after the owner disconnected. It sent
+STOP through the surviving connection, received acknowledgement, and
+then observed interrupted status. The retained checkpoint was UNVERIFIED
+with an unknown finish followed by an interrupted reconcile event.
+The sentinel was intact.
+
+This covers the surviving-active branch with the App Server and parent
+workflow client still running. Shared-server approval routing and pending
+approval behavior on connection loss remain unverified, as do server
+loss and installed runtime recovery through a shared transport.
+
+### Shared-server pending file approval probe — offline verification
+
+The opt-in probe starts a new private shared App Server and at most one
+synthetic turn in a temporary read-only scratch project. The turn requests
+one patch to a synthetic marker. The owner must receive a pending file
+approval bound to that thread and turn, while a second, passive recovery
+client sees the bound turn active. The passive client uses metadata RPCs
+and aborts if it receives a server request. The probe disconnects the owner
+without replying, then observes the same turn for up to ten seconds through
+the surviving client. It sends no approval response or interrupt and checks
+that the marker remains absent. It retains no scratch files and does not
+delete native history.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-shared-approval gpt-6.1-sol
+```
+
+This mode requires the diagnostic Python WebSocket dependency. A pass
+requires `ownerPendingApprovalObserved`, `passiveObserverSawActive`,
+`terminalAfterOwnerDisconnect`, and `markerAbsent` to report `passed`.
+A missing request, request delivered to the passive observer, or turn
+that stays active leaves the gate unverified. This probe covers one file
+approval with a passive reader. It does not exercise additional subscribed
+clients, command approvals, user acceptance or installed runtime behavior.
+
+### Turn with a pending file approval remains active after owner disconnect
+
+The user ran source `da10207` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol`. The runtime SHA-256
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier SHA-256
+`377a16c93c74305936249f765a4ff01f95510358d4b21621a0511c5a7cad4e5e`
+matched. The owning client received the bound file approval, the passive
+observer saw the turn active, and the scratch marker stayed absent. The
+turn was still active after the owner disconnected and through the last
+observation in the bounded window. Terminal status and the fate of the
+pending request were unverified. The run did not send STOP.
+
+An optional action now tests whether explicit STOP can settle that same
+active approval turn. It requires the surviving observer to confirm the
+same thread/turn is active after owner disconnect before sending one
+scoped interrupt. Neither client sends an approval response.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-shared-approval gpt-6.1-sol --stop-orphaned-approval
+```
+
+The run uses at most one synthetic turn. A pass requires all four
+shared approval checks, `orphanStopAcknowledged: true`, and
+`observedTerminalStatus: interrupted`. This tests one interruption
+with a passive observer. It does not verify approval requests for other
+tools or subscribed clients.
+
+### STOP after a file approval owner disconnects — scoped LIVE_VERIFIED
+
+The user ran source `00c742f` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. The runtime SHA-256
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier SHA-256
+`9c21f0cb3ba5d8e5c1dd653b5bf62e409e7ac67cac0a87cb618b07cbf498e5ae`
+matched the checkout. One synthetic turn was requested. The owner received
+the bound file approval, and the passive observer saw the same turn active
+before and after the owner disconnected. The observer's scoped STOP was
+acknowledged and it observed `interrupted`. All four checks passed, including
+absence of the marker. Neither connection sent an approval response.
+
+This verifies one file-approval path with a passive metadata observer on a
+shared private App Server. It does not establish where requests go with
+additional subscribed clients, what happens after server loss, or whether
+the installed standalone runtime can recover through this transport.
+
+### Standard-library private Unix WebSocket transport spike
+
+The isolated `recheck_transport.py` spike validates the private directory,
+socket inode, Linux peer credentials and owned process group before using
+an endpoint. It pins the peer across connections and tests the HTTP Upgrade,
+masked client frames, fragmented text, control frames, limits, deadlines
+and socket cleanup. A fake subprocess covers startup timeout and confirms
+that leaving the context removes only its own temporary directory. The
+restricted execution sandbox disallows binding Unix sockets. The socket
+tests were run with approval outside it, without inference.
+
+A metadata-only smoke against Codex CLI `0.171.0` initialized two clients
+using the new standard-library transport on the same private server.
+The second performed an `account/read` and disconnected. The first could
+still read account metadata. The context stopped the temporary server.
+No model turns were requested and no account fields were reported.
+
+The transport is an isolated spike. The runtime still needs a selector and
+JSON-RPC integration, including independent deadlines for simultaneous
+owner and observer operations, before a runtime inference probe.
+
+### Private WebSocket through the shared JSON-RPC reader
+
+The optional WebSocket connection now uses the runtime's existing JSON
+validation, request IDs, RPC allowlists and selector entry points. The
+incremental frame reader retains incomplete frames between readiness
+events. The fake-server checks cover an interleaved notification and RPC
+reply, and an unexpected approval request on the recovery observer,
+which fails closed without a reply. Stdio remains the default path.
+
+A metadata-only smoke on Codex CLI 0.171.0 used the updated `Connection`
+with two private WebSocket clients. Both initialized, the second read
+account metadata and disconnected, and the first then read account
+metadata. No model turn was requested. The runtime CLI has no shared
+transport selection yet. The attached-workflow ownership and recovery
+UI remain to be wired and verified.
+
+### Experimental runtime shared rechecks — offline implementation
+
+Folded the private transport into the single Python runtime and exposed it
+only for explicit shared experimental recheck resume. Offline checks cover
+STOP token cancellation and single use, rejection of a foreign observed
+turn, and equality between the reconciled controller checkpoint and saved
+ledger. The in-session observer has the recovery allowlist. No inference was
+run and this increment does not claim live runtime STOP.
+
+### Runtime-owned private recheck STOP probe — offline verification
+
+This probe keeps the work connection on stdio and enables the runtime's
+experimental private recheck server on the resumed workflow. It drives
+consent and STOP through the real ChatShell command handlers and writes
+reconciliation through the attached controller under the existing writer
+lock. It deliberately closes the recheck client after observing an active
+owner, verifies the checkpoint is unknown, inspects the same binding through
+the runtime observer and confirms STOP. It tests single-use confirmation,
+stale evidence and equality of the saved checkpoint with the in-memory
+controller. The CLI's interactive timing and process-loss recovery remain
+outside the probe.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --stop-retained-recheck --runtime-shared-recheck
+```
+
+The mode uses at most two synthetic turns, with no Python WebSocket package
+required. A pass requires `transport: runtime_private_unix_websocket`,
+`ownerDetachedWithUnknownCheckpoint: passed`, `stopRpcAcknowledged: true`,
+`observedAfterStop: interrupted`, `stopConfirmationSingleUse: passed` and
+`finalCheckpoint: passed`, as well as an intact sentinel. The probe retains
+the scratch session and native threads.
+
+### Runtime-owned private recheck STOP — scoped LIVE_VERIFIED
+
+The user ran source `132d80c` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. Runtime SHA-256
+`0220dd6693d44776d0fad24db439d687a3e21fdf1fa7b8892d48bd017d7b6367`
+and verifier SHA-256
+`ef6392d68d6b944b12defd67be71dda504a7886c97d10430fe57c6617adc18a1`
+matched the checkout. All ten checks passed on
+`runtime_private_unix_websocket`. The owner progressed from idle to active.
+After the recheck client closed, the attached runtime showed the original
+binding active, sent one explicitly confirmed STOP, received acknowledgement
+and observed interrupted. The token could not be reused.
+
+Local inspection of the retained synthetic checkpoint confirmed UNVERIFIED
+with an unknown finish followed by an interrupted reconcile event. The
+event held no command exit code or item ID, and the sentinel was intact.
+This covers the attached controller and shell handlers for a synthetic
+recheck on the runtime-owned server. Interactive Terminal timing, loss of
+the workflow or server, and discovery with a missing thread ID remain open.
