@@ -2665,3 +2665,32 @@ A missing request, request delivered to the passive observer, or turn
 that stays active leaves the gate unverified. This probe covers one file
 approval with a passive reader. It does not exercise additional subscribed
 clients, command approvals, user acceptance or installed runtime behavior.
+
+### Turn with a pending file approval remains active after owner disconnect
+
+The user ran source `da10207` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol`. The runtime SHA-256
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier SHA-256
+`377a16c93c74305936249f765a4ff01f95510358d4b21621a0511c5a7cad4e5e`
+matched. The owning client received the bound file approval, the passive
+observer saw the turn active, and the scratch marker stayed absent. The
+turn was still active after the owner disconnected and through the last
+observation in the bounded window. Terminal status and the fate of the
+pending request were unverified. The run did not send STOP.
+
+An optional action now tests whether explicit STOP can settle that same
+active approval turn. It requires the surviving observer to confirm the
+same thread/turn is active after owner disconnect before sending one
+scoped interrupt. Neither client sends an approval response.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-shared-approval gpt-6.1-sol --stop-orphaned-approval
+```
+
+The run uses at most one synthetic turn. A pass requires all four
+shared approval checks, `orphanStopAcknowledged: true`, and
+`observedTerminalStatus: interrupted`. This tests one interruption
+with a passive observer. It does not verify approval requests for other
+tools or subscribed clients.

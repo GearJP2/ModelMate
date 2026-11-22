@@ -1034,3 +1034,10 @@ metadata client, closes the owner without replying, and checks for terminal
 state and absence of the marker. The next eligible gate is the opt-in
 one-turn run in VERIFICATION.md; active subscribers and other approval
 types remain outside this probe.
+
+P12 shared approval evidence (2026-11-22): the user-run probe at da10207
+established owner receipt and passive observation for one file approval.
+The turn remained active after owner disconnect and the marker was absent.
+The new explicit `--stop-orphaned-approval` probe checks whether the
+surviving client can settle that active binding without an approval reply.
+Next eligible gate is the user-run opt-in check in VERIFICATION.md.

@@ -1295,7 +1295,7 @@ SHARED_APPROVAL_KEYS = ('ownerPendingApprovalObserved', 'passiveObserverSawActiv
                         'terminalAfterOwnerDisconnect', 'markerAbsent')
 
 
-def probe_shared_approval(model, timeout, command):
+def probe_shared_approval(model, timeout, command, *, stop_orphan=False):
     """One synthetic file approval with a passive, non-subscribing recovery observer."""
     report = dict.fromkeys(SHARED_APPROVAL_KEYS, 'unverified')
     report.update(phase='preflight', modelTurnsRequested=0, transport='shared_private_unix_websocket',
@@ -1306,6 +1306,8 @@ def probe_shared_approval(model, timeout, command):
         marker = project / 'approval-marker.txt'
         try:
             with closing(PassiveApprovalObserver(command, timeout)) as observer:
+                if stop_orphan:
+                    observer.allowed_methods = observer.allowed_methods | {'turn/interrupt'}
                 with closing(PendingApprovalOwner(command, timeout)) as owner:
                     selection = select_model(inspect(owner)['models'], model, 'low')
                     quota = refresh_quota(owner)
@@ -1342,9 +1344,18 @@ def probe_shared_approval(model, timeout, command):
                 deadline = time.monotonic() + min(timeout, 10)
                 observer._poll_deadline = deadline
                 observer._account(record)
-                while time.monotonic() < deadline:
+                if stop_orphan:
                     observed = observer.inspect_bound_turn(str(project), thread_id, turn_id, single_turn=True)
                     report['observedAfterOwnerDisconnect'] = observed.get('status') or observed['state']
+                    if observed['state'] != 'active':
+                        return report
+                    report['phase'] = 'orphan_stop'
+                    observer.request('turn/interrupt', {'threadId': thread_id, 'turnId': turn_id})
+                    report['orphanStopAcknowledged'] = True
+                while time.monotonic() < deadline:
+                    observed = observer.inspect_bound_turn(str(project), thread_id, turn_id, single_turn=True)
+                    key = 'observedAfterStop' if stop_orphan else 'observedAfterOwnerDisconnect'
+                    report[key] = observed.get('status') or observed['state']
                     if observed['state'] == 'terminal':
                         report.update(terminalAfterOwnerDisconnect='passed', observedTerminalStatus=observed['status'],
                                       phase='finished')
@@ -1375,6 +1386,8 @@ def main():
                         help='one synthetic turn to check persisted client message ID across reconnect')
     parser.add_argument('--probe-shared-approval', metavar='MODEL',
                         help='one synthetic pending approval across owner disconnect on a private shared App Server')
+    parser.add_argument('--stop-orphaned-approval', action='store_true',
+                        help='interrupt only the synthetic approval turn that remains active after owner disconnect')
     parser.add_argument('--stop-retained-recheck', action='store_true',
                         help='explicitly stop only the synthetic recheck created by --probe-rechecks')
     parser.add_argument('--shared-stop-server', action='store_true',
@@ -1387,6 +1400,8 @@ def main():
                         help='metadata-only recovery on an isolated copy of a completed --probe-rechecks scratch; no inference')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
+    if args.stop_orphaned_approval and not (args.run_live and args.probe_shared_approval):
+        parser.error('--stop-orphaned-approval requires --run-live and --probe-shared-approval')
     if args.stop_retained_recheck and not (args.run_live and args.probe_rechecks):
         parser.error('--stop-retained-recheck requires --run-live and --probe-rechecks')
     if args.shared_stop_server and not (args.run_live and args.probe_rechecks and args.stop_retained_recheck):
@@ -1422,8 +1437,12 @@ def main():
     try:
         if args.probe_shared_approval:
             with private_app_server(args.timeout) as command:
-                result = probe_shared_approval(args.probe_shared_approval, args.timeout, command)
+                result = probe_shared_approval(args.probe_shared_approval, args.timeout, command,
+                                               stop_orphan=args.stop_orphaned_approval)
             print(json.dumps(result, indent=2))
+            if args.stop_orphaned_approval and (result.get('orphanStopAcknowledged') is not True
+                                                or result.get('observedTerminalStatus') != 'interrupted'):
+                return 1
             return 0 if all(result.get(key) == 'passed' for key in SHARED_APPROVAL_KEYS) else 1
         if args.probe_turn_correlation:
             result = probe_turn_correlation(args.probe_turn_correlation, args.timeout)

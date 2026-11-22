@@ -122,7 +122,14 @@ class RecheckProbeTests(unittest.TestCase):
         owner.send.assert_not_called()
 
     def test_shared_approval_probe_observes_terminal_only_after_closing_owner(self):
+        self.check_shared_approval_probe(stop_orphan=False)
+
+    def test_shared_approval_probe_can_stop_only_the_active_orphan(self):
+        self.check_shared_approval_probe(stop_orphan=True)
+
+    def check_shared_approval_probe(self, *, stop_orphan):
         owner, observer = Mock(), Mock()
+        observer.allowed_methods = PassiveApprovalObserver.allowed_methods
         owner.request.side_effect = [
             {'thread': {'id': 'thread'}, 'sandbox': {'type': 'readOnly'},
              'approvalPolicy': 'on-request', 'approvalsReviewer': 'user'},
@@ -131,7 +138,7 @@ class RecheckProbeTests(unittest.TestCase):
 
         def observe(project, thread_id, turn_id, *, single_turn):
             self.assertEqual((thread_id, turn_id, single_turn), ('thread', 'turn', True))
-            if owner.close.called:
+            if owner.close.called and (not stop_orphan or observer.request.called):
                 return {'state': 'terminal', 'status': 'interrupted'}
             return {'state': 'active'}
 
@@ -142,14 +149,19 @@ class RecheckProbeTests(unittest.TestCase):
              patch('verify.select_model', return_value={'model': 'synthetic'}), \
              patch('verify.read_recovery_thread'), \
              patch('verify.refresh_quota', return_value={'state': 'allow', 'account_id': 'synthetic'}):
-            report = probe_shared_approval('synthetic', 1, ['bridge'])
+            report = probe_shared_approval('synthetic', 1, ['bridge'], stop_orphan=stop_orphan)
         self.assertTrue(all(report[key] == 'passed' for key in SHARED_APPROVAL_KEYS), report)
         self.assertEqual(report['observedTerminalStatus'], 'interrupted')
         self.assertEqual(report['modelTurnsRequested'], 1)
         self.assertEqual([call.args[0] for call in owner.request.call_args_list], ['thread/start', 'turn/start'])
         owner.send.assert_not_called()
         observer.send.assert_not_called()
-        observer.interrupt_recheck.assert_not_called()
+        if stop_orphan:
+            observer.request.assert_called_once_with('turn/interrupt', {'threadId': 'thread', 'turnId': 'turn'})
+            self.assertEqual(report['observedAfterOwnerDisconnect'], 'active')
+            self.assertTrue(report['orphanStopAcknowledged'])
+        else:
+            observer.request.assert_not_called()
 
     def test_shared_approval_cli_is_inert_without_live_opt_in(self):
         with patch('sys.argv', ['verify.py', '--probe-shared-approval', 'synthetic']), \
