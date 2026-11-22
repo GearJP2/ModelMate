@@ -1027,3 +1027,10 @@ remained active after owner disconnect and a surviving client interrupted
 it without replay. Next eligible P12 work is a synthetic shared-server
 approval routing and owner-loss probe that grants no approval. This evidence
 does not widen runtime transport or permission policy. See VERIFICATION.md.
+
+P12 shared-server pending file approval probe prepared (2026-11-22):
+the diagnostic observes one owner-bound request alongside a passive
+metadata client, closes the owner without replying, and checks for terminal
+state and absence of the marker. The next eligible gate is the opt-in
+one-turn run in VERIFICATION.md; active subscribers and other approval
+types remain outside this probe.

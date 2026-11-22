@@ -5,11 +5,13 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from modelmate import (NativeWorkflowConnection, NativeRecheckConnection, RecheckRecoveryConnection,
                        ChatShell, ProbeError, WorkflowController)
-from verify import probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, RECHECK_DISCONNECT_KEYS, main
+from verify import (probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, RECHECK_DISCONNECT_KEYS,
+                    PendingApprovalOwner, PassiveApprovalObserver, probe_shared_approval,
+                    SHARED_APPROVAL_KEYS, main)
 
 
 SERVER = r'''
@@ -95,6 +97,65 @@ class RecheckProbeTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.scratch=self.root/'scratch';self.scratch.mkdir()
         self.trace=self.root/'trace'
+
+    def test_passive_approval_observer_fails_closed_on_server_request(self):
+        observer = object.__new__(PassiveApprovalObserver)
+        observer.send = Mock()
+        with self.assertRaises(ProbeError):
+            observer.handle_event({'id': 4, 'method': 'item/fileChange/requestApproval'})
+        observer.send.assert_not_called()
+        self.assertNotIn('turn/interrupt', observer.allowed_methods)
+
+    def test_owner_captures_only_one_matching_pending_approval_without_reply(self):
+        owner = object.__new__(PendingApprovalOwner)
+        owner.pending, owner.terminal_seen = None, False
+        owner.timeout = 1
+        owner.send = Mock()
+        request = {'id': 4, 'method': 'item/fileChange/requestApproval',
+                   'params': {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch'}}
+        owner.handle_event(request)
+        owner.wait_for_approval('thread', 'turn')
+        with self.assertRaises(ProbeError):
+            owner.wait_for_approval('thread', 'foreign')
+        with self.assertRaises(ProbeError):
+            owner.handle_event(request)
+        owner.send.assert_not_called()
+
+    def test_shared_approval_probe_observes_terminal_only_after_closing_owner(self):
+        owner, observer = Mock(), Mock()
+        owner.request.side_effect = [
+            {'thread': {'id': 'thread'}, 'sandbox': {'type': 'readOnly'},
+             'approvalPolicy': 'on-request', 'approvalsReviewer': 'user'},
+            {'turn': {'id': 'turn'}},
+        ]
+
+        def observe(project, thread_id, turn_id, *, single_turn):
+            self.assertEqual((thread_id, turn_id, single_turn), ('thread', 'turn', True))
+            if owner.close.called:
+                return {'state': 'terminal', 'status': 'interrupted'}
+            return {'state': 'active'}
+
+        observer.inspect_bound_turn.side_effect = observe
+        with patch('verify.PendingApprovalOwner', return_value=owner), \
+             patch('verify.PassiveApprovalObserver', return_value=observer), \
+             patch('verify.inspect', return_value={'models': []}), \
+             patch('verify.select_model', return_value={'model': 'synthetic'}), \
+             patch('verify.read_recovery_thread'), \
+             patch('verify.refresh_quota', return_value={'state': 'allow', 'account_id': 'synthetic'}):
+            report = probe_shared_approval('synthetic', 1, ['bridge'])
+        self.assertTrue(all(report[key] == 'passed' for key in SHARED_APPROVAL_KEYS), report)
+        self.assertEqual(report['observedTerminalStatus'], 'interrupted')
+        self.assertEqual(report['modelTurnsRequested'], 1)
+        self.assertEqual([call.args[0] for call in owner.request.call_args_list], ['thread/start', 'turn/start'])
+        owner.send.assert_not_called()
+        observer.send.assert_not_called()
+        observer.interrupt_recheck.assert_not_called()
+
+    def test_shared_approval_cli_is_inert_without_live_opt_in(self):
+        with patch('sys.argv', ['verify.py', '--probe-shared-approval', 'synthetic']), \
+             patch('sys.stdout', new_callable=io.StringIO), patch('verify.private_app_server') as server:
+            self.assertEqual(main(), 0)
+            server.assert_not_called()
 
     def probe(self,mode='normal', *, stop=False, disconnect_owner=False):
         def parent(command,timeout):

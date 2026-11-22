@@ -2639,3 +2639,29 @@ This covers the surviving-active branch with the App Server and parent
 workflow client still running. Shared-server approval routing and pending
 approval behavior on connection loss remain unverified, as do server
 loss and installed runtime recovery through a shared transport.
+
+### Shared-server pending file approval probe — offline verification
+
+The opt-in probe starts a new private shared App Server and at most one
+synthetic turn in a temporary read-only scratch project. The turn requests
+one patch to a synthetic marker. The owner must receive a pending file
+approval bound to that thread and turn, while a second, passive recovery
+client sees the bound turn active. The passive client uses metadata RPCs
+and aborts if it receives a server request. The probe disconnects the owner
+without replying, then observes the same turn for up to ten seconds through
+the surviving client. It sends no approval response or interrupt and checks
+that the marker remains absent. It retains no scratch files and does not
+delete native history.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-shared-approval gpt-6.1-sol
+```
+
+This mode requires the diagnostic Python WebSocket dependency. A pass
+requires `ownerPendingApprovalObserved`, `passiveObserverSawActive`,
+`terminalAfterOwnerDisconnect`, and `markerAbsent` to report `passed`.
+A missing request, request delivered to the passive observer, or turn
+that stays active leaves the gate unverified. This probe covers one file
+approval with a passive reader. It does not exercise additional subscribed
+clients, command approvals, user acceptance or installed runtime behavior.

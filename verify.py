@@ -2,7 +2,7 @@
 """Opt-in live Codex checks: handoff, scratch permissions and session lifecycle."""
 import argparse
 import copy
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import io
 import json
@@ -1212,14 +1212,15 @@ with unix_connect(sys.argv[1], open_timeout=5, close_timeout=1,
 """
 
 
-def probe_shared_recheck_stop(model, timeout, *, disconnect_owner=False):
-    """Run the existing STOP probe with clients sharing a private App Server."""
+@contextmanager
+def private_app_server(timeout):
+    """Yield a stdio bridge command for clients of a temporary private server."""
     try:
         from websockets.sync.client import unix_connect
     except ImportError:
-        raise ProbeError('Shared STOP probe requires Python websockets with sync Unix support.') from None
+        raise ProbeError('Shared-server probes require Python websockets with sync Unix support.') from None
     if not callable(unix_connect):
-        raise ProbeError('Shared STOP probe requires Python websockets with sync Unix support.')
+        raise ProbeError('Shared-server probes require Python websockets with sync Unix support.')
     with tempfile.TemporaryDirectory(prefix='modelmate-shared-stop-') as scratch:
         socket = Path(scratch) / 'observer.sock'
         server_command = ['codex', 'app-server', '--listen', f'unix://{socket}',
@@ -1234,9 +1235,7 @@ def probe_shared_recheck_stop(model, timeout, *, disconnect_owner=False):
                     if server.poll() is not None or time.monotonic() >= deadline:
                         raise ProbeError('Private App Server socket unavailable; no model turn requested.')
                     time.sleep(.05)
-                result = probe_rechecks(model, timeout, stop=True, command=bridge, disconnect_owner=disconnect_owner)
-                result['transport'] = 'shared_private_unix_websocket'
-                return result
+                yield bridge
             finally:
                 if server.poll() is None:
                     server.terminate()
@@ -1244,6 +1243,118 @@ def probe_shared_recheck_stop(model, timeout, *, disconnect_owner=False):
                         server.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         server.kill()
+
+
+def probe_shared_recheck_stop(model, timeout, *, disconnect_owner=False):
+    with private_app_server(timeout) as bridge:
+        result = probe_rechecks(model, timeout, stop=True, command=bridge, disconnect_owner=disconnect_owner)
+    result['transport'] = 'shared_private_unix_websocket'
+    return result
+
+
+class PendingApprovalOwner(Connection):
+    """Capture one pending request without ever replying to a server request."""
+    allowed_methods = Connection.allowed_methods | {'thread/start', 'turn/start'}
+
+    def __init__(self, command, timeout):
+        super().__init__(command, timeout)
+        self.pending = None
+        self.terminal_seen = False
+
+    def handle_event(self, message):
+        if 'id' in message:
+            if self.pending is not None or message['method'] != 'item/fileChange/requestApproval':
+                raise ProbeError('Unexpected approval request; no response sent.')
+            self.pending = message['params']
+        elif message['method'] == 'turn/completed':
+            self.terminal_seen = True
+
+    def wait_for_approval(self, thread_id, turn_id):
+        deadline = time.monotonic() + self.timeout
+        while self.pending is None and not self.terminal_seen:
+            message = self.receive(deadline)
+            if 'method' not in message:
+                raise ProbeError('Unexpected response while waiting for approval.')
+            self.handle_event(message)
+        pending = self.pending
+        if (self.terminal_seen or not pending or pending.get('threadId') != thread_id
+                or pending.get('turnId') != turn_id or not isinstance(pending.get('itemId'), str)
+                or not pending['itemId']):
+            raise ProbeError('No matching pending file approval observed.')
+
+
+class PassiveApprovalObserver(RecheckRecoveryConnection):
+    allowed_methods = RecheckRecoveryConnection.allowed_methods - {'turn/interrupt'}
+
+    def handle_event(self, message):
+        if 'id' in message:
+            raise ProbeError('Observer received a server request; no response sent.')
+
+
+SHARED_APPROVAL_KEYS = ('ownerPendingApprovalObserved', 'passiveObserverSawActive',
+                        'terminalAfterOwnerDisconnect', 'markerAbsent')
+
+
+def probe_shared_approval(model, timeout, command):
+    """One synthetic file approval with a passive, non-subscribing recovery observer."""
+    report = dict.fromkeys(SHARED_APPROVAL_KEYS, 'unverified')
+    report.update(phase='preflight', modelTurnsRequested=0, transport='shared_private_unix_websocket',
+                  runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+                  verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    with tempfile.TemporaryDirectory(prefix='modelmate-shared-approval-') as scratch:
+        project = Path(scratch).resolve()
+        marker = project / 'approval-marker.txt'
+        try:
+            with closing(PassiveApprovalObserver(command, timeout)) as observer:
+                with closing(PendingApprovalOwner(command, timeout)) as owner:
+                    selection = select_model(inspect(owner)['models'], model, 'low')
+                    quota = refresh_quota(owner)
+                    if quota['state'] != 'allow':
+                        raise ProbeError('Probe quota unavailable.')
+                    fingerprint = hashlib.sha256(quota['account_id'].encode()).hexdigest()
+                    record = {'account_hash': fingerprint}
+                    observer._account(record)
+                    started = owner.request('thread/start', dict(native_thread_options(selection, str(project)),
+                                                                 ephemeral=False))
+                    thread_id = started['thread']['id']
+                    if not native_permissions_confirmed(started) or not isinstance(thread_id, str) or not thread_id:
+                        raise ProbeError('Probe thread permissions or identity unconfirmed.')
+                    read_recovery_thread(observer, str(project), thread_id)
+                    if refresh_quota(owner, quota['account_id'])['state'] != 'allow':
+                        raise ProbeError('Probe quota unavailable before dispatch.')
+                    report.update(phase='owner_pending_approval', modelTurnsRequested=1)
+                    turn = owner.request('turn/start', {
+                        'threadId': thread_id, 'model': model, 'effort': 'low',
+                        'input': [{'type': 'text', 'text': 'Use apply_patch once to create approval-marker.txt '
+                                   'containing only the synthetic word test. Do not use any other tool '
+                                   'or write anywhere else. If unavailable or denied, stop without retrying.'}],
+                    })['turn']
+                    turn_id = turn['id']
+                    if not isinstance(turn_id, str) or not turn_id:
+                        raise ProbeError('Probe turn identity unconfirmed.')
+                    owner.wait_for_approval(thread_id, turn_id)
+                    report['ownerPendingApprovalObserved'] = 'passed'
+                    observed = observer.inspect_bound_turn(str(project), thread_id, turn_id, single_turn=True)
+                    if observed['state'] != 'active':
+                        return report
+                    report['passiveObserverSawActive'] = 'passed'
+                report['phase'] = 'owner_disconnected'
+                deadline = time.monotonic() + min(timeout, 10)
+                observer._poll_deadline = deadline
+                observer._account(record)
+                while time.monotonic() < deadline:
+                    observed = observer.inspect_bound_turn(str(project), thread_id, turn_id, single_turn=True)
+                    report['observedAfterOwnerDisconnect'] = observed.get('status') or observed['state']
+                    if observed['state'] == 'terminal':
+                        report.update(terminalAfterOwnerDisconnect='passed', observedTerminalStatus=observed['status'],
+                                      phase='finished')
+                        break
+                    time.sleep(min(.1, max(0, deadline - time.monotonic())))
+        except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            report['diagnostic'] = diagnostic_code(exc)
+        finally:
+            report['markerAbsent'] = 'failed' if marker.exists() or marker.is_symlink() else 'passed'
+    return report
 
 
 def main():
@@ -1262,6 +1373,8 @@ def main():
                         help='at most two synthetic native tool turns across reconnect; scratch/threads retained')
     parser.add_argument('--probe-turn-correlation', metavar='MODEL',
                         help='one synthetic turn to check persisted client message ID across reconnect')
+    parser.add_argument('--probe-shared-approval', metavar='MODEL',
+                        help='one synthetic pending approval across owner disconnect on a private shared App Server')
     parser.add_argument('--stop-retained-recheck', action='store_true',
                         help='explicitly stop only the synthetic recheck created by --probe-rechecks')
     parser.add_argument('--shared-stop-server', action='store_true',
@@ -1286,7 +1399,7 @@ def main():
     if args.probe_recheck_recovery:
         if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
                                 args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks,
-                                args.probe_turn_correlation)):
+                                args.probe_turn_correlation, args.probe_shared_approval)):
             parser.error('--probe-recheck-recovery is metadata-only; select it alone without --run-live')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             parser.error('--timeout must be finite and positive')
@@ -1300,12 +1413,18 @@ def main():
         parser.print_help()
         return 0
     if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow,
-                                    args.probe_workflow_resume, args.probe_rechecks, args.probe_turn_correlation)) != 1:
+                                    args.probe_workflow_resume, args.probe_rechecks, args.probe_turn_correlation,
+                                    args.probe_shared_approval)) != 1:
         parser.error('choose exactly one live verification mode')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
+        if args.probe_shared_approval:
+            with private_app_server(args.timeout) as command:
+                result = probe_shared_approval(args.probe_shared_approval, args.timeout, command)
+            print(json.dumps(result, indent=2))
+            return 0 if all(result.get(key) == 'passed' for key in SHARED_APPROVAL_KEYS) else 1
         if args.probe_turn_correlation:
             result = probe_turn_correlation(args.probe_turn_correlation, args.timeout)
             print(json.dumps(result, indent=2))
