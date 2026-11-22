@@ -337,5 +337,32 @@ class RecheckUITests(unittest.TestCase):
             self.assertEqual(main(),0)
         self.assertTrue(entry.call_args.kwargs['experimental_rechecks'])
 
+    def test_shared_stop_token_is_inert_until_confirmed_and_single_use(self):
+        with self.attach() as parent:
+            shell, _, _ = self.shell(parent)
+            recover = shell.recheck_backend.recover_shared_recheck
+            report = {'state': 'active', 'operation_id': 'operation', 'thread_id': 'thread', 'turn_id': 'turn'}
+            recover.return_value = report
+            shell.line('/recover-recheck')
+            token = shell.recheck_stop_pending[0]
+            recover.assert_called_once_with()
+            shell.line('/cancel')
+            shell.line('/stop-recheck ' + token)
+            self.assertEqual(recover.call_count, 1)
+            shell.line('/recover-recheck')
+            token = shell.recheck_stop_pending[0]
+            recover.return_value = {'state': 'terminal', 'status': 'interrupted'}
+            shell.line('/stop-recheck ' + token)
+            recover.assert_called_with(report)
+            shell.line('/stop-recheck ' + token)
+            self.assertEqual(recover.call_count, 3)
+
+    def test_shared_flag_requires_live_experimental_rechecks(self):
+        with patch('sys.argv', ['modelmate.py', '--resume-workflow', self.sid,
+                                '--experimental-rechecks', '--experimental-shared-rechecks']), \
+             patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit) as result:
+            main()
+        self.assertEqual(result.exception.code, 2)
+
 
 if __name__=='__main__':unittest.main()

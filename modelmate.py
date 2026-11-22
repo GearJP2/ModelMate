@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """ModelMate runtime primitives. Importing this module performs no I/O."""
+import base64
+import hashlib
 import json
 import copy
 import math
 import os
 import selectors
+import socket
+import stat
+import struct
 import subprocess
+import tempfile
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
@@ -19,6 +26,262 @@ class WorkflowPreflightPause(ProbeError):
     def __init__(self, reason):
         super().__init__('Workflow preflight paused: ' + reason)
         self.reason = reason
+
+
+class PrivateUnixEndpoint:
+    """Pin both the socket inode and the peer of an already-owned server."""
+
+    def __init__(self, path, peer_pid=None, *, server=None):
+        self.path = Path(path)
+        self.peer_pid = peer_pid
+        self.server = server
+        self.target, self.identity = self._inspect()
+
+    def _inspect(self):
+        target = self.path.resolve(strict=True)
+        uid = os.getuid()
+        for directory in {self.path.parent, target.parent}:
+            info = directory.stat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077:
+                raise ProbeError('App Server socket directory is not private.')
+        info = target.stat()
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != uid:
+            raise ProbeError('App Server endpoint is not an owned socket.')
+        return target, (info.st_dev, info.st_ino)
+
+    def connect(self, timeout):
+        if self._inspect() != (self.target, self.identity):
+            raise ProbeError('App Server endpoint changed.')
+        stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            stream.settimeout(timeout)
+            stream.connect(str(self.target))
+            credentials = stream.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i'))
+            pid, uid, _ = struct.unpack('3i', credentials)
+            if (uid != os.getuid() or self._inspect() != (self.target, self.identity)
+                    or (self.peer_pid is not None and pid != self.peer_pid)):
+                raise ProbeError('App Server peer identity changed.')
+            if self.server is not None:
+                if self.server.poll() is not None or os.getpgid(pid) != self.server.pid:
+                    raise ProbeError('App Server peer does not belong to the owned process group.')
+            elif self.peer_pid is None:
+                raise ProbeError('App Server peer ownership is unknown.')
+            self.peer_pid = pid
+            return stream
+        except BaseException:
+            stream.close()
+            raise
+
+
+@contextmanager
+def private_recheck_server(timeout, *, executable='codex'):
+    """Own one local listener for the lifetime of the enclosing workflow."""
+    import signal
+
+    with tempfile.TemporaryDirectory(prefix='modelmate-recheck-socket-') as scratch:
+        path = Path(scratch) / 'server.sock'
+        command = [executable, 'app-server', '--listen', f'unix://{path}',
+                   '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
+                   '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
+        with subprocess.Popen(command, cwd=scratch, start_new_session=True, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as server:
+            try:
+                deadline = time.monotonic() + timeout
+                while server.poll() is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        endpoint = PrivateUnixEndpoint(path, server=server)
+                    except FileNotFoundError:
+                        time.sleep(min(.05, remaining))
+                        continue
+                    break
+                else:
+                    raise ProbeError('Private App Server exited before publishing its socket.')
+                if remaining <= 0:
+                    raise ProbeError('Private App Server socket startup timed out.')
+                yield endpoint
+            finally:
+                if server.poll() is None:
+                    try:
+                        os.killpg(server.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        server.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(server.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+
+
+class UnixWebSocket:
+    """Bounded WebSocket text records over an owned Linux Unix socket."""
+
+    MAX_MESSAGE = 4 * 1024 * 1024
+    MAX_HEADERS = 16 * 1024
+    MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+
+    def __init__(self, endpoint, timeout):
+        deadline = time.monotonic() + timeout
+        self.stream = endpoint.connect(timeout)
+        self.buffer = bytearray()
+        self.fragments = None
+        try:
+            self._upgrade(deadline)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        self.stream.close()
+
+    def _set_deadline(self, deadline):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('App Server WebSocket deadline exceeded.')
+        self.stream.settimeout(remaining)
+
+    def _fill(self, deadline):
+        self._set_deadline(deadline)
+        data = self.stream.recv(65536)
+        if not data:
+            raise EOFError('App Server WebSocket disconnected.')
+        self.buffer.extend(data)
+
+    def _take(self, size, deadline):
+        while len(self.buffer) < size:
+            self._fill(deadline)
+        data = bytes(self.buffer[:size])
+        del self.buffer[:size]
+        return data
+
+    def _upgrade(self, deadline):
+        key = base64.b64encode(os.urandom(16)).decode('ascii')
+        request = (f'GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n'
+                   f'Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n')
+        self._set_deadline(deadline)
+        self.stream.sendall(request.encode('ascii'))
+        while (end := self.buffer.find(b'\r\n\r\n')) < 0:
+            if len(self.buffer) >= self.MAX_HEADERS:
+                raise ProbeError('App Server WebSocket headers too large.')
+            self._fill(deadline)
+        if end + 4 > self.MAX_HEADERS:
+            raise ProbeError('App Server WebSocket headers too large.')
+        status, *lines = self._take(end + 4, deadline)[:-4].decode('ascii').split('\r\n')
+        headers = {}
+        for line in lines:
+            name, separator, value = line.partition(':')
+            if not separator or not name or name.lower() in headers:
+                raise ProbeError('Invalid App Server WebSocket headers.')
+            headers[name.lower()] = value.strip()
+        accept = base64.b64encode(hashlib.sha1((key + self.MAGIC).encode('ascii')).digest()).decode('ascii')
+        if (status.split()[:2] != ['HTTP/1.1', '101']
+                or headers.get('upgrade', '').lower() != 'websocket'
+                or 'upgrade' not in {part.strip().lower() for part in headers.get('connection', '').split(',')}
+                or headers.get('sec-websocket-accept') != accept
+                or {'sec-websocket-extensions', 'sec-websocket-protocol'} & headers.keys()):
+            raise ProbeError('Invalid App Server WebSocket upgrade.')
+
+    def _send_frame(self, opcode, payload, deadline):
+        size = len(payload)
+        if size < 126:
+            length = bytes([0x80 | size])
+        elif size <= 65535:
+            length = b'\xfe' + struct.pack('!H', size)
+        else:
+            length = b'\xff' + struct.pack('!Q', size)
+        mask = os.urandom(4)
+        body = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        self._set_deadline(deadline)
+        self.stream.sendall(bytes([0x80 | opcode]) + length + mask + body)
+
+    def send_text(self, text, deadline):
+        try:
+            payload = text.encode('utf-8')
+            if len(payload) > self.MAX_MESSAGE:
+                raise ProbeError('App Server WebSocket message too large.')
+            self._send_frame(1, payload, deadline)
+        except BaseException:
+            self.close()
+            raise
+
+    def receive_text(self, deadline):
+        try:
+            return self._receive_text(deadline)
+        except BaseException:
+            self.close()
+            raise
+
+    def _receive_text(self, deadline):
+        while (message := self.pop_text(deadline)) is None:
+            self._fill(deadline)
+        return message
+
+    def read_ready(self):
+        self.stream.setblocking(False)
+        try:
+            chunk = self.stream.recv(65536)
+        except BlockingIOError:
+            return True
+        if not chunk:
+            return False
+        self.buffer.extend(chunk)
+        return True
+
+    def pop_text(self, deadline):
+        """Consume complete frames already read, retaining partial frames for the selector."""
+        try:
+            return self._pop_text(deadline)
+        except BaseException:
+            self.close()
+            raise
+
+    def _pop_text(self, deadline):
+        while len(self.buffer) >= 2:
+            first, size = self.buffer[:2]
+            final, opcode = bool(first & 0x80), first & 0x0f
+            if first & 0x70 or size & 0x80 or opcode not in (0, 1, 8, 9, 10):
+                raise ProbeError('Invalid App Server WebSocket frame.')
+            if opcode >= 8 and (not final or size > 125):
+                raise ProbeError('Invalid App Server WebSocket control frame.')
+            header_size = 2
+            if size in (126, 127):
+                header_size = 4 if size == 126 else 10
+                if len(self.buffer) < header_size:
+                    return None
+                length = int.from_bytes(self.buffer[2:header_size], 'big')
+                if length < (126 if size == 126 else 65536):
+                    raise ProbeError('Invalid App Server WebSocket frame length.')
+                size = length
+            if size > self.MAX_MESSAGE or (opcode == 0 and self.fragments is not None
+                                           and len(self.fragments) + size > self.MAX_MESSAGE):
+                raise ProbeError('App Server WebSocket message too large.')
+            end = header_size + size
+            if len(self.buffer) < end:
+                return None
+            payload = bytes(self.buffer[header_size:end])
+            del self.buffer[:end]
+            if opcode == 8:
+                if size == 1:
+                    raise ProbeError('Invalid App Server WebSocket close frame.')
+                self._send_frame(8, payload, deadline)
+                raise EOFError('App Server WebSocket closed.')
+            if opcode == 9:
+                self._send_frame(10, payload, deadline)
+            elif opcode in (0, 1):
+                if (opcode == 0) != (self.fragments is not None):
+                    raise ProbeError('Unexpected App Server WebSocket fragmentation.')
+                if self.fragments is None:
+                    self.fragments = bytearray()
+                self.fragments.extend(payload)
+                if final:
+                    message = self.fragments.decode('utf-8')
+                    self.fragments = None
+                    return message
+        return None
 
 
 class Connection:
@@ -820,10 +1083,11 @@ class WorkflowController:
 
     def advance_recheck(self, operation_id, kind, **values):
         """Trusted native adapter supplies bindings/results; model text is never an event source."""
-        if kind not in ('thread', 'turn_reserved', 'turn', 'finish', 'reconcile'):
+        if kind not in ('thread', 'turn_reserved', 'turn', 'finish', 'reconcile', 'recover_turn'):
             raise ProbeError('Unsupported recheck event.')
         previous = next((op for op in self.recheck_operations() if op['id'] == operation_id), None)
-        if previous is not None and (kind == 'reconcile' or (kind == 'finish' and values.get('status') == 'unknown')):
+        if previous is not None and (kind in ('reconcile', 'recover_turn')
+                                     or (kind == 'finish' and values.get('status') == 'unknown')):
             self._stale_evidence.add(previous['evidence_id'])
             if self.state == 'DONE':
                 self.state, self.reason = 'UNVERIFIED', 'recheck_observation_conflict'
@@ -1721,6 +1985,7 @@ class ChatShell:
         self.started_at = time.monotonic()
         self._workflow_check_attempt = None
         self.recheck_backend = self.recheck = self.recheck_pending = None
+        self.recheck_stop_pending = None
         self.recheck_commands = {}
         if isinstance(workflow_action, WorkflowHost):
             if workflow_action.controller is not workflow or workflow_action.on_change is not None:
@@ -1751,11 +2016,16 @@ class ChatShell:
             self.line(prompt)
 
     def cancel(self, exit_after=False):
+        self.recheck_stop_pending = None
         if self.workflow is not None:
             self.recheck_pending = None
             self._workflow_check_attempt = None
             self.exiting = self.exiting or exit_after
             self.show_workflow(render=False)
+            if (exit_after and self.recheck_backend is not None and self.recheck_backend.shared_rechecks
+                    and not self.recheck_active()
+                    and any(op['status'] in ('pending', 'unknown') for op in self.workflow.recheck_operations())):
+                self.write('ออกโดยเก็บ recheck ที่ยังไม่ทราบผล · ไม่ส่งคำสั่งซ้ำ')
             if self.active:
                 if not self.stopping:
                     self.stopping = True
@@ -1974,6 +2244,29 @@ class ChatShell:
                                                        pending['selection'], self.event)
         self.show_workflow()
 
+    def recover_shared_recheck(self, cmd, values):
+        import uuid
+
+        pending, self.recheck_stop_pending = self.recheck_stop_pending, None
+        if (self.recheck_backend is None or not self.recheck_backend.shared_rechecks
+                or self.active or self.recheck_active()):
+            raise ProbeError('Shared recovery requires an attached workflow with a detached recheck.')
+        if cmd == '/recover-recheck':
+            if values:
+                raise ProbeError('Use /recover-recheck without arguments.')
+            report = self.recheck_backend.recover_shared_recheck()
+            if report['state'] == 'active':
+                token = uuid.uuid4().hex
+                self.recheck_stop_pending = (token, self._recheck_fingerprint(), report)
+                self.write('Native recheck active · thread ' + report['thread_id'] + ' · turn ' + report['turn_id'])
+                self.write('/stop-recheck ' + token + ' เพื่อยืนยัน STOP · /cancel เพื่อยกเลิกการยืนยัน')
+                return
+        else:
+            if (pending is None or values != [pending[0]] or pending[1] != self._recheck_fingerprint()):
+                raise ProbeError('Invalid or expired STOP token; inspect again with /recover-recheck.')
+            report = self.recheck_backend.recover_shared_recheck(pending[2])
+        self.write('Recheck recovery · ' + (report.get('status') or report.get('reason') or report['state']))
+
     def show_workflow_status(self, state):
         stats = workflow_statistics(self.workflow, self.started_at)
         done = sum(step['state'] == 'DONE' for step in state['steps'])
@@ -1998,6 +2291,9 @@ class ChatShell:
     def workflow_command(self, cmd, values):
         state = self.show_workflow(render=False)
         try:
+            if cmd in ('/recover-recheck', '/stop-recheck'):
+                self.recover_shared_recheck(cmd, values)
+                return
             if cmd in ('/recheck', '/confirm-recheck', '/recheck-budget'):
                 self.recheck_command(cmd, values)
                 return
@@ -2123,6 +2419,7 @@ class ChatShell:
             cmd, *values = args
             if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/revalidate', '/finish', '/status', '/mode',
                                                       '/recheck', '/confirm-recheck', '/recheck-budget',
+                                                      '/recover-recheck', '/stop-recheck',
                                                       '/approve', '/decline', '/pause', '/continue', '/revise'):
                 self.workflow_command(cmd, values)
             elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
@@ -2136,6 +2433,8 @@ class ChatShell:
                     self.write('/workflow /next /approve TOKEN --next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · /approve TOKEN อย่างเดียวจะรอ /next')
                     if self.recheck_backend is not None:
                         self.write('/recheck STEP.CHECK /confirm-recheck TOKEN /recheck-budget STEP.CHECK continue|revise_scope|pause')
+                        if self.recheck_backend.shared_rechecks:
+                            self.write('/recover-recheck /stop-recheck TOKEN')
             elif cmd == '/status':
                 self.write(json.dumps({'mode': self.mode, 'permissions': self.permissions,
                                        'selection': self.selection, 'active': self.active,
@@ -2352,6 +2651,22 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                 selector.register(stream, selectors.EVENT_READ, ('recheck', child))
                 recheck_fds.append(stream.fileno())
 
+    def service_recheck(child, stream=None):
+        try:
+            if stream is not None and not child.read_ready(stream):
+                selector.unregister(stream)
+            child.drain()
+            if stream is None:
+                child.tick()
+        except (ProbeError, OSError, EOFError, ValueError):
+            if backend is None or not backend.shared_rechecks:
+                raise
+            child.close()
+            if workflow._recheck_fault:
+                raise
+            shell.write('Recheck connection lost · ผลยังไม่ทราบ · ใช้ /recover-recheck ตรวจ turn เดิม')
+            sync_recheck_streams()
+
     try:
         for stream, kind in ((input_stream, 'input'), (event_stream, 'events'), (executor_stream, 'executor')):
             if stream is not None:
@@ -2371,9 +2686,7 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                         child = kind[1]
                         if child is not shell.recheck or child._closed:
                             continue
-                        if not child.read_ready(key.fileobj):
-                            selector.unregister(key.fd)
-                        child.drain()
+                        service_recheck(child, key.fileobj)
                         continue
                     if kind == 'codex':
                         if not backend.read_ready(key.fileobj):
@@ -2412,8 +2725,7 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                     backend.drain()
                     backend.tick()
                 if shell.recheck is not None and not shell.recheck._closed:
-                    shell.recheck.drain()
-                    shell.recheck.tick()
+                    service_recheck(shell.recheck)
                 if isinstance(workflow_action, WorkflowHost):
                     workflow_action.tick()
                 shell.tick()
@@ -3119,6 +3431,8 @@ class NativeWorkflowConnection(Connection):
         self._sent_attempts = set()
         self._displayed = set()
         self.store = self.session_id = self._attachment = self.controller = None
+        self.shared_rechecks = False
+        self._recheck_server = self._recheck_endpoint = self._shared_recheck_operation = None
         self._closed = False
         self.measure_quota = False
         self._quota_first = self._quota_ready = None
@@ -3257,7 +3571,15 @@ class NativeWorkflowConnection(Connection):
         record = self.store.read(self.session_id)
         if record['thread_id'] != self.thread_id or record['deletion_state'] != 'none':
             raise ProbeError('Parent native identity changed; no recheck started.')
-        child = NativeRecheckConnection(self.process.args, self.timeout)
+        if self.shared_rechecks:
+            if self._recheck_endpoint is None:
+                server = private_recheck_server(min(self.timeout, 5))
+                self._recheck_endpoint = server.__enter__()
+                self._recheck_server = server
+            child = NativeRecheckConnection(None, self.timeout,
+                websocket=UnixWebSocket(self._recheck_endpoint, self.timeout))
+        else:
+            child = NativeRecheckConnection(self.process.args, self.timeout)
         try:
             child.start_recheck(self.controller, evidence_id, spec['command'], spec['cwd'], self.cwd,
                 self.role_policy, selection, work_thread_id=self.thread_id, on_change=on_change)
@@ -3265,6 +3587,44 @@ class NativeWorkflowConnection(Connection):
         except BaseException:
             child.close()
             raise
+        finally:
+            if self.shared_rechecks and child.operation_id is not None:
+                self._shared_recheck_operation = child.operation_id
+
+    def recover_shared_recheck(self, expected=None):
+        if (self._closed or self._recheck_endpoint is None or self._attachment is None
+                or self.controller is not self.host.controller or self.controller._recheck_fault):
+            raise ProbeError('No healthy owned recheck server is available.')
+        record = self.store.read(self.session_id)
+        operation = unresolved_recheck(record)
+        if operation is None:
+            return {'state': 'none'}
+        if (operation['id'] != self._shared_recheck_operation
+                or operation['status'] != 'unknown'):
+            raise ProbeError('Unresolved recheck is not detached from this server.')
+        observer = RecheckRecoveryConnection(None, min(self.timeout, 5),
+            websocket=UnixWebSocket(self._recheck_endpoint, min(self.timeout, 5)))
+        try:
+            if expected is None:
+                report = observer.inspect_recheck(self.store, self.session_id)
+            else:
+                report = observer.interrupt_recheck(self.store, self.session_id, expected)
+            if report['state'] == 'terminal':
+                if (report.get('operation_id') != operation['id']
+                        or report.get('thread_id') != operation['thread_id']):
+                    raise ProbeError('Recovery observation does not match the owned recheck.')
+                if operation['phase'] == 'turn_pending':
+                    if not operation['client_message_id'] or report.get('client_message_id') != operation['client_message_id']:
+                        raise ProbeError('Recovery observation does not match the client message binding.')
+                    self.controller.advance_recheck(operation['id'], 'recover_turn',
+                        turn_id=report['turn_id'], status=report['status'])
+                else:
+                    if report.get('turn_id') != operation['turn_id']:
+                        raise ProbeError('Recovery observation does not match the saved turn.')
+                    self.controller.advance_recheck(operation['id'], 'reconcile', status=report['status'])
+            return report
+        finally:
+            observer.close()
 
     def close(self):
         if self._closed:
@@ -3277,11 +3637,15 @@ class NativeWorkflowConnection(Connection):
                     self.host.controller.pause('connection_lost')
         finally:
             try:
-                super().close()
+                if self._recheck_server is not None:
+                    self._recheck_server.__exit__(None, None, None)
             finally:
-                if self._attachment is not None:
-                    self._attachment.__exit__(None, None, None)
-                    self._attachment = None
+                try:
+                    super().close()
+                finally:
+                    if self._attachment is not None:
+                        self._attachment.__exit__(None, None, None)
+                        self._attachment = None
 
     def preflight(self):
         checked_at = time.monotonic()
@@ -4430,11 +4794,13 @@ def check_workflow_account(plan, policy):
 
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
                       experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
-                      check_catalog=False):
+                      check_catalog=False, shared_rechecks=False):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     if experimental_rechecks and resume_id is None:
         raise ProbeError('--experimental-rechecks requires --resume-workflow.')
+    if shared_rechecks and not (experimental_rechecks and execute and resume_id is not None):
+        raise ProbeError('--experimental-shared-rechecks requires executing experimental recheck resume.')
     if check_catalog and (execute or resume_id is not None):
         raise ProbeError('--check-catalog requires a new workflow preview without execution.')
     if metrics_jsonl is not None and not execute:
@@ -4491,6 +4857,8 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     if experimental_rechecks:
         preview.write('Experimental recheck · standard=' + policy['standard'] + '/low · native threads retained')
         preview.write('/recheck แสดงแผน; /confirm-recheck TOKEN ใช้โควตาเพิ่มหนึ่ง verification turn')
+        if shared_rechecks:
+            preview.write('Private recheck server · /recover-recheck และ /stop-recheck TOKEN ใช้ใน session นี้')
     if not execute and not check_catalog:
         preview.write('Preview เท่านั้น ไม่เปิด Codex ไม่ใช้โควตา; --execute-workflow เพื่อเริ่มแบบ opt-in')
         return 0
@@ -4533,6 +4901,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
             '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
             '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
         backend.measure_quota = measure_quota
+        backend.shared_rechecks = shared_rechecks
         if resume_id is None:
             host = backend.connect(controller, os.getcwd(), policy, store=store)
         else:
@@ -4882,6 +5251,8 @@ def main():
     parser.add_argument('--execute-workflow', action='store_true', help='opt-in native workflow; requires START confirmation')
     parser.add_argument('--experimental-rechecks', action='store_true',
                         help='experimental tool-check resume; /confirm-recheck consumes an extra model turn; native threads retained')
+    parser.add_argument('--experimental-shared-rechecks', action='store_true',
+                        help='experimental private recheck server with recovery inside the attached workflow')
     modes.add_argument('--sessions', action='store_true', help='list local sessions without connecting to Codex')
     modes.add_argument('--show-workflow', metavar='SESSION_ID', help='inspect a cached workflow without resuming it')
     modes.add_argument('--live', action='store_true', help='manual-model live chat using ChatGPT subscription quota')
@@ -4900,6 +5271,8 @@ def main():
         parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
         parser.error('--experimental-rechecks requires --resume-workflow')
+    if args.experimental_shared_rechecks and not (args.experimental_rechecks and args.execute_workflow):
+        parser.error('--experimental-shared-rechecks requires --experimental-rechecks and --execute-workflow')
     if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
     if args.delete_session:
@@ -4958,7 +5331,7 @@ def main():
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
                                      experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
                                      measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl,
-                                     check_catalog=args.check_catalog)
+                                     check_catalog=args.check_catalog, shared_rechecks=args.experimental_shared_rechecks)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

@@ -279,3 +279,23 @@ a user-wide daemon or a persistent background service.
 3. Run a scoped opt-in integration test with the actual runtime entry point.
    Keep standalone recovery across runtime restarts and discovery when the
    thread ID was never saved as separate P12 work.
+
+### Experimental runtime wiring
+
+Add `--experimental-shared-rechecks` to an executing
+`--resume-workflow` command that already uses `--experimental-rechecks`.
+The private server starts lazily when a recheck is explicitly confirmed.
+Its transport is included in `modelmate.py` and uses the standard library.
+
+If the recheck connection is lost while the workflow stays open, use
+`/recover-recheck` to inspect the retained operation on that server. A
+confirmed terminal state can be reconciled as historical metadata. An
+active bound turn shows a one-use `/stop-recheck TOKEN` confirmation.
+`/cancel` clears that confirmation. Recovery checks the same owned
+operation and retains stale evidence and counters. The parent workflow
+keeps its writer lock and closes the private server on exit. An unresolved
+checkpoint can remain after exit.
+
+The runtime wiring has offline coverage. The independent shared-server
+verifier results above do not certify this new CLI path. Runtime live
+integration still requires a scoped probe through the attached workflow.

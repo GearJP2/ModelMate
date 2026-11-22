@@ -6,9 +6,9 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, Mock, patch
 
-from modelmate import (NativeRecheckConnection, ProbeError, SessionStore, WorkflowController,
+from modelmate import (NativeRecheckConnection, NativeWorkflowConnection, ProbeError, SessionStore, WorkflowController,
                        validate_workflow_checkpoint)
 from test_routing import CATALOG, PLAN, POLICY, QUOTA
 
@@ -297,6 +297,36 @@ class NativeRecheckTests(unittest.TestCase):
         methods = [r['method'] for r in self.records()]
         self.assertEqual(methods.count('turn/start'), 1)
         self.assertNotIn('turn/interrupt', methods)
+
+    def test_shared_recovery_reconciles_attached_controller_and_disk(self):
+        backend = NativeWorkflowConnection([sys.executable, '-c', 'import time; time.sleep(30)'], .5)
+        self.addCleanup(backend.close)
+        with self.attach() as parent:
+            backend.store, backend.session_id = self.store, self.sid
+            backend.controller, backend.host = parent, Mock(controller=parent)
+            backend._attachment, backend._recheck_endpoint = MagicMock(), Mock()
+            connection = self.backend('disconnect')
+            self.start(connection, parent)
+            with self.assertRaises(ProbeError):
+                self.wait(connection)
+            connection.close()
+            operation = connection.operation()
+            backend._shared_recheck_operation = operation['id']
+            report = {'state': 'terminal', 'status': 'interrupted', 'operation_id': operation['id'],
+                      'thread_id': operation['thread_id'], 'turn_id': operation['turn_id']}
+            observer = Mock()
+            observer.inspect_recheck.side_effect = [dict(report, turn_id='foreign'), report]
+            with patch('modelmate.UnixWebSocket') as wire, \
+                 patch('modelmate.RecheckRecoveryConnection', return_value=observer):
+                with self.assertRaisesRegex(ProbeError, 'saved turn'):
+                    backend.recover_shared_recheck()
+                self.assertEqual(parent.recheck_operations()[0]['status'], 'unknown')
+                self.assertEqual(backend.recover_shared_recheck(), report)
+            wire.assert_called_with(backend._recheck_endpoint, .5)
+            self.assertEqual(observer.close.call_count, 2)
+            self.assertEqual(parent.recheck_operations()[0]['status'], 'interrupted')
+            self.assertIn(self.evidence['id'], parent.snapshot()['stale_evidence'])
+            self.assertEqual(self.store.read(self.sid)['workflow'], parent.export_checkpoint())
 
     def test_approval_requests_decline_without_certifying_or_replaying(self):
         with self.attach() as parent:

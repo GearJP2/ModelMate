@@ -2749,3 +2749,12 @@ account metadata and disconnected, and the first then read account
 metadata. No model turn was requested. The runtime CLI has no shared
 transport selection yet. The attached-workflow ownership and recovery
 UI remain to be wired and verified.
+
+### Experimental runtime shared rechecks — offline implementation
+
+Folded the private transport into the single Python runtime and exposed it
+only for explicit shared experimental recheck resume. Offline checks cover
+STOP token cancellation and single use, rejection of a foreign observed
+turn, and equality between the reconciled controller checkpoint and saved
+ledger. The in-session observer has the recovery allowlist. No inference was
+run and this increment does not claim live runtime STOP.

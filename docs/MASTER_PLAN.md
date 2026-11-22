@@ -1072,3 +1072,12 @@ approval requests. The two-client metadata smoke passed on Codex CLI 0.171.0.
 Next eligible work is folding the transport into the single-file runtime
 and wiring experimental rechecks and recovery to the owning workflow.
 See VERIFICATION.md.
+
+P12 experimental runtime wiring (2026-11-23): the private transport lives
+in the single-file runtime. The optional `--experimental-shared-rechecks`
+path gives an attached experimental workflow lifecycle ownership of one
+private recheck server. It keeps the parent available after recheck-client
+loss and offers in-session inspection and single-use STOP confirmation.
+Reconciliation is written through the attached controller so the ledger
+on disk and in memory remains aligned. Next eligible work is an opt-in
+runtime integration verifier for this path, followed by live verification.

@@ -11,8 +11,8 @@ import threading
 import time
 import unittest
 
-from modelmate import NativeRecheckConnection, ProbeError, RecheckRecoveryConnection
-from recheck_transport import PrivateUnixEndpoint, UnixWebSocket, private_recheck_server
+from modelmate import (NativeRecheckConnection, ProbeError, RecheckRecoveryConnection,
+                       PrivateUnixEndpoint, UnixWebSocket, private_recheck_server)
 
 
 class PrivateWebSocketTests(unittest.TestCase):
