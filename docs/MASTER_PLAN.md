@@ -1041,3 +1041,11 @@ The turn remained active after owner disconnect and the marker was absent.
 The new explicit `--stop-orphaned-approval` probe checks whether the
 surviving client can settle that active binding without an approval reply.
 Next eligible gate is the user-run opt-in check in VERIFICATION.md.
+
+P12 shared approval STOP evidence (2026-11-22): at `00c742f` all four checks
+passed on Codex CLI 0.171.0. A passive observer interrupted an active turn
+after the file-approval owner disconnected without replying. Next eligible
+work is to design a private shared-server lifecycle for the standalone
+runtime, including server lifetime, endpoint identity and approval boundaries.
+Approval routing with additional subscribed clients, server loss and
+missing-thread discovery remain open. See VERIFICATION.md.

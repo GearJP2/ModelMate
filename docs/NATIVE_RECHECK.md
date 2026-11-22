@@ -207,3 +207,8 @@ With `--disconnect-recheck-owner`, the same probe also passed after closing
 the recheck owner connection. The turn stayed active on the shared server,
 and a surviving client stopped it and reconciled its terminal state. The
 shared server and parent workflow client were running throughout.
+
+The verifier also passed a one-turn file-approval probe on the shared server.
+The owner received the request and disconnected without replying. A passive
+observer saw the turn still active, interrupted it, and confirmed the scratch
+marker was absent. This covers one file approval with a passive observer.

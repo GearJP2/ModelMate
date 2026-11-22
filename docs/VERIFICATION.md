@@ -2694,3 +2694,21 @@ shared approval checks, `orphanStopAcknowledged: true`, and
 `observedTerminalStatus: interrupted`. This tests one interruption
 with a passive observer. It does not verify approval requests for other
 tools or subscribed clients.
+
+### STOP after a file approval owner disconnects — scoped LIVE_VERIFIED
+
+The user ran source `00c742f` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. The runtime SHA-256
+`fe8fa3d9db8a23860c96ea7ca972a4855012c715b0d2b99249675135b3e6e45a`
+and verifier SHA-256
+`9c21f0cb3ba5d8e5c1dd653b5bf62e409e7ac67cac0a87cb618b07cbf498e5ae`
+matched the checkout. One synthetic turn was requested. The owner received
+the bound file approval, and the passive observer saw the same turn active
+before and after the owner disconnected. The observer's scoped STOP was
+acknowledged and it observed `interrupted`. All four checks passed, including
+absence of the marker. Neither connection sent an approval response.
+
+This verifies one file-approval path with a passive metadata observer on a
+shared private App Server. It does not establish where requests go with
+additional subscribed clients, what happens after server loss, or whether
+the installed standalone runtime can recover through this transport.
