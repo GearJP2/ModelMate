@@ -2733,3 +2733,19 @@ No model turns were requested and no account fields were reported.
 The transport is an isolated spike. The runtime still needs a selector and
 JSON-RPC integration, including independent deadlines for simultaneous
 owner and observer operations, before a runtime inference probe.
+
+### Private WebSocket through the shared JSON-RPC reader
+
+The optional WebSocket connection now uses the runtime's existing JSON
+validation, request IDs, RPC allowlists and selector entry points. The
+incremental frame reader retains incomplete frames between readiness
+events. The fake-server checks cover an interleaved notification and RPC
+reply, and an unexpected approval request on the recovery observer,
+which fails closed without a reply. Stdio remains the default path.
+
+A metadata-only smoke on Codex CLI 0.171.0 used the updated `Connection`
+with two private WebSocket clients. Both initialized, the second read
+account metadata and disconnected, and the first then read account
+metadata. No model turn was requested. The runtime CLI has no shared
+transport selection yet. The attached-workflow ownership and recovery
+UI remain to be wired and verified.

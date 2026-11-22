@@ -24,25 +24,38 @@ class WorkflowPreflightPause(ProbeError):
 class Connection:
     allowed_methods = {"initialize", "account/read", "model/list", "account/rateLimits/read"}
 
-    def __init__(self, command, timeout, *, cwd=None):
-        try:
-            self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
-        except FileNotFoundError as exc:
-            if command and command[0] == 'codex' and exc.filename == 'codex':
-                raise ProbeError('Codex CLI ไม่พบใน PATH; ตรวจ command -v codex แล้วติดตั้ง/เพิ่ม Codex ใน PATH ก่อนเรียกใหม่') from exc
-            raise
-        os.set_blocking(self.process.stdout.fileno(), False)
-        os.set_blocking(self.process.stderr.fileno(), False)
+    def __init__(self, command, timeout, *, cwd=None, websocket=None):
+        self.websocket = websocket
+        self.process = None
+        if websocket is None:
+            try:
+                self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
+            except FileNotFoundError as exc:
+                if command and command[0] == 'codex' and exc.filename == 'codex':
+                    raise ProbeError('Codex CLI ไม่พบใน PATH; ตรวจ command -v codex แล้วติดตั้ง/เพิ่ม Codex ใน PATH ก่อนเรียกใหม่') from exc
+                raise
+        elif command is not None or cwd is not None:
+            raise ProbeError('Select exactly one App Server transport.')
         self.timeout = timeout
         self.selector = selectors.DefaultSelector()
-        self.selector.register(self.process.stdout, selectors.EVENT_READ, 'stdout')
-        self.selector.register(self.process.stderr, selectors.EVENT_READ, 'stderr')
+        for stream in self.read_streams():
+            os.set_blocking(stream.fileno(), False)
+            self.selector.register(stream, selectors.EVENT_READ)
         self.buffer = b''
         self.request_id = 0
         self.stdout_closed = False
 
+    def read_streams(self):
+        if self.websocket is not None:
+            return (self.websocket.stream,)
+        return self.process.stdout, self.process.stderr
+
     def close(self):
+        if self.websocket is not None:
+            self.selector.close()
+            self.websocket.close()
+            return
         if self.process.poll() is None:
             self.process.terminate()
         try:
@@ -55,16 +68,28 @@ class Connection:
             stream.close()
 
     def send(self, message):
+        if self.websocket is not None:
+            self.websocket.send_text(json.dumps(message), time.monotonic() + self.timeout)
+            return
         try:
             self.process.stdin.write((json.dumps(message) + '\n').encode())
             self.process.stdin.flush()
         except BrokenPipeError as exc:
             raise ProbeError('Codex closed the connection; check login and local filesystem permissions.') from exc
 
-    def pop_message(self):
-        if b'\n' not in self.buffer:
-            return None
-        line, self.buffer = self.buffer.split(b'\n', 1)
+    def pop_message(self, deadline=None):
+        if self.websocket is None:
+            if b'\n' not in self.buffer:
+                return None
+            line, self.buffer = self.buffer.split(b'\n', 1)
+        else:
+            try:
+                line = self.websocket.pop_text(deadline if deadline is not None else time.monotonic() + self.timeout)
+            except EOFError:
+                self.stdout_closed = True
+                return None
+            if line is None:
+                return None
         try:
             response = json.loads(line)
         except (ValueError, UnicodeError) as exc:
@@ -81,6 +106,12 @@ class Connection:
         return response
 
     def read_ready(self, stream):
+        if self.websocket is not None:
+            if self.websocket.read_ready():
+                return True
+            self.selector.unregister(stream)
+            self.stdout_closed = True
+            return False
         try:
             chunk = os.read(stream.fileno(), 65536)
         except BlockingIOError:
@@ -103,7 +134,7 @@ class Connection:
 
     def receive(self, deadline):
         while time.monotonic() < deadline:
-            response = self.pop_message()
+            response = self.pop_message(deadline)
             if response is not None:
                 return response
             if self.stdout_closed:
@@ -2317,7 +2348,7 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                 pass
         registered_recheck, recheck_fds = child, []
         if child is not None:
-            for stream in (child.process.stdout, child.process.stderr):
+            for stream in child.read_streams():
                 selector.register(stream, selectors.EVENT_READ, ('recheck', child))
                 recheck_fds.append(stream.fileno())
 
@@ -2327,7 +2358,7 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
                 selector.register(stream, selectors.EVENT_READ, kind)
                 buffers[kind] = b''
         if backend is not None:
-            for stream in (backend.process.stdout, backend.process.stderr):
+            for stream in backend.read_streams():
                 selector.register(stream, selectors.EVENT_READ, 'codex')
         shell.start(prompt)
         while not shell.closed:
@@ -3078,8 +3109,8 @@ class NativeWorkflowConnection(Connection):
     """Opt-in transport for an explicit host plan; no classifier or native approval acceptance."""
     allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume', 'thread/turns/list', 'turn/start', 'turn/interrupt'}
 
-    def __init__(self, command, timeout=15):
-        super().__init__(command, timeout)
+    def __init__(self, command, timeout=15, *, websocket=None):
+        super().__init__(command, timeout, websocket=websocket)
         self.host = None
         self.thread_id = None
         self.account_id = None
@@ -3410,8 +3441,8 @@ class NativeRecheckConnection(NativeWorkflowConnection):
     """One explicitly consented verification turn; durable ownership stays with its parent."""
     allowed_methods = Connection.allowed_methods | {'thread/read', 'thread/start', 'turn/start', 'turn/interrupt'}
 
-    def __init__(self, command, timeout=15):
-        super().__init__(command, timeout)
+    def __init__(self, command, timeout=15, *, websocket=None):
+        super().__init__(command, timeout, websocket=websocket)
         self.parent = self.operation_id = None
         self._started = self._tainted = self._cancel_requested = False
         self.on_change = None
@@ -3607,8 +3638,8 @@ class RecheckRecoveryConnection(Connection):
     allowed_methods = {'initialize', 'account/read', 'account/rateLimits/read',
                        'thread/read', 'thread/turns/list', 'turn/interrupt'}
 
-    def __init__(self, command, timeout=15):
-        super().__init__(command, timeout)
+    def __init__(self, command, timeout=15, *, websocket=None):
+        super().__init__(command, timeout, websocket=websocket)
         self._initialized = False
         self._account_hash = self._poll_deadline = None
 

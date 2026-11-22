@@ -115,6 +115,7 @@ class UnixWebSocket:
         deadline = time.monotonic() + timeout
         self.stream = endpoint.connect(timeout)
         self.buffer = bytearray()
+        self.fragments = None
         try:
             self._upgrade(deadline)
         except BaseException:
@@ -202,27 +203,54 @@ class UnixWebSocket:
             raise
 
     def _receive_text(self, deadline):
-        fragments = None
-        while True:
-            self._set_deadline(deadline)
-            first, size = self._take(2, deadline)
+        while (message := self.pop_text(deadline)) is None:
+            self._fill(deadline)
+        return message
+
+    def read_ready(self):
+        self.stream.setblocking(False)
+        try:
+            chunk = self.stream.recv(65536)
+        except BlockingIOError:
+            return True
+        if not chunk:
+            return False
+        self.buffer.extend(chunk)
+        return True
+
+    def pop_text(self, deadline):
+        """Consume complete frames already read, retaining partial frames for the selector."""
+        try:
+            return self._pop_text(deadline)
+        except BaseException:
+            self.close()
+            raise
+
+    def _pop_text(self, deadline):
+        while len(self.buffer) >= 2:
+            first, size = self.buffer[:2]
             final, opcode = bool(first & 0x80), first & 0x0f
             if first & 0x70 or size & 0x80 or opcode not in (0, 1, 8, 9, 10):
                 raise ProbeError('Invalid App Server WebSocket frame.')
             if opcode >= 8 and (not final or size > 125):
                 raise ProbeError('Invalid App Server WebSocket control frame.')
-            if size == 126:
-                size = struct.unpack('!H', self._take(2, deadline))[0]
-                if size < 126:
+            header_size = 2
+            if size in (126, 127):
+                header_size = 4 if size == 126 else 10
+                if len(self.buffer) < header_size:
+                    return None
+                length = int.from_bytes(self.buffer[2:header_size], 'big')
+                if length < (126 if size == 126 else 65536):
                     raise ProbeError('Invalid App Server WebSocket frame length.')
-            elif size == 127:
-                size = struct.unpack('!Q', self._take(8, deadline))[0]
-                if size <= 65535:
-                    raise ProbeError('Invalid App Server WebSocket frame length.')
-            if size > self.MAX_MESSAGE or (opcode == 0 and fragments is not None
-                                           and len(fragments) + size > self.MAX_MESSAGE):
+                size = length
+            if size > self.MAX_MESSAGE or (opcode == 0 and self.fragments is not None
+                                           and len(self.fragments) + size > self.MAX_MESSAGE):
                 raise ProbeError('App Server WebSocket message too large.')
-            payload = self._take(size, deadline)
+            end = header_size + size
+            if len(self.buffer) < end:
+                return None
+            payload = bytes(self.buffer[header_size:end])
+            del self.buffer[:end]
             if opcode == 8:
                 if size == 1:
                     raise ProbeError('Invalid App Server WebSocket close frame.')
@@ -231,10 +259,13 @@ class UnixWebSocket:
             if opcode == 9:
                 self._send_frame(10, payload, deadline)
             elif opcode in (0, 1):
-                if (opcode == 0) != (fragments is not None):
+                if (opcode == 0) != (self.fragments is not None):
                     raise ProbeError('Unexpected App Server WebSocket fragmentation.')
-                if fragments is None:
-                    fragments = bytearray()
-                fragments.extend(payload)
+                if self.fragments is None:
+                    self.fragments = bytearray()
+                self.fragments.extend(payload)
                 if final:
-                    return fragments.decode('utf-8')
+                    message = self.fragments.decode('utf-8')
+                    self.fragments = None
+                    return message
+        return None

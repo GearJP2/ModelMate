@@ -1,6 +1,7 @@
 import base64
 import errno
 import hashlib
+import json
 import os
 from pathlib import Path
 import socket
@@ -10,7 +11,7 @@ import threading
 import time
 import unittest
 
-from modelmate import ProbeError
+from modelmate import NativeRecheckConnection, ProbeError, RecheckRecoveryConnection
 from recheck_transport import PrivateUnixEndpoint, UnixWebSocket, private_recheck_server
 
 
@@ -176,3 +177,44 @@ time.sleep(30)
             with private_recheck_server(.1, executable=str(executable)):
                 self.fail('Server without a socket must not be yielded.')
         self.assertLess(time.monotonic() - started, 3)
+
+    def test_selector_keeps_partial_frame_and_rpc_reader_routes_notification(self):
+        notification = b'{"method":"turn/started","params":{"synthetic":true}}'
+        frame = bytes([0x81, len(notification)]) + notification
+        ready = threading.Event()
+
+        def handler(stream, reader):
+            self.assertTrue(ready.wait(2))
+            stream.sendall(frame[:4])
+            opcode, message = self.read_client_frame(reader)
+            self.assertEqual(opcode, 0x81)
+            request = json.loads(message)
+            self.assertEqual(request['method'], 'initialize')
+            response = json.dumps({'id': request['id'], 'result': {'ready': True}}).encode()
+            stream.sendall(frame[4:] + bytes([0x81, len(response)]) + response)
+
+        self.serve(handler)
+        connection = NativeRecheckConnection(None, 2, websocket=self.connect())
+        self.addCleanup(connection.close)
+        ready.set()
+        events = connection.selector.select(2)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(connection.read_streams(), (events[0][0].fileobj,))
+        connection.read_ready(events[0][0].fileobj)
+        self.assertIsNone(connection.pop_message())
+        self.assertEqual(connection.request('initialize'), {'ready': True})
+        self.assertEqual(connection._events, [json.loads(notification)])
+
+    def test_recovery_observer_rejects_server_approval_on_websocket(self):
+        def handler(stream, reader):
+            self.read_client_frame(reader)
+            request = b'{"id":8,"method":"item/fileChange/requestApproval","params":{}}'
+            stream.sendall(bytes([0x81, len(request)]) + request)
+            self.assertEqual(reader.read(1), b'')
+
+        self.serve(handler)
+        connection = RecheckRecoveryConnection(None, 2, websocket=self.connect())
+        self.addCleanup(connection.close)
+        with self.assertRaisesRegex(ProbeError, 'Unexpected server request'):
+            connection.request('initialize')
+        connection.close()

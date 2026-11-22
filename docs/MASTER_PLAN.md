@@ -1064,3 +1064,11 @@ initialized two clients and kept the first usable after the second closed.
 Next eligible implementation is integrating the transport with the existing
 JSON-RPC reader and selector without changing approval or ledger ownership.
 See VERIFICATION.md.
+
+P12 shared JSON-RPC integration (2026-11-23): the optional WebSocket wire
+now feeds the existing runtime parser and selector. Offline checks cover
+partial frames, notification/RPC ordering and rejection of observer
+approval requests. The two-client metadata smoke passed on Codex CLI 0.171.0.
+Next eligible work is folding the transport into the single-file runtime
+and wiring experimental rechecks and recovery to the owning workflow.
+See VERIFICATION.md.
