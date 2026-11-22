@@ -212,3 +212,70 @@ The verifier also passed a one-turn file-approval probe on the shared server.
 The owner received the request and disconnected without replying. A passive
 observer saw the turn still active, interrupted it, and confirmed the scratch
 marker was absent. This covers one file approval with a passive observer.
+
+## Proposed runtime lifecycle for a private recheck server
+
+The first runtime increment is scoped to an attached experimental workflow.
+The workflow keeps its existing stdio connection and session writer lock.
+It can lazily start one private App Server for its rechecks after explicit
+recheck confirmation. The recheck owner and a passive recovery client use
+that server. The workflow retains the server handle so it can recover from
+loss of the recheck client while the workflow itself is still open.
+This gives the live-tested topology a runtime entry point without requiring
+a user-wide daemon or a persistent background service.
+
+### Server and endpoint ownership
+
+- Start the server with a Unix socket under a private temporary directory.
+  Require restrictive directory permissions, a socket owned by the current
+  user, and a verified local peer belonging to the instance the controller
+  launched. Codex may publish a socket alias. If an alias is present, verify
+  its resolved socket and private directory as well as the peer. Verify
+  ownership again on reconnect and reject changes to endpoint identity.
+- Keep the process handle, endpoint and observed peer identity in memory.
+  Never attach to an endpoint supplied by model output, CLI input or a
+  checkpoint. Do not start or adopt a managed daemon. Limit startup and
+  shutdown waits and target only the process and temporary directory owned
+  by the controller.
+- Keep the installed runtime one Python file using the standard library.
+  An offline spike must establish the Unix WebSocket handshake, message
+  framing and shutdown behavior before wiring it into workflow dispatch.
+  Reuse the existing JSON-RPC parser and policies above that transport.
+  The current verifier bridge remains available for tests.
+
+### Recovery and permissions
+
+- On recheck client loss, persist the unresolved ledger outcome and keep
+  the private server while the parent is open. Offer in-session inspection
+  against that exact server. The attached controller owns ledger writes
+  under the existing lock. A recovery path must update its in-memory state
+  and durable checkpoint together so that later saves cannot overwrite
+  reconciliation.
+- The observer uses only initialize, account/quota, thread read and turn
+  history, plus an exact turn interrupt after explicit STOP. Keep the
+  observer passive and fail closed on a server request. Recheck account,
+  project, provider, thread and turn identity before STOP. Require a terminal
+  observation before resolving the ledger. Current tool evidence stays stale.
+- Only the execution client handles its own tool requests under the native
+  read-only/on-request policy. Keep the probe's file-approval result scoped
+  to the passive observer topology. Closing either client invalidates its
+  pending approvals. Never transfer grants or answer approval requests
+  through the recovery client.
+- Explicit exit or EOF must make an unresolved turn visible. If interruption
+  or server shutdown is unconfirmed, retain the unresolved checkpoint.
+  Loss of the server or workflow process ends the scope of this connection
+  recovery. A new process may still use existing historical reconciliation.
+  It cannot claim an active STOP from a separate App Server.
+
+### Implementation order and verification
+
+1. Build and offline-test the transport and private server lifecycle in
+   isolation. Cover invalid handshake and frames, wrong peer, socket
+   replacement, startup timeout, disconnect and owned-resource cleanup.
+2. Wire an experimental recheck to the private server and route in-session
+   recovery under the existing writer attachment. Verify exact binding,
+   status responsiveness, stale STOP, unexpected server requests,
+   reconciliation on disk, and preservation of retry counters.
+3. Run a scoped opt-in integration test with the actual runtime entry point.
+   Keep standalone recovery across runtime restarts and discovery when the
+   thread ID was never saved as separate P12 work.

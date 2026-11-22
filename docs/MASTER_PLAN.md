@@ -1049,3 +1049,10 @@ work is to design a private shared-server lifecycle for the standalone
 runtime, including server lifetime, endpoint identity and approval boundaries.
 Approval routing with additional subscribed clients, server loss and
 missing-thread discovery remain open. See VERIFICATION.md.
+
+P12 private recheck server design (2026-11-22): documented the first runtime
+scope in NATIVE_RECHECK.md. An attached workflow owns the private server and
+writer lock. Recheck execution and passive recovery use that server while the
+parent is open. The next eligible implementation is the offline Unix WebSocket
+and endpoint lifecycle spike for the standalone runtime. Runtime integration,
+process-loss recovery and missing-thread discovery remain open.
