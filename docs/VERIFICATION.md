@@ -2758,3 +2758,28 @@ STOP token cancellation and single use, rejection of a foreign observed
 turn, and equality between the reconciled controller checkpoint and saved
 ledger. The in-session observer has the recovery allowlist. No inference was
 run and this increment does not claim live runtime STOP.
+
+### Runtime-owned private recheck STOP probe — offline verification
+
+This probe keeps the work connection on stdio and enables the runtime's
+experimental private recheck server on the resumed workflow. It drives
+consent and STOP through the real ChatShell command handlers and writes
+reconciliation through the attached controller under the existing writer
+lock. It deliberately closes the recheck client after observing an active
+owner, verifies the checkpoint is unknown, inspects the same binding through
+the runtime observer and confirms STOP. It tests single-use confirmation,
+stale evidence and equality of the saved checkpoint with the in-memory
+controller. The CLI's interactive timing and process-loss recovery remain
+outside the probe.
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol --stop-retained-recheck --runtime-shared-recheck
+```
+
+The mode uses at most two synthetic turns, with no Python WebSocket package
+required. A pass requires `transport: runtime_private_unix_websocket`,
+`ownerDetachedWithUnknownCheckpoint: passed`, `stopRpcAcknowledged: true`,
+`observedAfterStop: interrupted`, `stopConfirmationSingleUse: passed` and
+`finalCheckpoint: passed`, as well as an intact sentinel. The probe retains
+the scratch session and native threads.

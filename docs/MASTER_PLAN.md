@@ -1081,3 +1081,9 @@ loss and offers in-session inspection and single-use STOP confirmation.
 Reconciliation is written through the attached controller so the ledger
 on disk and in memory remains aligned. Next eligible work is an opt-in
 runtime integration verifier for this path, followed by live verification.
+
+P12 runtime-owned STOP probe prepared (2026-11-23): the opt-in verifier now
+drives shared recheck and recovery through the attached runtime's private
+server and ChatShell handlers. The offline fixture checks exact STOP,
+single-use confirmation and coherent historical reconciliation. Next
+eligible evidence is the user-run opt-in probe in VERIFICATION.md.

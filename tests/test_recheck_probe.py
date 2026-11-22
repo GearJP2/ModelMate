@@ -1,6 +1,7 @@
 """Two synthetic tool turns across reconnect; never invoke installed Codex."""
 import io
 import json
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 import tempfile
@@ -11,7 +12,7 @@ from modelmate import (NativeWorkflowConnection, NativeRecheckConnection, Rechec
                        ChatShell, ProbeError, WorkflowController)
 from verify import (probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, RECHECK_DISCONNECT_KEYS,
                     PendingApprovalOwner, PassiveApprovalObserver, probe_shared_approval,
-                    SHARED_APPROVAL_KEYS, main)
+                    SHARED_APPROVAL_KEYS, RUNTIME_RECHECK_KEYS, main)
 
 
 SERVER = r'''
@@ -169,20 +170,24 @@ class RecheckProbeTests(unittest.TestCase):
             self.assertEqual(main(), 0)
             server.assert_not_called()
 
-    def probe(self,mode='normal', *, stop=False, disconnect_owner=False):
+    def probe(self,mode='normal', *, stop=False, disconnect_owner=False, runtime_shared=False):
         def parent(command,timeout):
             self.assertIn('forced_login_method="chatgpt"',command)
             return NativeWorkflowConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
-        def child(command,timeout):
+        def child(command,timeout,*,websocket=None):
             return NativeRecheckConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
-        def observer(command,timeout):
+        def observer(command,timeout,*,websocket=None):
             return RecheckRecoveryConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
         with patch('verify.NativeWorkflowConnection',new=parent), \
              patch('modelmate.NativeRecheckConnection',new=child), \
+             patch('modelmate.RecheckRecoveryConnection',new=observer), \
+             patch('modelmate.private_recheck_server',return_value=nullcontext(object())), \
+             patch('modelmate.UnixWebSocket'), \
              patch('verify.RecheckRecoveryConnection',new=observer), \
              patch('verify.tempfile.mkdtemp',return_value=str(self.scratch)), \
              patch('sys.stderr',new_callable=io.StringIO):
-            return probe_rechecks('synthetic',1,stop=stop,disconnect_owner=disconnect_owner)
+            return probe_rechecks('synthetic',1,stop=stop,disconnect_owner=disconnect_owner,
+                                  runtime_shared=runtime_shared)
 
     def records(self):return [json.loads(line) for line in self.trace.read_text().splitlines()]
 
@@ -354,6 +359,30 @@ class RecheckProbeTests(unittest.TestCase):
         stops = [r['params'] for r in self.records() if r['method'] == 'turn/interrupt']
         self.assertEqual(len(starts), 2)
         self.assertEqual(stops, [{'threadId': 'thread2', 'turnId': 'turn2'}])
+
+    def test_runtime_shared_recovery_exercises_attached_controller_and_stop_confirmation(self):
+        result = self.probe('stop_active', stop=True, runtime_shared=True)
+        self.assertTrue(all(result[key] == 'passed' for key in RUNTIME_RECHECK_KEYS), result)
+        self.assertEqual(result['transport'], 'runtime_private_unix_websocket')
+        self.assertTrue(result['stopRpcAcknowledged'])
+        self.assertEqual(result['observedAfterStop'], 'interrupted')
+        starts = [r for r in self.records() if r['method'] == 'turn/start']
+        stops = [r['params'] for r in self.records() if r['method'] == 'turn/interrupt']
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(stops, [{'threadId': 'thread2', 'turnId': 'turn2'}])
+
+    def test_runtime_shared_probe_requires_live_stop_and_reports_partial_result(self):
+        args = ['verify.py', '--probe-rechecks', 'synthetic', '--runtime-shared-recheck']
+        with patch('verify.probe_rechecks') as probe, patch('sys.stderr', new_callable=io.StringIO):
+            with patch('sys.argv', args), self.assertRaises(SystemExit):
+                main()
+            probe.assert_not_called()
+            probe.return_value = dict.fromkeys(RUNTIME_RECHECK_KEYS, 'passed')
+            probe.return_value['stopConfirmationSingleUse'] = 'unverified'
+            with patch('sys.argv', args + ['--run-live', '--stop-retained-recheck']), \
+                 patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(main(), 1)
+            probe.assert_called_once_with('synthetic', 120, stop=True, runtime_shared=True)
 
 
 if __name__=='__main__':unittest.main()

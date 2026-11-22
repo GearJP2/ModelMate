@@ -2260,12 +2260,13 @@ class ChatShell:
                 self.recheck_stop_pending = (token, self._recheck_fingerprint(), report)
                 self.write('Native recheck active · thread ' + report['thread_id'] + ' · turn ' + report['turn_id'])
                 self.write('/stop-recheck ' + token + ' เพื่อยืนยัน STOP · /cancel เพื่อยกเลิกการยืนยัน')
-                return
+                return report
         else:
             if (pending is None or values != [pending[0]] or pending[1] != self._recheck_fingerprint()):
                 raise ProbeError('Invalid or expired STOP token; inspect again with /recover-recheck.')
             report = self.recheck_backend.recover_shared_recheck(pending[2])
         self.write('Recheck recovery · ' + (report.get('status') or report.get('reason') or report['state']))
+        return report
 
     def show_workflow_status(self, state):
         stats = workflow_statistics(self.workflow, self.started_at)
