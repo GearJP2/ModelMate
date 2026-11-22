@@ -2783,3 +2783,23 @@ required. A pass requires `transport: runtime_private_unix_websocket`,
 `observedAfterStop: interrupted`, `stopConfirmationSingleUse: passed` and
 `finalCheckpoint: passed`, as well as an intact sentinel. The probe retains
 the scratch session and native threads.
+
+### Runtime-owned private recheck STOP — scoped LIVE_VERIFIED
+
+The user ran source `132d80c` on Codex CLI `0.171.0`, requesting
+`gpt-6.1-sol/low`. Runtime SHA-256
+`0220dd6693d44776d0fad24db439d687a3e21fdf1fa7b8892d48bd017d7b6367`
+and verifier SHA-256
+`ef6392d68d6b944b12defd67be71dda504a7886c97d10430fe57c6617adc18a1`
+matched the checkout. All ten checks passed on
+`runtime_private_unix_websocket`. The owner progressed from idle to active.
+After the recheck client closed, the attached runtime showed the original
+binding active, sent one explicitly confirmed STOP, received acknowledgement
+and observed interrupted. The token could not be reused.
+
+Local inspection of the retained synthetic checkpoint confirmed UNVERIFIED
+with an unknown finish followed by an interrupted reconcile event. The
+event held no command exit code or item ID, and the sentinel was intact.
+This covers the attached controller and shell handlers for a synthetic
+recheck on the runtime-owned server. Interactive Terminal timing, loss of
+the workflow or server, and discovery with a missing thread ID remain open.

@@ -1087,3 +1087,10 @@ drives shared recheck and recovery through the attached runtime's private
 server and ChatShell handlers. The offline fixture checks exact STOP,
 single-use confirmation and coherent historical reconciliation. Next
 eligible evidence is the user-run opt-in probe in VERIFICATION.md.
+
+P12 runtime-owned STOP evidence (2026-11-23): the user-run probe at
+`132d80c` passed all ten checks on Codex CLI 0.171.0. Verified scope is
+the attached runtime and ChatShell handlers after recheck client loss,
+while the workflow and private server stay open. Next eligible work is
+interactive Terminal coverage of the experimental CLI path. Loss of the
+runtime/server and missing-thread-ID discovery remain open.

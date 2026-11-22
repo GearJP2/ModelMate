@@ -296,6 +296,9 @@ operation and retains stale evidence and counters. The parent workflow
 keeps its writer lock and closes the private server on exit. An unresolved
 checkpoint can remain after exit.
 
-The runtime wiring has offline coverage. The independent shared-server
-verifier results above do not certify this new CLI path. Runtime live
-integration still requires a scoped probe through the attached workflow.
+The runtime-owned probe passed on Codex CLI 0.171.0. It exercised the
+attached controller and ChatShell handlers after the recheck client closed.
+STOP was acknowledged, the terminal status was interrupted, and the
+checkpoint retained only historical recovery evidence. Interactive Terminal
+timing and recovery after loss of the workflow or its private server remain
+outside the live scope.
