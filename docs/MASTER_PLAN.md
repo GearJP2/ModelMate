@@ -1056,3 +1056,11 @@ writer lock. Recheck execution and passive recovery use that server while the
 parent is open. The next eligible implementation is the offline Unix WebSocket
 and endpoint lifecycle spike for the standalone runtime. Runtime integration,
 process-loss recovery and missing-thread discovery remain open.
+
+P12 private transport spike (2026-11-22): the isolated standard-library
+Unix WebSocket and process lifecycle prototype passed socket tests outside
+the restricted bind environment. A metadata-only Codex CLI 0.171.0 smoke
+initialized two clients and kept the first usable after the second closed.
+Next eligible implementation is integrating the transport with the existing
+JSON-RPC reader and selector without changing approval or ledger ownership.
+See VERIFICATION.md.

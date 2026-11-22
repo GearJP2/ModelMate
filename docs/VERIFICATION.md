@@ -2712,3 +2712,24 @@ This verifies one file-approval path with a passive metadata observer on a
 shared private App Server. It does not establish where requests go with
 additional subscribed clients, what happens after server loss, or whether
 the installed standalone runtime can recover through this transport.
+
+### Standard-library private Unix WebSocket transport spike
+
+The isolated `recheck_transport.py` spike validates the private directory,
+socket inode, Linux peer credentials and owned process group before using
+an endpoint. It pins the peer across connections and tests the HTTP Upgrade,
+masked client frames, fragmented text, control frames, limits, deadlines
+and socket cleanup. A fake subprocess covers startup timeout and confirms
+that leaving the context removes only its own temporary directory. The
+restricted execution sandbox disallows binding Unix sockets. The socket
+tests were run with approval outside it, without inference.
+
+A metadata-only smoke against Codex CLI `0.171.0` initialized two clients
+using the new standard-library transport on the same private server.
+The second performed an `account/read` and disconnected. The first could
+still read account metadata. The context stopped the temporary server.
+No model turns were requested and no account fields were reported.
+
+The transport is an isolated spike. The runtime still needs a selector and
+JSON-RPC integration, including independent deadlines for simultaneous
+owner and observer operations, before a runtime inference probe.
