@@ -325,7 +325,7 @@ state directory หรือ lock เพิ่ม สถานะ `DONE` เป�
 ตัว transport ตรวจ subscription/catalog/quota ก่อนส่งงาน และยืนยัน sandbox จาก thread/start
 คำขอ tool approval จะถูก decline และพัก; ไม่ยกระดับสิทธิ์ ไม่เปิด classifier/auto routing
 
-มี explicit-plan CLI แบบ opt-in และ experimental durable resume สำหรับ manual/rubric ตามหัวข้อด้านล่าง
+มี explicit-plan CLI แบบ opt-in และ experimental durable resume สำหรับ manual/rubric/source ตามหัวข้อด้านล่าง
 caller ต้องปิด connection ใน `finally` และถือ timeout/start failure ว่า outcome unknown
 ไม่เรียก dispatch ซ้ำเอง การเรียก native host API จริงใช้โควตา; tests ใช้ fake server เท่านั้น
 การตั้ง model/effort เป็นเพียงค่าที่ร้องขอ ไม่ใช่หลักฐาน backend dispatch
@@ -388,6 +388,19 @@ python3 modelmate.py --workflow examples/explain-lists.json --role-model standar
 
 รอคำตอบและ terminal event ก่อน `/verify` ตรวจคำตอบเองก่อนระบุ `pass`
 `/verify` รับเฉพาะ manual/rubric checks; ค่าที่รับคือ pass/fail/unknown
+สำหรับ check ชนิด `source` ต้องตรวจว่า URL รองรับ claim จริงก่อนบันทึก:
+
+```text
+/verify-source 1 pass https://example.org/report "Checked claim and why this source supports it"
+/check
+```
+
+คำสั่งนี้บันทึกคำตัดสินของผู้ใช้ ไม่เปิด URL ไม่ค้นเว็บ และไม่ตรวจ claim แทนผู้ใช้
+ต้องมี HTTP(S) URL และ finding ที่ไม่ว่าง; การมี URL อย่างเดียวไม่ใช่หลักฐานว่า claim ถูกต้อง
+URL และ finding ถูกเก็บใน local checkpoint จึงไม่ควรใส่ credential หรือข้อมูลลับ
+ใช้ `fail` เมื่อแหล่งข้อมูลไม่รองรับ และ `unknown` เมื่อยังตรวจไม่ได้
+คำตอบของโมเดลไม่เรียกคำสั่งนี้เอง และใช้คำสั่งนี้แทน test/lint exit code ไม่ได้
+
 เมื่อ Codex ยืนยันว่า turn จบ โปรแกรมบันทึกผล test/lint ที่ตรวจว่าตรงกับคำสั่ง
 และ cwd ที่ลงทะเบียนไว้ลง checkpoint พร้อมสถานะ CHECKING ทันที
 จึงยังเปิดดูหลักฐานเดิมได้หากออกก่อนกด `/check` ส่วนหลักฐานจาก session เดิม
@@ -415,13 +428,13 @@ Approve plan จะแสดง model และ effort ของทุกขั�
 ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
 ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
 นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
-เพิ่มสิทธิ์จะถูก decline/pause ตาม native transport รุ่นนี้; read-only/on-request
+Default จะ decline/pause คำขอเพิ่มสิทธิ์; opt-in approval UI อยู่ด้านล่าง read-only/on-request
 ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
 
-รุ่นนี้รับแผนที่ไม่มี clarifications, manual/rubric checks และ test/lint ที่ผูก
-คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ยังไม่เปิด
+รุ่นนี้รับแผนที่ไม่มี clarifications, manual/rubric/source checks และ test/lint ที่ผูก
+คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ต้องให้ผู้ใช้ตรวจ URL และ claim เอง
 checkpoint บันทึกอัตโนมัติแยกโปรเจกต์ ดูด้วย `--sessions`/`--show-workflow ID`
-session ใหม่เป็น durable; experimental resume รองรับ manual/rubric ตามหัวข้อด้านล่าง
+session ใหม่เป็น durable; experimental resume รองรับ manual/rubric/source ตามหัวข้อด้านล่าง
 ห้ามใช้ manual chat ข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
 
 The explicit command-check happy path has user-supplied live evidence recorded in
@@ -515,7 +528,32 @@ reader เดิมเพื่อไม่กินคำสั่งถัด�
 EOF, CANCEL และข้อความอื่นยังไม่เปิด backend; ไม่มีการยืนยันโดยอัตโนมัติ
 
 
-### Durable workflow resume (experimental, manual/rubric)
+### Experimental native tool approvals
+
+Default workflow ยังปฏิเสธ tool approval requests หากต้องทดสอบ UI แบบรับเฉพาะครั้ง
+ให้เพิ่ม `--experimental-tool-approvals` ในคำสั่ง `--workflow` หรือ `--resume-workflow`:
+
+```bash
+python3 modelmate.py --workflow PLAN_JSON --role-model standard=MODEL \
+  --experimental-tool-approvals --execute-workflow
+```
+
+แทน PLAN_JSON และ MODEL ด้วยแผนและ binding จริง; execute ต้องยืนยัน START
+และ `/next` ใช้โควตา subscription ตามเดิม แสดง exact command/cwd หรือ diff ก่อนถาม
+`/approve TOKEN` อนุมัติเครื่องมือครั้งเดียว แยกจาก model approval; ใช้ `--next` กับ tool token ไม่ได้
+`/decline TOKEN` ปฏิเสธ; `/pause TOKEN`, `/cancel` และ EOF ปฏิเสธแล้วขอ interrupt
+ต้องรอ terminal event จึงยืนยันว่าหยุดแล้ว ไม่ถือว่า write/interrupt acknowledgement คือผลสำเร็จ
+
+ยังใช้ read-only/on-request และข้อจำกัด host เดิม ไม่เพิ่ม sandbox profile หรือ session grant
+stdin, callback subcommands, managed-human/network/environment และ session write-root requests
+ที่ UI ยังแสดง scope ไม่ครบจะถูกปฏิเสธ; unknown request หยุดโดยไม่อนุมัติ
+Patch เปลี่ยนหรือ request ID ซ้ำทำให้ token เดิมใช้ไม่ได้; failed send ไม่ถูกส่งซ้ำ
+Native recheck verification turns ยังคงปฏิเสธ approvals ของตัวเอง ไม่ได้รับสิทธิ์จาก flag ของ parent
+
+เส้นทางนี้ผ่าน offline fake-server tests เท่านั้น ยังไม่มี live G2 matrix ครบ
+อย่าใช้ flag นี้เป็นหลักฐานว่าพร้อม release หรือรัน inference เพื่อทำให้ tests ผ่าน
+
+### Durable workflow resume (experimental, manual/rubric/source)
 
 explicit CLI session ใหม่บันทึก durable native thread; host API/verifier ที่ไม่ส่ง
 SessionStore ยังใช้ ephemeral ตามเดิม session เก่าที่เป็น ephemeral จะไม่ถูกแปลง
@@ -543,6 +581,13 @@ step IDs/attempts/correction budget เดิมยังอยู่ ถ้า 
 ```
 
 รับเฉพาะ manual/rubric และผลที่ตรงกับหลักฐานเดิม ยืนยันนี้ไม่ข้าม restore รอบใหม่
+สำหรับ source checks ให้เปิด URL เดิม ตรวจ claim อีกครั้ง แล้วใช้:
+
+```text
+/revalidate-source 1.1 pass https://example.org/report "Checked the saved claim against the source again"
+```
+
+ต้องใช้ URL ที่บันทึกไว้และผลเดิม; เปลี่ยน URL หรือ verdict แล้วไม่ล้าง stale
 `/finish` ยังต้องมี accepted evidence ครบและไม่มี stale checks
 ผล test/lint เก่าต้องตรวจด้วย trusted tool ใหม่ จึงยังไม่เปิด public CLI resume
 สำหรับแผนที่มี test/lint แทนที่จะให้มือยืนยัน exit code ข้าม gate

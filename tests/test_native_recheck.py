@@ -1,15 +1,17 @@
 """Native recheck transport against synthetic JSONL servers; no live inference."""
 import hashlib
+import errno
 import json
 from pathlib import Path
 import sys
+import socket
 import tempfile
 import time
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from modelmate import (NativeRecheckConnection, NativeWorkflowConnection, ProbeError, SessionStore, WorkflowController,
-                       validate_workflow_checkpoint)
+                       private_recheck_server, validate_workflow_checkpoint)
 from test_routing import CATALOG, PLAN, POLICY, QUOTA
 
 
@@ -59,10 +61,16 @@ for line in sys.stdin:
    'rateLimits':{'primary':{'usedPercent':100 if mode=='quota_before_turn' and quota_reads>=3 else 5}}}
  elif method=='thread/read':
   result={'thread':thread(params['threadId'])}
+  if mode=='shared_observer' and params['threadId']==tid:
+   stopped=any(json.loads(row).get('method')=='turn/interrupt' for row in Path(trace).read_text().splitlines())
+   result['thread']['status']={'type':'idle' if stopped else 'active'}
   if mode=='work_project':result['thread']['cwd']='/foreign'
   if mode=='work_busy':result['thread']['status']={'type':'active'}
  elif method=='thread/turns/list':
   result={'data':[{'id':'work-turn','status':'completed'}]}
+  if mode=='shared_observer' and params['threadId']==tid:
+   stopped=any(json.loads(row).get('method')=='turn/interrupt' for row in Path(trace).read_text().splitlines())
+   result={'data':[{'id':turn,'status':'interrupted' if stopped else 'inProgress'}]}
   if mode=='recover_lost_reply':
    accepted=[r['params'] for line in Path(trace).read_text().splitlines()
              if (r:=json.loads(line))['method']=='turn/start']
@@ -327,6 +335,87 @@ class NativeRecheckTests(unittest.TestCase):
             self.assertEqual(parent.recheck_operations()[0]['status'], 'interrupted')
             self.assertIn(self.evidence['id'], parent.snapshot()['stale_evidence'])
             self.assertEqual(self.store.read(self.sid)['workflow'], parent.export_checkpoint())
+
+    def test_shared_recovery_connection_loss_preserves_unknown_checkpoint(self):
+        backend = NativeWorkflowConnection([sys.executable, '-c', 'import time; time.sleep(30)'], .5)
+        self.addCleanup(backend.close)
+        with self.attach() as parent:
+            backend.store, backend.session_id = self.store, self.sid
+            backend.controller, backend.host = parent, Mock(controller=parent)
+            backend._attachment, backend._recheck_endpoint = MagicMock(), Mock()
+            connection = self.backend('disconnect')
+            self.start(connection, parent)
+            with self.assertRaises(ProbeError):
+                self.wait(connection)
+            connection.close()
+            operation = connection.operation()
+            backend._shared_recheck_operation = operation['id']
+            before = self.store.read(self.sid)
+            checkpoint = parent.export_checkpoint()
+            observer = Mock()
+            observer.inspect_recheck.side_effect = ProbeError('Recovery connection lost.')
+            with patch('modelmate.UnixWebSocket'), \
+                 patch('modelmate.RecheckRecoveryConnection', return_value=observer):
+                with self.assertRaisesRegex(ProbeError, 'connection lost'):
+                    backend.recover_shared_recheck()
+                observer.close.assert_called_once_with()
+                self.assertEqual(self.store.read(self.sid), before)
+                self.assertEqual(parent.export_checkpoint(), checkpoint)
+                self.assertEqual(parent.recheck_operations()[0]['status'], 'unknown')
+                self.assertIn(self.evidence['id'], parent.snapshot()['stale_evidence'])
+                observer.inspect_recheck.side_effect = None
+                observer.inspect_recheck.return_value = {'state': 'active',
+                    'operation_id': operation['id'], 'thread_id': operation['thread_id'],
+                    'turn_id': operation['turn_id']}
+                self.assertEqual(backend.recover_shared_recheck()['state'], 'active')
+                self.assertEqual(self.store.read(self.sid), before)
+                observer.interrupt_recheck.assert_not_called()
+            self.assertEqual(sum(r['method'] == 'turn/start' for r in self.records()), 1)
+
+    def test_dead_owned_server_preserves_unknown_binding_across_resume(self):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as check:
+            try:
+                check.bind(str(self.project / 'capability.sock'))
+            except PermissionError as exc:
+                if exc.errno in (errno.EPERM, errno.EACCES):
+                    self.skipTest('Environment forbids binding a private Unix socket.')
+                raise
+        executable = self.project / 'fake-codex'
+        executable.write_text('''#!/usr/bin/env python3
+import socket, sys, time
+listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+listener.bind(sys.argv[3].removeprefix('unix://'))
+listener.listen()
+time.sleep(30)
+''')
+        executable.chmod(0o700)
+        backend = NativeWorkflowConnection([sys.executable, '-c', 'import time; time.sleep(30)'], .5)
+        self.addCleanup(backend.close)
+        with self.attach() as parent:
+            backend.store, backend.session_id = self.store, self.sid
+            backend.controller, backend.host = parent, Mock(controller=parent)
+            backend._attachment = MagicMock()
+            connection = self.backend('disconnect')
+            self.start(connection, parent)
+            with self.assertRaises(ProbeError):
+                self.wait(connection)
+            connection.close()
+            operation = connection.operation()
+            backend._shared_recheck_operation = operation['id']
+            before = self.store.read(self.sid)
+            with private_recheck_server(2, executable=str(executable)) as endpoint:
+                backend._recheck_endpoint = endpoint
+                endpoint.server.terminate()
+                endpoint.server.wait(timeout=2)
+                self.assertTrue(endpoint.path.is_socket())
+                with self.assertRaises(ConnectionRefusedError):
+                    backend.recover_shared_recheck()
+                self.assertEqual(self.store.read(self.sid), before)
+                self.assertEqual(parent.export_checkpoint(), before['workflow'])
+        with self.attach() as resumed:
+            self.assertEqual(resumed.recheck_operations()[0], operation)
+            self.assertIn(self.evidence['id'], resumed.snapshot()['stale_evidence'])
+        self.assertEqual(sum(r['method'] == 'turn/start' for r in self.records()), 1)
 
     def test_approval_requests_decline_without_certifying_or_replaying(self):
         with self.attach() as parent:

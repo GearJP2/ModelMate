@@ -2803,3 +2803,499 @@ event held no command exit code or item ID, and the sentinel was intact.
 This covers the attached controller and shell handlers for a synthetic
 recheck on the runtime-owned server. Interactive Terminal timing, loss of
 the workflow or server, and discovery with a missing thread ID remain open.
+
+### P12 recovery observer connection loss — MOCK_VERIFIED
+
+Added a regression at the attached native workflow boundary. A synthetic recheck
+first loses its owner connection. The recovery observer then raises a connection
+error during inspection. Both the on-disk record and controller checkpoint remain
+unchanged, the operation stays unknown, evidence stays stale, and the observer is
+closed. A subsequent inspection reports the same operation active without an
+interrupt or second `turn/start`.
+
+`python3 -m unittest discover -s tests -p test_native_recheck.py -v` passed all
+41 tests. `git diff --check` passed. No runtime behavior changed and no live
+inference was requested. This mocks observer failure; it does not prove recovery
+after an actual server or workflow process dies. Next eligible P12 work: exercise
+actual owned-server loss offline and verify retained unknown bindings on resume.
+
+### P12 terminated owned listener and controller reopen — MOCK_VERIFIED
+
+The new regression creates an unknown recheck through the synthetic stdio server,
+then points attached recovery at a real private Unix listener owned by
+`private_recheck_server`. It terminates that fake listener process and waits for
+its exit before attempting recovery. Connecting to the remaining socket fails
+with connection refused. The session record and attached controller checkpoint
+remain unchanged. Closing and reopening the controller preserves the exact
+unknown operation and stale evidence; the synthetic trace contains only the
+original `turn/start`.
+
+`python3 -m unittest discover -s tests -p test_native_recheck.py -v` initially
+reported 41 passed and one socket-permission skip in the restricted sandbox.
+The approved run outside that sandbox passed all 42 tests without skips.
+`git diff --check` passed. Runtime code was unchanged, so the full suite was not
+rerun. No Codex process or live inference was used. This verifies refusal of a
+dead owned endpoint with an existing durable binding; it does not simulate a
+WebSocket turn being interrupted by server death or prove live Codex recovery.
+Next eligible P12 work: offline loss of the workflow process while a recheck is
+active, including writer-lock release and preservation of its unknown outcome.
+
+### P12 abrupt workflow writer exit — MOCK_VERIFIED
+
+A subprocess attaches to a saved synthetic workflow, reserves a recheck and
+persists its thread/turn bindings, then calls `os._exit(23)` without controller or
+store cleanup. The parent verifies that exit and reopens the same session. The
+writer lock is available again. The ledger retains `turn_bound/pending`, which
+means the result is unresolved, with the original native binding, stale evidence
+and unchanged work-attempt counters. Both a new recheck reservation and a new
+workflow attempt are refused. The original work thread/turn remain unchanged.
+
+`python3 -m unittest discover -s tests -p test_recheck_ledger.py -v` passed all
+14 tests. `git diff --check` passed. No runtime code changed and no inference was
+requested. This tests process exit while durable state is bound, with no running
+native backend; it does not prove a live backend stops when its owner dies.
+Next eligible P12 work: test an active WebSocket recheck losing its server in
+the offline transport/controller integration, then obtain user-run live evidence
+for the remaining process-loss cases.
+
+### P12 active WebSocket disconnect — MOCK_VERIFIED
+
+Two synthetic WebSocket integration tests attach a durable parent workflow and
+start a real `NativeRecheckConnection` through its normal metadata preflight,
+reservation and turn dispatch. After acknowledging `turn/start`, the server drops
+the connection either before command events or after started/completed command
+events reporting exit code 0, without reporting turn completion. The latter test
+checks that the command observer actually received that successful exit code.
+
+In both paths, draining reports disconnection, the parent persists an unknown
+recheck with no command exit code, and the old evidence stays stale. Disk and
+controller checkpoints match. Reopening keeps the original operation binding and
+refuses a new workflow attempt. The server records exactly one `turn/start` and
+no `turn/interrupt`. No raw prompt or command output is saved to the evidence docs.
+
+The initial sandbox run skipped the socket tests. The approved
+`python3 -m unittest discover -s tests -p test_recheck_transport.py -v` run passed
+all 14 tests without skips. No runtime code changed and no live inference was
+requested. These tests verify a synthetic server disconnect, not Codex process
+termination or live orphan-turn cleanup. Next eligible P12 work is a scoped,
+explicitly opt-in live server-loss verifier with synthetic inputs and retained
+unknown bindings; running it will require a user-requested live command.
+
+The complete offline suite, `python3 -m unittest discover -s tests -v`, passed
+all 560 tests with socket permissions enabled and no skips. `git diff --check`
+also passed. The earlier restricted run passed with socket tests skipped and
+does not substitute for this result.
+
+### P12 owned-server-loss verifier — MOCK_VERIFIED
+
+The opt-in recheck probe accepts `--terminate-recheck-server` only with the full
+live/runtime-shared recheck selection below. It reuses the synthetic initial
+check and durable resume setup, observes the recheck owner active, then exits
+only the runtime-owned private server context. It requires the server process
+to have exited and the recheck client to report backend disconnection. Timeout,
+an unrelated exception or an already completed turn cannot pass that check.
+
+The probe verifies the exact operation/thread/turn binding is retained as
+unknown with no exit code/item ID, evidence is stale, and the attached checkpoint
+matches disk. After a fresh account/quota/catalog read through the work connection,
+it releases the writer and reopens the controller. Both work dispatch and a new
+recheck reservation must be blocked by the unresolved operation. Original work
+steps, attempt history and native work binding must stay intact.
+
+Offline fake-server tests cover successful evidence collection, failure to observe
+an active owner, mandatory opt-in flags, report sanitization and a nonzero CLI exit
+when any required result is unverified. The 29 recheck-probe tests passed.
+The complete offline suite passed all 563 tests without skips with socket
+permissions enabled. Compile checks for modelmate.py, doctor.py and verify.py,
+and `git diff --check`, also passed.
+
+User-run live command (at most two subscription turns, retained synthetic scratch
+and native threads; use a currently available model supporting low effort):
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol \
+  --stop-retained-recheck --runtime-shared-recheck --terminate-recheck-server
+```
+
+Here `--stop-retained-recheck` selects the existing delayed-command setup;
+`--terminate-recheck-server` replaces the STOP RPC with owned-server shutdown.
+A pass requires every `SERVER_LOSS_KEYS` check to report passed, including
+`ownedServerExited`, `disconnectObserved`, `unknownCheckpoint`, `resumeBlocksReplay`
+and `finalCheckpoint`. Keep CLI version and the returned source hashes with the
+sanitized results. Do not commit raw reports or local session records.
+
+This probe is not live-verified. Even a pass proves local unknown-state handling,
+not remote turn termination or orphan cleanup after App Server loss. Inspect the
+retained turn through Codex before deciding how to proceed; do not replay it.
+Next eligible P12 work: user-run evidence for this exact verifier version and
+scoped inspection of the retained native outcome, without another inference turn.
+
+### P12 owned process-group cleanup after leader exit — MOCK_VERIFIED
+
+An offline regression starts a fake private server and its child in the owned
+process group. The child installs a SIGTERM-ignore handler before advertising
+readiness. The test terminates and waits for the server leader, confirms the
+child is still running, then exits the private server context. Before the fix,
+the child survived that context and the test failed. The regression has its own
+fallback cleanup so a failure does not leave the synthetic worker running.
+
+`private_recheck_server` now sends SIGTERM to its owned group regardless of the
+leader's exit state, waits for the leader with the existing deadline, and sends
+SIGKILL to remaining group members. It still removes only its private temporary
+directory. The 15 offline transport tests passed with socket permissions enabled.
+The full `python3 -m unittest discover -s tests -v` run passed all 564 tests
+without skips with sockets enabled. Compile checks and `git diff --check` passed.
+No live inference was run.
+
+This covers local descendants that remain in the owned process group. It does
+not establish remote cancellation, descendants that deliberately leave that
+group, or live Codex server-loss behavior. Next eligible P12 gate remains the
+user-run `--terminate-recheck-server` command above against this updated runtime.
+
+### P12 experimental shared CLI on terminal input — MOCK_VERIFIED
+
+A subprocess test invokes `modelmate.main` with experimental shared-recheck resume
+flags and a real pseudoterminal for stdin, capturing stdout/stderr through pipes.
+It drives START, recheck preview and explicit confirmation through the actual CLI
+and selector loop. Before START no backend starts; before recheck confirmation no
+child starts. A synthetic recheck disconnect leaves the parent available for
+status and recovery commands. Cancelling a STOP preview makes its token invalid;
+a fresh preview permits one exact interrupt, and reusing that token is rejected.
+Exit leaves an interrupted reconcile event without marking the workflow DONE.
+The synthetic traces contain one recheck `turn/start`, no replay of the work turn,
+and exactly one `turn/interrupt` for the retained recheck binding.
+
+`python3 -m unittest discover -s tests -p test_recheck_ui.py -v` passed all 23
+tests. The updated shared synthetic fixture was also checked with the native
+recheck tests: all 42 passed with sockets enabled (the initial restricted run
+skipped one socket test). `git diff --check` passed. The full suite was not rerun
+because only tests/fixtures and docs changed; both consumers of the fixture passed.
+This test substitutes stdio fake servers for WebSocket clients
+and the private server context; real socket/process ownership has separate
+transport tests. It does not prove interactive live Codex behavior, actual
+WebSocket approval routing, or process-loss recovery. Runtime code is unchanged.
+Next eligible P12 gate remains user-run server-loss evidence, followed by scoped
+live interactive CLI verification.
+
+### P10 explicit human source checks — MOCK_VERIFIED
+
+Explicit-plan workflows now accept source checks through the existing opt-in
+entry. `/verify-source CHECK RESULT URL "checked claim and finding"` records
+human-reviewed source evidence only in CHECKING after confirmed turn completion.
+It uses the controller's existing source provenance, URL and finding validation.
+It performs no HTTP request or inference and does not treat the presence of a
+URL as proof. The user is responsible for checking support for the stated claim.
+
+`/revalidate-source STEP.CHECK RESULT URL "checked claim and finding"` explicitly
+rechecks saved source evidence after restore. The URL must match the saved source
+and the verdict must agree with the saved result. Unknown/disagreeing results
+leave evidence stale; changing the URL cannot clear it. Another restore makes
+the evidence stale again. Source verdicts cannot substitute for test/lint exit
+codes or manual/rubric checks, and model text does not invoke the UI commands.
+User-supplied URL/findings stay in local checkpoint metadata, never metrics.
+
+New offline coverage checks native entry without dispatch, out-of-phase and
+malformed commands, invalid URLs/empty findings, duplicate evidence, pass/fail/
+unknown outcomes, explicit criterion acceptance and repeated restore/revalidation.
+All 20 targeted workflow-entry tests passed. The complete offline suite passed
+all 567 tests without skips with sockets enabled. Compile checks for runtime,
+doctor and verifier, plus `git diff --check`, passed. No live inference or web
+request was run. This is explicit human verification, not automatic source
+retrieval, automatic fact checking, a passed G3 gate or full workflow release.
+Next eligible P10 work: scoped live source-check workflow evidence; the pending
+P12 live server-loss command remains a separate gate.
+
+### P10 durable source checks across native resume — MOCK_VERIFIED
+
+A native-protocol integration test records source evidence through the UI,
+persists the first step, closes its backend and resumes the same durable workflow
+with a second synthetic backend process. The first source finding returns stale.
+The second step records its own source finding, and task completion stays blocked
+until explicit revalidation of the first saved URL. Both work attempts remain at
+one, source findings persist unchanged, and exactly two turns and one native
+resume are observed. Neither source URL nor synthetic private finding appears
+in any model-turn input captured by the fake server.
+
+`python3 -m unittest discover -s tests -p test_native_resume.py -v` passed all
+12 tests. `git diff --check` passed. Only a test and evidence docs changed, so
+the full suite was not rerun. No HTTP request or live inference was run. This
+proves the tested metadata-to-dispatch path, not a general private-context
+isolation boundary. Live source-workflow and server-loss evidence remain open.
+
+### P16 requirement coverage audit — release incomplete
+
+RELEASE_CHECKLIST.md now maps all R01–R13 to their current implementation,
+offline test files and outstanding implementation or live-evidence gaps. The
+audit checked the actual fixed `/permissions` behavior, the workflow host's
+unsupported-approval denial, explicit-plan entry, source commands and standalone
+confirmed-query search, alongside existing test/evaluation records. It makes
+workflow approval acceptance, automatic search integration, comparative routing
+quality and remaining lifecycle gates visible rather than inferring completion
+from the offline suite. P16 status is IN_PROGRESS for preparatory evaluation and
+audit work; no dependency or release gate is marked passed.
+
+Documentation-only audit: `git diff --check` passed. Referenced test files were
+checked for existence; no tests, web lookup or inference were rerun for this
+documentation change. Existing verification records retain their original scope.
+
+### P09 patch preview identity and token invalidation — MOCK_VERIFIED
+
+Inspection found that the manual native shell retained a usable approval token
+after a file-change item's preview changed. Tokens now retain their original
+thread/turn/item binding and displayed patch. New events that change or invalidate
+the diff, reuse the item identity for another type, or complete the item decline
+the pending request and expire its token immediately. Reverting to the old diff
+does not revive the token. An unchanged repeated preview preserves one-use
+approval. An additional check at decision time refuses mismatched cached patches.
+Malformed change entries without a nonempty path and diff cannot supply a preview.
+
+The regression covers changed diff, invalid changes, missing diff, changed item
+type, completion and unchanged-repeat cases. It checks the exact decline/accept
+response, one response only, stale-token rejection and non-revival after restoring
+the original diff. A separate regression repeats a pending command request ID
+with a changed command: the controller sends one decline, clears the visible
+token and rejects any later attempt to accept it. All 15 `test_live.py` offline
+tests passed. Compile checks and
+`git diff --check` passed. No live inference ran and no workflow approval path was
+enabled. Next eligible P09 work: reuse the hardened approval boundary in a gated
+workflow adapter, retaining independent model/tool approvals and unsupported-path
+denial; live permission matrix evidence remains required.
+The full `python3 -m unittest discover -s tests -v` run passed all 570 tests
+without skips with socket permissions enabled.
+
+### P09 installed-schema patch updates and approval scopes — MOCK_VERIFIED
+
+Inspected Codex CLI 0.171.0 using `codex --version` and
+`codex app-server generate-json-schema --out /tmp/modelmate-p09-schema`.
+This generated protocol descriptions without opening a model turn or reading an
+account. The installed schema defines `item/fileChange/patchUpdated` with active
+thread/turn/item IDs and replacement changes. The manual shell previously ignored
+that event, so a real native patch update could leave its earlier token valid.
+The event now uses the same preview validation and token invalidation as file
+item starts. A changed patch is declined; a new request needs a new token and
+shows the new diff. Foreign-turn updates do not mutate the active preview.
+
+The same schema distinguishes command approvals from `writeStdin` and
+`humanCommand`, opaque subcommand callbacks, nonlocal environments, managed-network
+context and file-change `grantRoot` requests. These scopes are not represented by
+the current command/diff UI and now decline explicitly without creating an
+accept token. Normal accept-once handling remains available; no session or policy
+amendment accept decision was added. Unknown server-request methods still stop.
+
+All 18 `test_live.py` offline tests passed, covering native updates, re-preview,
+foreign/malformed updates and each declined scope. Compile checks and
+`git diff --check` passed. Source/schema checks are not live permission evidence.
+The full offline suite passed all 573 tests with sockets enabled and no skips.
+Workflow approval acceptance remains gated; no live inference was run. Next P09
+work is integration using the explicitly supported command/file-change subset,
+followed by the required live permission matrix.
+
+### P09 durable controller tool-decision state — MOCK_VERIFIED
+
+The controller now supports a distinct AWAITING_TOOL_APPROVAL state through
+trusted host/UI APIs. A request belongs to a controller-owned attempt/step and
+contains validated thread/turn/item/request IDs, command/file-change kind and
+an exact action digest supplied by the trusted host. The host remains responsible
+for validating and displaying the actual native action and calculating its digest.
+This controller API is not exposed to model text or plan proposals.
+
+Workflow checkpoint V3 retains the latest request's status and transition time
+alongside the existing recheck ledger. It saves no approval token, raw command,
+diff or credentials. Tokens are process-local and one-use. A matching explicit
+tool decision is persisted before returning one accept/decline descriptor; it
+does not send an RPC, execute anything, consume another attempt or create test
+evidence. Model approval cannot answer the tool request. A changed native binding
+or action digest expires the old token rather than allowing it to revive.
+
+Pause, terminal observation and restore expire pending tokens. Restore retains
+the binding for inspection and pauses the still-running attempt with unknown
+outcome, so a historical approved status never restores a grant. A failed or
+uncertain write exposes no usable token/accept descriptor and freezes the
+controller until reopening. V1/V2 checkpoints remain readable and rechecks can
+still append under V3; older runtimes reject the new version.
+
+Nine focused `test_permissions.py` offline tests passed. The full offline suite
+passed 581 tests without skips with sockets enabled; the final additional
+uncertain-request-write test was then run in the nine-test targeted suite.
+Compile checks and `git diff --check` passed. No live inference ran. Native
+workflow requests still take the existing decline/stop path: no new execution
+permission or public flag has been enabled. Next eligible P09 work is native/UI
+adapter wiring using the hardened request subset, with live G2 proof still required.
+
+### P09 workflow host and UI tool-decision wiring — MOCK_VERIFIED
+
+WorkflowHost accepts an optional trusted tool-response callback. A native adapter
+can offer a validated action only for the host's active thread/turn and running
+controller attempt. The bounded, terminal-safe full preview is hashed by the host
+and bound to the controller request. ChatShell reads that authoritative request,
+obtains the unchanged host preview and displays it before exposing the tool token.
+The native adapter is still responsible for validating the action's protocol
+schema and ensuring the preview represents the exact executable action.
+
+Tool `/approve`, `/decline` and `/pause` route through the host and durable
+controller decision before a response callback. `--next` remains a model-choice
+option and is rejected for tool approval. Model text cannot invoke the command,
+and approval does not start another turn or create check evidence. Changed
+preview or native binding expires the confirmation. A failed response pauses
+with connection_lost and cannot be resent using the consumed token.
+
+Cancel, exit, explicit pause, deadline expiry and disconnect attempt one decline
+and one native interrupt. A real input-EOF/selector test confirms that an
+interrupted event is observed before exit, without marking the task DONE. Other
+focused tests cover preview-before-token order, stale and wrong tokens, model
+output injection, exact one-use acceptance, unsafe previews, unsupported adapters,
+bound-action changes and response-send failure. All 15 test_permissions.py tests
+passed. Compile checks and `git diff --check` passed.
+
+This is trusted-host/UI integration only. NativeWorkflowConnection still declines
+server approval requests, and no public flag enables acceptance. No live inference
+ran. Next eligible P09 work: connect the hardened native request subset to this
+host/UI path under an explicit experimental gate, then obtain live G2 evidence.
+The complete offline suite passed all 588 tests with sockets enabled and no skips.
+
+### P09 opt-in native workflow approval adapter — MOCK_VERIFIED
+
+`--experimental-tool-approvals` explicitly selects the supported native command/
+file-change subset for work turns. Preview is offline, execute still requires
+START, and each tool request needs its own exact UI decision. Manual chat and
+the adapter share native request/scope validation and bounded patch caching.
+Thread/turn/item/request IDs, controller attempt and action digest must match the
+current native action and saved checkpoint before a single response is sent.
+No session/policy-amendment accept decision or sandbox profile change was added.
+
+Native patch updates and reused/completed item identities invalidate pending
+actions. Duplicate request IDs decline once and stop; overlapping requests do
+not replace the visible action. Unsupported scopes, missing previews, malformed
+or foreign requests cannot obtain acceptance. The response handle is consumed
+before send, so a failed send has unknown outcome and is not retried. Direct
+close with a pending request attempts decline and interruption before cleanup.
+Restored historical decisions never restore native handles or confirmation tokens.
+
+The synthetic native server writes a test-owned marker only after receiving
+accept and independently reading a matching approved decision from disk. Command
+and patch cases show no marker before consent, one response after consent, and
+no task completion from approval alone. Decline, close, patch changes, unsupported
+scope, absent diff, duplicate IDs and foreign requests leave the marker absent.
+Only matching completed command observations supply tool-check evidence.
+
+All five native-permission integration tests, 18 manual approval tests and 21
+workflow-entry tests passed. The full offline suite passed all 594 tests without
+skips with sockets enabled. Final entry tests also checked CLI flag forwarding
+and callback setup; compile checks and `git diff --check` passed. No live inference
+was run. Fake-server effects do not prove live sandbox enforcement or G2.
+
+Default workflow behavior remains decline-only. Recheck child connections do
+not inherit this parent flag and still decline approvals. The supported work-turn
+path is experimental and not live-verified. Next eligible P09 work: an explicitly
+opt-in synthetic verifier covering real native accept/decline, changed actions,
+EOF/cancel and sentinel preservation, followed by user-run live evidence.
+
+### P09 scoped native command-approval verifier — MOCK_VERIFIED
+
+Prepared an opt-in verifier with at most two synthetic turns in separate durable
+scratch projects. The first case may accept exactly one registered printf command
+that writes a random synthetic line to approval-marker.txt in that case's cwd.
+The second case declines its corresponding command. It accepts the literal
+command or the runtime's supported exact shell-argv wrapper, never rewritten
+shell code. Unexpected command/cwd/kind, missing approval or additional requests
+cannot produce a passing report and are not retried.
+
+Before acceptance, the harness checks that the full bound preview was displayed,
+the marker is absent, the sentinel/project file scope is intact, and no registered
+command completion preceded consent. Its send tripwire allows accept only for
+the explicitly armed request ID/digest and approved controller status. A second
+use of the token must leave both the checkpoint and response count unchanged.
+After acceptance it requires exact marker content, a matching native item and
+observed exit code 0 on a completed turn. After decline it requires terminal
+status, absent marker and intact sentinel. Historical decisions must match disk;
+approval alone must not mark the task DONE.
+
+Eight offline probe tests passed: success, missing approval, unexpected command,
+early file effect, early command completion with absent marker, missing native
+completion despite a marker, unarmed-accept blocking and CLI opt-in/partial-result
+exit status. Fake processes simulate both sides; no installed Codex inference or
+web request was run. Compile checks and `git diff --check` passed.
+The complete offline suite passed all 602 tests with sockets enabled and no skips;
+the focused verifier suite also passed after the final accept-tripwire checks.
+
+User-run live command (up to two subscription turns; explicitly authorizes only
+the bounded synthetic marker write above, then a denial; retains scratch and
+native threads):
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-workflow-approvals gpt-6.1-sol
+```
+
+Use a current available model supporting low effort. Keep the CLI version and
+returned runtime/verifier hashes with sanitized results. All seven
+WORKFLOW_APPROVAL_KEYS checks must be passed for exit 0. Missing approvals may
+reflect native sandbox-permitted behavior; they do not prove this approval path.
+Do not expand permissions to force a pass or rerun inference merely for tests.
+
+This is not live-verified. Even a pass covers only the registered command
+accept/decline path, not patch approval, every G2 permission path, process-loss
+recovery, interactive timing or a no-tools boundary. Raw traces, local IDs and
+reports must not be committed. Next P09 gate: user-run results for this exact
+verifier, followed by separately scoped patch/cancel/failure-path evidence.
+
+### P09 native cancellation, process loss and shutdown input — MOCK_VERIFIED
+
+Expanded the synthetic native handshake tests to cover cancel, exit, timeout,
+disconnect and actual input EOF while a command approval is pending. Each sends
+one decline and one interrupt, observes an interrupted terminal event, performs
+no marker effect and sends no extra turn. Old tokens cannot be accepted later.
+
+Killing the fake server while waiting reproduced a shared cleanup bug:
+Connection.close raised BrokenPipeError again while closing buffered stdin and
+stopped before closing output pipes. Shutdown now closes the raw input pipe
+before its wrapper, discarding any unsent buffered action. A forked-reader test
+keeps a synthetic reader alive after the server leader exits; it receives EOF
+with zero bytes, rather than a late buffered action. All three pipes close.
+The dead-server workflow reopens with its original running attempt unresolved,
+the same attempt count, no restored permission and no replay.
+
+A separate test loses the client result after an accept response was actually
+written. The fake server performs the authorized file effect, while the client
+pauses with connection_lost and cannot resend the consumed acceptance. This
+explicitly does not claim that a connection error rolls back an accepted action.
+
+All nine native-permission tests and nine protocol tests passed. Compile checks
+and `git diff --check` passed. No live inference or network request was run; these
+are local synthetic processes and test-owned effects. The shared close change
+applies to diagnostics and both native transports' stdio callers. Next eligible
+P09 gate remains the user-run command-approval verifier; live cancellation and
+other G2 paths still need scoped evidence.
+The complete offline suite passed all 607 tests with sockets enabled and no skips.
+
+### P09 supported approval fields and installed CLI 0.172.0 schema — MOCK_VERIFIED
+
+`codex --version` now reports 0.172.0. Generated its protocol descriptions with
+`codex app-server generate-json-schema --out /tmp/modelmate-p09-schema-0172`.
+Compared parsed JSON with the prior 0.171.0 descriptions: command/file approval
+params and responses plus FileChangePatchUpdatedNotification match exactly.
+This is schema inspection only, not a live account or permission check. Existing
+0.171.0 live records retain their original version and scope.
+
+The shared manual/workflow approval validator now rejects unknown top-level
+request fields rather than ignoring a possible new permission scope. It checks
+provided reason/timestamp/list metadata types and bounds. Legacy requests that
+omit the newer timestamp remain supported. Patch changes require the supported
+path/diff/kind fields, an add/delete/update kind, and valid optional update
+move_path metadata; unknown or malformed kinds invalidate the cached preview.
+
+The strict boundary exposed command/cwd fields incorrectly included in a fake
+file-approval request. Fixed that fixture to match the real file-request schema
+rather than expanding accepted fields. Tests cover an unknown additional write
+permission, malformed metadata, unknown patch kinds and invalid rename metadata.
+A positive known-metadata case confirms that the response is plain accept-once,
+without choosing a proposed policy amendment or changing the read-only profile.
+The native fake-server unknown-scope case leaves its file effect absent.
+
+All 19 manual approval tests and nine native permission tests passed. Compile
+checks and `git diff --check` passed. No live inference was run; the requested
+user-run P09/G2 result remains pending. Next gate remains the scoped live command
+approval verifier, with CLI version and source hashes recorded from that run.
+The full offline suite passed all 608 tests with socket permissions enabled and
+no skips. No inference evidence is inferred from the schema comparison or suite.

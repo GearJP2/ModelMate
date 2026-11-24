@@ -35,7 +35,7 @@
 | แชตต่อเนื่อง เลือก model / effort | ใช้ได้แบบทดลอง; มีผลทดสอบสดเฉพาะเส้นทาง |
 | บันทึก session แยกโปรเจกต์และกลับมาคุยต่อ | มี autosave และผลทดสอบสด reconnect / recall / delete ของ manual chat |
 | Workflow จากแผน JSON และ role bindings | ใช้ได้แบบทดลอง; สั่งแต่ละขั้นด้วย `/next` |
-| ตรวจงานจาก manual checks หรือผล native test / lint | มีผลทดสอบสดเส้นทางสังเคราะห์; ไม่รับคำกล่าวของโมเดลแทนผลเครื่องมือ |
+| ตรวจงานจาก manual/source checks หรือผล native test / lint | native test/lint มีผลทดสอบสดเส้นทางสังเคราะห์; source checks เป็นคำตัดสินผู้ใช้ที่ระบุ URL และ finding ผ่าน offline tests |
 | จำกัดการแก้ไข | เริ่มหนึ่งครั้ง + แก้ไม่เกินสองรอบต่อขั้น ก่อนให้เลือกว่าจะทำต่ออย่างไร |
 | Tool recheck หลัง resume | ต้องเปิด experimental opt-in และยืนยันแยกก่อนใช้โควตาเพิ่ม |
 | Recovery ของ recheck ที่มี native IDs ครบ | มีผลทดสอบสดการอ่าน terminal status; หลักฐานเดิมยังเป็นประวัติ |

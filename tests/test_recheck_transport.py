@@ -3,6 +3,7 @@ import errno
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import socket
 import struct
@@ -12,7 +13,9 @@ import time
 import unittest
 
 from modelmate import (NativeRecheckConnection, ProbeError, RecheckRecoveryConnection,
-                       PrivateUnixEndpoint, UnixWebSocket, private_recheck_server)
+                       PrivateUnixEndpoint, SessionStore, UnixWebSocket,
+                       WorkflowController, private_recheck_server)
+from test_routing import CATALOG, PLAN, POLICY, QUOTA
 
 
 class PrivateWebSocketTests(unittest.TestCase):
@@ -178,6 +181,47 @@ time.sleep(30)
                 self.fail('Server without a socket must not be yielded.')
         self.assertLess(time.monotonic() - started, 3)
 
+    def test_owned_server_exit_still_cleans_up_signal_resistant_descendant(self):
+        executable = self.directory / 'forking-codex'
+        executable.write_text('''#!/usr/bin/env python3
+import pathlib, socket, subprocess, sys, time
+worker_file = sys.argv[0] + '.worker'
+code = "import os, pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)"
+subprocess.Popen([sys.executable, '-c', code, worker_file])
+while not pathlib.Path(worker_file).exists(): time.sleep(.01)
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(sys.argv[3].removeprefix('unix://'))
+server.listen()
+time.sleep(30)
+''')
+        executable.chmod(0o700)
+        worker_file = Path(str(executable) + '.worker')
+
+        def running(pid):
+            try:
+                return Path('/proc/' + str(pid) + '/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+            except FileNotFoundError:
+                return False
+
+        def cleanup_worker():
+            if worker_file.exists():
+                try:
+                    os.kill(int(worker_file.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+        self.addCleanup(cleanup_worker)
+        with private_recheck_server(2, executable=str(executable)) as endpoint:
+            worker_pid = int(worker_file.read_text())
+            self.assertTrue(running(worker_pid))
+            endpoint.server.terminate()
+            endpoint.server.wait(timeout=2)
+            self.assertTrue(running(worker_pid))
+        deadline = time.monotonic() + 2
+        while running(worker_pid) and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertFalse(running(worker_pid), 'Owned descendant survived its server context.')
+
     def test_selector_keeps_partial_frame_and_rpc_reader_routes_notification(self):
         notification = b'{"method":"turn/started","params":{"synthetic":true}}'
         frame = bytes([0x81, len(notification)]) + notification
@@ -218,3 +262,102 @@ time.sleep(30)
         with self.assertRaisesRegex(ProbeError, 'Unexpected server request'):
             connection.request('initialize')
         connection.close()
+
+    def test_active_websocket_loss_keeps_parent_recheck_unknown_without_replay(self):
+        self.assert_websocket_loss(after_command=False)
+
+    def test_websocket_loss_after_command_result_does_not_certify_recheck(self):
+        self.assert_websocket_loss(after_command=True)
+
+    def assert_websocket_loss(self, *, after_command):
+        project = self.directory / 'project'
+        project.mkdir()
+        store = SessionStore(project, self.directory / 'state')
+        self.addCleanup(store.close)
+        sid = store.create('synthetic WebSocket loss', thread_id='work-thread',
+            account_hash=hashlib.sha256(QUOTA['accountId'].encode()).hexdigest())['id']
+        controller = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)
+        with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY, controller=controller):
+            aid = controller.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)['dispatch']['attempt_id']
+            controller.finish_attempt(aid, 'completed')
+            evidence = controller.record_check(aid, 0, origin='tool', exit_code=0,
+                reference='synthetic check', finding='observed exit')
+            controller.evaluate_attempt(aid)
+        requests = []
+        disconnect = threading.Event()
+
+        def emit(stream, message):
+            payload = json.dumps(message).encode()
+            header = (bytes([0x81, len(payload)]) if len(payload) < 126 else
+                      b'\x81\x7e' + struct.pack('!H', len(payload)))
+            stream.sendall(header + payload)
+
+        def handler(stream, reader):
+            while True:
+                _, payload = self.read_client_frame(reader)
+                request = json.loads(payload)
+                requests.append(request)
+                if 'id' not in request:
+                    continue
+                method = request['method']
+                if method == 'initialize':
+                    result = {}
+                elif method == 'account/read':
+                    result = {'account': {'type': 'chatgpt'}}
+                elif method == 'model/list':
+                    result = {'data': CATALOG}
+                elif method == 'account/rateLimits/read':
+                    result = QUOTA
+                elif method in ('thread/read', 'thread/start'):
+                    result = {'thread': {'id': request.get('params', {}).get('threadId', 'recheck-thread'),
+                        'cwd': str(project), 'ephemeral': False, 'modelProvider': 'openai',
+                        'status': {'type': 'idle'}}, 'approvalPolicy': 'on-request',
+                        'approvalsReviewer': 'user', 'sandbox': {'type': 'readOnly'}}
+                elif method == 'thread/turns/list':
+                    result = {'data': []}
+                elif method == 'turn/start':
+                    result = {'turn': {'id': 'recheck-turn'}}
+                else:
+                    self.fail('Unexpected request: ' + method)
+                emit(stream, {'id': request['id'], 'result': result})
+                if method == 'turn/start':
+                    self.assertTrue(disconnect.wait(2))
+                    if after_command:
+                        for event in ('item/started', 'item/completed'):
+                            item = {'type': 'commandExecution', 'id': 'synthetic-check',
+                                    'command': 'printf synthetic', 'cwd': str(project)}
+                            if event == 'item/completed':
+                                item.update(status='completed', exitCode=0)
+                            emit(stream, {'method': event, 'params': {'threadId': 'recheck-thread',
+                                'turnId': 'recheck-turn', 'item': item}})
+                    return
+
+        self.serve(handler)
+        connection = NativeRecheckConnection(None, 2, websocket=self.connect())
+        self.addCleanup(connection.close)
+        with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY) as parent:
+            connection.start_recheck(parent, evidence['id'], 'printf synthetic', str(project),
+                str(project), POLICY, {'model': POLICY['standard'], 'effort': 'low'},
+                work_thread_id='work-thread')
+            operation = connection.operation()
+            self.assertEqual((operation['phase'], operation['status']), ('turn_bound', 'pending'))
+            disconnect.set()
+            deadline = time.monotonic() + 2
+            with self.assertRaisesRegex(ProbeError, 'disconnected'):
+                while time.monotonic() < deadline:
+                    for key, _ in connection.selector.select(.05):
+                        connection.read_ready(key.fileobj)
+                    connection.drain()
+            if after_command:
+                self.assertEqual(connection.host._observations[0]['exit_code'], 0)
+            connection.close()
+            self.assertEqual(connection.operation()['status'], 'unknown')
+            self.assertIsNone(connection.operation()['exit_code'])
+            self.assertIn(evidence['id'], parent.snapshot()['stale_evidence'])
+            self.assertEqual(store.read(sid)['workflow'], parent.export_checkpoint())
+        with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY) as resumed:
+            self.assertEqual(resumed.recheck_operations()[0]['id'], operation['id'])
+            with self.assertRaisesRegex(ProbeError, 'recheck'):
+                resumed.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in requests), 1)
+        self.assertFalse(any(r.get('method') == 'turn/interrupt' for r in requests))

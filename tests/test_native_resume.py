@@ -158,6 +158,48 @@ class NativeResumeTests(unittest.TestCase):
         self.assertEqual(sum(r.get('method')=='turn/start' for r in self.records()),1)
         self.assertEqual(sum(r.get('method')=='thread/start' for r in self.records()),1)
 
+    def test_source_checks_resume_durably_without_sending_local_findings_to_model(self):
+        for step in self.plan['steps']:
+            step['checks'] = [{'kind': 'source', 'criterion': 'User checks the claim against its source'}]
+        self.raw = json.dumps(self.plan)
+        controller = WorkflowController(self.raw, CATALOG, POLICY)
+        connection = self.backend()
+        host = connection.connect(controller, self.project, POLICY, store=self.store)
+        sid = connection.session_id
+        shell = ChatShell(io.StringIO(), workflow=controller, workflow_action=host)
+        shell.line('/next'); self.wait(connection)
+        shell.line('/verify-source 1 pass https://example.org/first "PRIVATE_LOCAL_FIRST_FINDING"')
+        shell.line('/check')
+        first = self.store.read(sid)['workflow']['steps'][0]['evidence'][0]
+        shell.line('/cancel')
+        connection.close()
+
+        connection = self.backend()
+        host = connection.resume(self.store, sid, self.project, POLICY, self.raw)
+        controller = host.controller
+        self.assertIn(first['id'], controller.snapshot()['stale_evidence'])
+        shell = ChatShell(io.StringIO(), workflow=controller, workflow_action=host)
+        shell.line('/continue ' + controller.snapshot()['pause_token'])
+        shell.line('/next'); self.wait(connection)
+        shell.line('/verify-source 1 pass https://example.org/second "PRIVATE_LOCAL_SECOND_FINDING"')
+        shell.line('/check')
+        shell.line('/finish 1=1.1')
+        self.assertNotEqual(controller.state, 'DONE')
+        shell.line('/revalidate-source 1.1 pass https://example.org/first "PRIVATE_LOCAL_RECHECK_FINDING"')
+        shell.line('/finish 1=1.1')
+        self.assertEqual(controller.state, 'DONE')
+        connection.close()
+        saved = self.store.read(sid)['workflow']
+        self.assertEqual(saved['state'], 'DONE')
+        self.assertEqual([step['attempts'] for step in saved['steps']], [1, 1])
+        self.assertEqual(saved['steps'][0]['evidence'][0], first)
+        self.assertEqual(saved['steps'][1]['evidence'][0]['reference'], 'https://example.org/second')
+        turns = [request for request in self.records() if request.get('method') == 'turn/start']
+        self.assertEqual(len(turns), 2)
+        self.assertNotIn('PRIVATE_LOCAL_', json.dumps(turns))
+        self.assertNotIn('https://example.org/', json.dumps(turns))
+        self.assertEqual(sum(request.get('method') == 'thread/resume' for request in self.records()), 1)
+
     def test_account_mismatch_does_not_modify_checkpoint(self):
         sid,_=self.completed_first()
         before=self.store.read(sid)

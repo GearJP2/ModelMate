@@ -218,7 +218,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P13 | Web privacy boundary | P03, P09 | IN_PROGRESS: Thai Wikipedia lookup scoped LIVE_VERIFIED; SearXNG general search MOCK_VERIFIED; hosted search remains disabled | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
-| P16 | End-to-end / evaluation / release | P01–P15 | TODO | จำเป็น |
+| P16 | End-to-end / evaluation / release | P01–P15 | IN_PROGRESS: scoped evaluation pilots and requirement coverage audit; release dependencies/gates remain open | จำเป็น |
 
 Dependency ไม่ได้อนุญาตทำงานขนานโดยอัตโนมัติ
 ลำดับแนะนำระหว่างรอ P01: P00 → P02 → P04 → P05 → P06 → P07 → P08 → P11
@@ -358,6 +358,51 @@ WorkflowHost รับ executor_stream ผ่าน selector แยกจาก 
 
 ### P09 — Tool approvals
 
+Controller foundation: workflow checkpoint v3 records the latest bound tool
+request and decision status without a confirmation token or raw action. The
+AWAITING_TOOL_APPROVAL transition, exact one-use decisions, expiry on action
+change/pause/completion/restore and persistence-failure freeze are offline-tested.
+Only trusted host/UI calls can reach these APIs. The native workflow adapter is
+not connected to them yet and still declines requests; no live gate is passed.
+Host/UI wiring now supports explicitly supplied trusted preview/response adapters.
+It binds the printable preview digest to the current turn, displays it before
+offering a tool token, and persists a decision before the callback. Cancel, EOF,
+pause, timeout and disconnect decline and interrupt; unknown sends never replay.
+No CLI flag or native acceptance path has been enabled by this offline increment.
+
+Native adapter increment: `--experimental-tool-approvals` now explicitly enables
+the supported command/file-change subset for work turns after execute + START.
+It shares manual request/preview validation, matches the persisted decision and
+native binding before one response, and expires changed actions. Default behavior
+and recheck-child approvals remain decline-only. Synthetic file-effect tests are
+offline verified; live G2 evidence and the full permission matrix remain open.
+`verify.py --run-live --probe-workflow-approvals MODEL` is prepared for a scoped
+command accept/decline check. Its offline tests require an observed exact request,
+no early marker/completion, one durable decision and matching native command
+completion after acceptance. No approval event is inconclusive, not a pass.
+Native cancellation/loss coverage now exercises real synthetic pipes for cancel,
+exit, EOF, timeout and disconnect, plus server death and a lost accept-send result.
+Shared shutdown discards buffered stdin before closing it, preventing unsent
+actions from being flushed to a surviving reader. Live gates remain unverified.
+Approval field sets are now restricted to the supported command/file schemas;
+unknown permission fields and malformed metadata cannot obtain a token. Patch
+entries require a recognized change kind and valid rename metadata. Relevant
+generated schemas match between CLI 0.171.0 and installed 0.172.0; that comparison
+does not establish live 0.172.0 compatibility.
+
+Manual patch approval hardening: each token retains its thread/turn/item and
+displayed diff. A changed, invalid, completed or type-reused item immediately
+declines the pending request and expires the token, even if the old diff returns.
+Each displayed change must contain a nonempty path and diff. Offline evidence is
+in VERIFICATION.md; workflow approval acceptance and the full live G2 matrix are
+still gated.
+Duplicate pending request IDs also decline once and expire the original token;
+they cannot later receive an accept through the stale confirmation.
+Codex 0.171.0 generated-schema review identified `item/fileChange/patchUpdated`;
+it now shares the validated preview cache/invalidation path. Unsupported callback,
+stdin, managed-human, environment, network and session-root scopes are declined
+without showing an accept token. This is offline/schema evidence, not live G2 proof.
+
 ไฟล์: modelmate.py, tests/test_permissions.py และ integration fixtures
 Implement กลไกที่ P03 พิสูจน์แล้วเท่านั้น
 แสดง exact command/cwd หรือ patch ก่อนถาม accept-once/decline
@@ -370,6 +415,14 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 ไม่รวม: acceptForSession โดย default หรือใช้ shellCommand ที่ข้าม sandbox แทน executor
 
 ### P10 — Workflow และ correction budget
+
+Source-check CLI increment: explicit `/verify-source` records a human-checked
+URL, claim finding and verdict only after confirmed turn completion. Restored
+source evidence requires `/revalidate-source` against the saved URL and verdict.
+This adds no search/model call or tool grant; offline verification is recorded
+in VERIFICATION.md. Broader live workflow/recovery gates remain open.
+Durable source-check integration is also offline verified across two synthetic
+backend processes; local source URLs/findings are absent from later turn inputs.
 
 ไฟล์: modelmate.py, tests/test_workflow.py
 มี WorkflowController แบบ offline แล้ว: ไม่มี network/process/tool execution
@@ -388,7 +441,7 @@ checks ใช้ผลเครื่องมือจริง; model review �
 การ revise ขั้นเดิมจำกัด objective/role/effort/reason และไม่ล้าง ID/budget/criteria
 WorkflowHost ผูก attempt กับ thread/turn/item และ approved command/cwd; ไม่ใช้ exit code จากคำสั่งอื่นแทน test
 preflight/dispatch/interrupt ยังเป็น trusted callbacks ไม่มี native transport/command runner ในตัว
-request approval ของ workflow ยังไม่รองรับ: ขอหยุดและไม่ตอบ accept; ultra delegation ยังถูกปิด
+Default workflow request approval ยังปฏิเสธ; experimental tool approval subset ตาม P09 ต้อง opt-in แยก; ultra delegation ยังถูกปิด
 
 ผ่านเมื่อ: simple code, plan-heavy code, document task เดินครบ;
 fail 3 attempts แล้วหยุด, model เปลี่ยนชื่อ step ไม่ reset,
@@ -410,6 +463,27 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 ไม่รวม: migration framework; เพิ่ม migration เมื่อมี version ถัดไปจริง
 
 ### P12 — Resume / cancel / delete
+
+Latest offline increment: recovery-observer connection loss and a terminated owned
+fake server preserve the attached unknown recheck checkpoint and stale evidence.
+Reopening the controller retains the same binding without replay or automatic
+interrupt. `test_native_recheck.py`: 42 tests passed outside the socket-restricted
+sandbox. This is MOCK_VERIFIED only; live workflow/server-loss recovery remains open.
+Abrupt workflow-owner exit is also covered offline: 14 ledger tests passed;
+reopening releases the writer lock but retains the unresolved turn binding and
+blocks new work/rechecks until reconciliation. No live process-loss gate is claimed.
+Active WebSocket disconnect is covered before and after a successful command
+result but before turn completion: 14 transport tests passed with sockets enabled.
+Both paths retain unknown outcomes and stale evidence without replay on restore.
+The opt-in verifier now has `--terminate-recheck-server` for this live gate,
+with offline coverage for active-owner checks, shutdown, durable unknown state,
+and blocking work/recheck replay. Live execution remains user-run and unverified.
+Owned-server cleanup now terminates its process group even if the leader exited
+first; a regression reproduces and fixes a surviving SIGTERM-resistant descendant.
+Experimental shared-recheck CLI now has offline pseudoterminal coverage from
+main/START through disconnect, recovery, cancelled/stale STOP tokens and exit.
+The test uses synthetic stdio substitutes for shared transports; live interactive
+and server-loss gates remain unverified.
 
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion

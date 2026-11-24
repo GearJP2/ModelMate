@@ -92,6 +92,16 @@ Checkpoint version 1 remains readable; version 2 is written only once a recheck 
 reserved. Older ModelMate builds cannot read version-2 checkpoints; do not downgrade
 the runtime after creating one. No session files are migrated during plain reads.
 
+The offline workflow tool-decision API additionally writes workflow checkpoint
+version 3 when a tool request is first recorded. It retains the existing recheck
+ledger plus the latest tool request's attempt, native binding, digest, status and
+transition time. Confirmation tokens are never saved. V1/V2 remain readable;
+older runtimes reject V3 rather than restore a permission. This workflow version
+is separate from the enclosing session metadata version. Workflows may now opt in
+to the supported native acceptance subset with `--experimental-tool-approvals`;
+it has offline evidence only. Recheck child connections keep their existing
+decline-only behavior and do not inherit that flag from the parent.
+
 Implementation order: checkpoint ledger and offline fault-injection tests (done), native
 transport/observation handling (offline-tested), CLI integration (offline-tested),
 then the scoped live verifier (offline-tested). Default tool-check resume stays disabled. Experimental
@@ -237,6 +247,9 @@ a user-wide daemon or a persistent background service.
   checkpoint. Do not start or adopt a managed daemon. Limit startup and
   shutdown waits and target only the process and temporary directory owned
   by the controller.
+- Shutdown signals the owned process group even after the server leader exits,
+  waits for the leader with a deadline, and force-stops remaining group members.
+  This is local process cleanup, not evidence of remote turn termination.
 - Keep the installed runtime one Python file using the standard library.
   An offline spike must establish the Unix WebSocket handshake, message
   framing and shutdown behavior before wiring it into workflow dispatch.

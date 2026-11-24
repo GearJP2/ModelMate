@@ -28,11 +28,12 @@ class WorkflowEntryTests(unittest.TestCase):
         self.plan['steps'][0]['checks'] = [{'kind':'manual','criterion':'User checks the answer'}]
         self.path = self.root / 'plan.json';self.path.write_text(json.dumps(self.plan))
 
-    def run_file(self, execute=False, text='NO\n', bindings=None):
+    def run_file(self, execute=False, text='NO\n', bindings=None, tool_approvals=False):
         with tempfile.TemporaryFile('w+') as source:
             source.write(text);source.seek(0)
             return run_workflow_file(self.path, bindings or ['standard=synthetic-standard'],
-                                     'ask_to_escalate', execute, source, io.StringIO())
+                                     'ask_to_escalate', execute, source, io.StringIO(),
+                                     experimental_tool_approvals=tool_approvals)
 
     def test_confirmation_ignores_blank_paste_lines_without_approving_them(self):
         for payload in (b'\nSTART\n/next\n', b'\r\nSTART\r\n/next\n',
@@ -84,6 +85,24 @@ class WorkflowEntryTests(unittest.TestCase):
             self.assertEqual(self.run_file(),0)
             self.assertEqual(self.run_file(True),0)
             self.assertEqual(self.run_file(True,text=''),0)
+
+    def test_tool_approval_gate_is_explicit_and_preview_or_cancel_is_offline(self):
+        with patch('modelmate.NativeWorkflowConnection', side_effect=AssertionError('backend forbidden')):
+            for execute, text in ((False, ''), (True, 'CANCEL\n'), (True, '')):
+                with self.subTest(execute=execute, text=text), tempfile.TemporaryFile('w+') as source:
+                    source.write(text);source.seek(0)
+                    output = io.StringIO()
+                    self.assertEqual(run_workflow_file(self.path, ['standard=synthetic-standard'], None,
+                        execute, source, output, experimental_tool_approvals=True), 0)
+                    self.assertIn('accept once only', output.getvalue())
+        with patch('sys.argv', ['modelmate.py', '--experimental-tool-approvals']), \
+             patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit) as error:
+            main()
+        self.assertEqual(error.exception.code, 2)
+        with patch('sys.argv', ['modelmate.py', '--workflow', str(self.path), '--experimental-tool-approvals']), \
+             patch('modelmate.run_workflow_file', return_value=0) as run:
+            self.assertEqual(main(), 0)
+            self.assertTrue(run.call_args.kwargs['experimental_tool_approvals'])
 
     def test_malformed_oversized_and_missing_bindings_never_connect(self):
         with patch('modelmate.NativeWorkflowConnection.__init__',side_effect=AssertionError('backend forbidden')):
@@ -138,7 +157,7 @@ class WorkflowEntryTests(unittest.TestCase):
 
     def test_unsupported_checks_and_clarification_cannot_execute(self):
         with patch('modelmate.NativeWorkflowConnection.__init__',side_effect=AssertionError('backend forbidden')):
-            for kind in ('test','lint','source'):
+            for kind in ('test','lint'):
                 self.plan['steps'][0]['checks'][0]['kind']=kind
                 self.path.write_text(json.dumps(self.plan))
                 with self.assertRaises(ProbeError):self.run_file(True,text='START\n')
@@ -146,6 +165,74 @@ class WorkflowEntryTests(unittest.TestCase):
             self.plan['clarifications']=['Need an answer']
             self.path.write_text(json.dumps(self.plan))
             with self.assertRaises(ProbeError):self.run_file(True,text='START\n')
+
+    def test_source_checks_reach_native_entry_with_explicit_user_verification(self):
+        from modelmate import NativeWorkflowConnection
+        self.plan['steps'][0]['checks'][0]['kind'] = 'source'
+        self.path.write_text(json.dumps(self.plan))
+        trace = self.root / 'source-trace'
+        def factory(command, timeout=15):
+            return NativeWorkflowConnection([sys.executable, '-u', '-c', SERVER, str(trace), 'text'], 1)
+        with patch.dict(os.environ, {'XDG_STATE_HOME': str(self.root / 'state')}), \
+             patch('modelmate.NativeWorkflowConnection', side_effect=factory), \
+             patch('modelmate.run_chat', return_value=0) as chat:
+            self.assertEqual(self.run_file(True, text='START\n', tool_approvals=True), 0)
+        self.assertEqual(chat.call_args.kwargs['workflow'].snapshot()['plan']['steps'][0]['checks'][0]['kind'], 'source')
+        backend = chat.call_args.kwargs['backend']
+        self.assertTrue(backend.experimental_tool_approvals)
+        self.assertEqual(chat.call_args.kwargs['workflow_action']._tool_response, backend._respond_tool)
+        self.assertFalse(any(json.loads(line).get('method') == 'turn/start' for line in trace.read_text().splitlines()))
+
+    def test_source_verification_records_findings_and_requires_fresh_restore_review(self):
+        plan = copy.deepcopy(self.plan)
+        plan['steps'][0]['checks'][0]['kind'] = 'source'
+        for verdict, expected in [('pass', 'CHECKING'), ('fail', 'READY'), ('unknown', 'UNVERIFIED')]:
+            with self.subTest(verdict=verdict):
+                c = WorkflowController(json.dumps(plan), CATALOG, POLICY)
+                shell = ChatShell(io.StringIO(), workflow=c)
+                command = '/verify-source 1 ' + verdict + ' https://example.org/report "Checked claim against the source"'
+                aid = c.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)['dispatch']['attempt_id']
+                shell.line(command)
+                self.assertEqual(c.snapshot()['active_attempt']['checks'], {})
+                c.finish_attempt(aid, 'completed')
+                shell.event({'type': 'text', 'text': command})
+                for bad in ('/verify 1 pass', '/verify-source 1 pass',
+                            '/verify-source 0 pass https://example.org claim',
+                            '/verify-source 1 pass file:///private claim',
+                            '/verify-source 1 pass https://example.org ""'):
+                    shell.line(bad)
+                    self.assertEqual(c.snapshot()['active_attempt']['checks'], {})
+                shell.line(command)
+                evidence = c.snapshot()['active_attempt']['checks'][0]
+                self.assertEqual((evidence['origin'], evidence['reference'], evidence['finding']),
+                    ('source', 'https://example.org/report', 'Checked claim against the source'))
+                shell.line('/verify-source 1 fail https://example.org/report "Duplicate cannot overwrite"')
+                self.assertEqual(c.snapshot()['active_attempt']['checks'][0], evidence)
+                c.evaluate_attempt(aid)
+                self.assertEqual(c.state, expected)
+                if verdict != 'pass':
+                    shell.line('/finish 1=1.1')
+                    self.assertNotEqual(c.state, 'DONE')
+                    continue
+                shell.line('/finish 1=1.1')
+                self.assertEqual(c.state, 'DONE')
+                restored = WorkflowController.restore_checkpoint(c.export_checkpoint(), QUOTA,
+                    time.monotonic(), CATALOG, POLICY)
+                resumed = ChatShell(io.StringIO(), workflow=restored)
+                resumed.line('/finish 1=1.1')
+                self.assertNotEqual(restored.state, 'DONE')
+                for bad in ('/revalidate 1.1 pass',
+                            '/revalidate-source 1.1 pass https://example.org/other "Different source"',
+                            '/revalidate-source 1.1 fail https://example.org/report "Different verdict"',
+                            '/revalidate-source 1.1 pass https://example.org/report ""'):
+                    resumed.line(bad)
+                    self.assertIn(evidence['id'], restored.snapshot()['stale_evidence'])
+                resumed.line('/revalidate-source 1.1 pass https://example.org/report "Checked the saved claim again"')
+                resumed.line('/finish 1=1.1')
+                self.assertEqual(restored.state, 'DONE')
+                again = WorkflowController.restore_checkpoint(restored.export_checkpoint(), QUOTA,
+                    time.monotonic(), CATALOG, POLICY)
+                self.assertIn(evidence['id'], again.snapshot()['stale_evidence'])
 
     def test_ui_manual_evidence_and_explicit_criterion_mapping(self):
         c=WorkflowController(json.dumps(self.plan),CATALOG,POLICY)
@@ -208,6 +295,7 @@ class WorkflowEntryTests(unittest.TestCase):
         shell=ChatShell(io.StringIO(),workflow=c)
         aid=c.request_attempt(QUOTA,time.monotonic(),CATALOG,POLICY)['dispatch']['attempt_id']
         c.finish_attempt(aid,'completed');shell.line('/verify 1 pass')
+        shell.line('/verify-source 1 pass https://example.org "Cannot replace a tool exit code"')
         self.assertEqual(c.snapshot()['active_attempt']['checks'],{})
 
     def test_workflow_option_conflicts_fail_before_backend(self):

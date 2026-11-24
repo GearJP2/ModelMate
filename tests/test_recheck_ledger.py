@@ -3,6 +3,8 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -128,6 +130,41 @@ class RecheckLedgerTests(unittest.TestCase):
                 controller.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)
             controller.advance_recheck(operation['id'], 'finish', status='completed', exit_code=0, item_id='historical')
             self.assertIn(self.evidence['id'], controller.snapshot()['stale_evidence'])
+
+    def test_process_death_releases_writer_but_keeps_bound_recheck_unresolved(self):
+        fixture = self.project / 'fixture.json'
+        fixture.write_text(json.dumps({'catalog': CATALOG, 'policy': POLICY,
+            'quota': QUOTA, 'evidence_id': self.evidence['id']}))
+        source = '''import json, os, sys, time
+from modelmate import SessionStore
+x=json.load(open(sys.argv[4]))
+with SessionStore(sys.argv[1],sys.argv[2]) as store:
+ with store.workflow(sys.argv[3],x['quota'],time.monotonic(),x['catalog'],x['policy']) as c:
+  op=c.reserve_recheck(x['evidence_id'],'printf synthetic',sys.argv[1],
+   {'model':'synthetic-standard','effort':'low'},x['quota'],time.monotonic(),x['catalog'],x['policy'])
+  c.advance_recheck(op['id'],'thread',thread_id='synthetic-recheck-thread')
+  c.advance_recheck(op['id'],'turn_reserved')
+  c.advance_recheck(op['id'],'turn',turn_id='synthetic-recheck-turn')
+  os._exit(23)
+'''
+        result = subprocess.run([sys.executable, '-c', source, str(self.project),
+            str(Path(self.temp.name) / 'state'), self.sid, str(fixture)], timeout=5)
+        self.assertEqual(result.returncode, 23)
+        before = self.store.read(self.sid)
+        with self.attach() as controller:
+            operation = controller.recheck_operations()[0]
+            self.assertEqual((operation['phase'], operation['status']), ('turn_bound', 'pending'))
+            self.assertEqual((operation['thread_id'], operation['turn_id']),
+                             ('synthetic-recheck-thread', 'synthetic-recheck-turn'))
+            self.assertIn(self.evidence['id'], controller.snapshot()['stale_evidence'])
+            with self.assertRaisesRegex(ProbeError, 'unresolved'):
+                self.reserve(controller)
+            with self.assertRaisesRegex(ProbeError, 'recheck'):
+                controller.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)
+            self.assertEqual(controller.export_checkpoint()['rechecks'], before['workflow']['rechecks'])
+            self.assertEqual(controller.export_checkpoint()['steps'], before['workflow']['steps'])
+        self.assertEqual(self.store.read(self.sid)['thread_id'], 'work-thread')
+        self.assertEqual(self.store.read(self.sid)['turn_id'], 'work-turn')
 
     def test_reconciling_unknown_in_same_process_does_not_make_old_observation_current(self):
         with self.attach() as controller:
