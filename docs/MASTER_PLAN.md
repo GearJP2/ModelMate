@@ -416,6 +416,9 @@ fake server preserve the attached unknown recheck checkpoint and stale evidence.
 Reopening the controller retains the same binding without replay or automatic
 interrupt. `test_native_recheck.py`: 42 tests passed outside the socket-restricted
 sandbox. This is MOCK_VERIFIED only; live workflow/server-loss recovery remains open.
+Abrupt workflow-owner exit is also covered offline: 14 ledger tests passed;
+reopening releases the writer lock but retains the unresolved turn binding and
+blocks new work/rechecks until reconciliation. No live process-loss gate is claimed.
 
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion

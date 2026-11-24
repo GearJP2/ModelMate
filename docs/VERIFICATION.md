@@ -2839,3 +2839,21 @@ dead owned endpoint with an existing durable binding; it does not simulate a
 WebSocket turn being interrupted by server death or prove live Codex recovery.
 Next eligible P12 work: offline loss of the workflow process while a recheck is
 active, including writer-lock release and preservation of its unknown outcome.
+
+### P12 abrupt workflow writer exit — MOCK_VERIFIED
+
+A subprocess attaches to a saved synthetic workflow, reserves a recheck and
+persists its thread/turn bindings, then calls `os._exit(23)` without controller or
+store cleanup. The parent verifies that exit and reopens the same session. The
+writer lock is available again. The ledger retains `turn_bound/pending`, which
+means the result is unresolved, with the original native binding, stale evidence
+and unchanged work-attempt counters. Both a new recheck reservation and a new
+workflow attempt are refused. The original work thread/turn remain unchanged.
+
+`python3 -m unittest discover -s tests -p test_recheck_ledger.py -v` passed all
+14 tests. `git diff --check` passed. No runtime code changed and no inference was
+requested. This tests process exit while durable state is bound, with no running
+native backend; it does not prove a live backend stops when its owner dies.
+Next eligible P12 work: test an active WebSocket recheck losing its server in
+the offline transport/controller integration, then obtain user-run live evidence
+for the remaining process-loss cases.
