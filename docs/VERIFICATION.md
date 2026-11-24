@@ -2885,3 +2885,48 @@ The complete offline suite, `python3 -m unittest discover -s tests -v`, passed
 all 560 tests with socket permissions enabled and no skips. `git diff --check`
 also passed. The earlier restricted run passed with socket tests skipped and
 does not substitute for this result.
+
+### P12 owned-server-loss verifier — MOCK_VERIFIED
+
+The opt-in recheck probe accepts `--terminate-recheck-server` only with the full
+live/runtime-shared recheck selection below. It reuses the synthetic initial
+check and durable resume setup, observes the recheck owner active, then exits
+only the runtime-owned private server context. It requires the server process
+to have exited and the recheck client to report backend disconnection. Timeout,
+an unrelated exception or an already completed turn cannot pass that check.
+
+The probe verifies the exact operation/thread/turn binding is retained as
+unknown with no exit code/item ID, evidence is stale, and the attached checkpoint
+matches disk. After a fresh account/quota/catalog read through the work connection,
+it releases the writer and reopens the controller. Both work dispatch and a new
+recheck reservation must be blocked by the unresolved operation. Original work
+steps, attempt history and native work binding must stay intact.
+
+Offline fake-server tests cover successful evidence collection, failure to observe
+an active owner, mandatory opt-in flags, report sanitization and a nonzero CLI exit
+when any required result is unverified. The 29 recheck-probe tests passed.
+The complete offline suite passed all 563 tests without skips with socket
+permissions enabled. Compile checks for modelmate.py, doctor.py and verify.py,
+and `git diff --check`, also passed.
+
+User-run live command (at most two subscription turns, retained synthetic scratch
+and native threads; use a currently available model supporting low effort):
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-rechecks gpt-6.1-sol \
+  --stop-retained-recheck --runtime-shared-recheck --terminate-recheck-server
+```
+
+Here `--stop-retained-recheck` selects the existing delayed-command setup;
+`--terminate-recheck-server` replaces the STOP RPC with owned-server shutdown.
+A pass requires every `SERVER_LOSS_KEYS` check to report passed, including
+`ownedServerExited`, `disconnectObserved`, `unknownCheckpoint`, `resumeBlocksReplay`
+and `finalCheckpoint`. Keep CLI version and the returned source hashes with the
+sanitized results. Do not commit raw reports or local session records.
+
+This probe is not live-verified. Even a pass proves local unknown-state handling,
+not remote turn termination or orphan cleanup after App Server loss. Inspect the
+retained turn through Codex before deciding how to proceed; do not replay it.
+Next eligible P12 work: user-run evidence for this exact verifier version and
+scoped inspection of the retained native outcome, without another inference turn.

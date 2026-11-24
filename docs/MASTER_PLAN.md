@@ -422,6 +422,9 @@ blocks new work/rechecks until reconciliation. No live process-loss gate is clai
 Active WebSocket disconnect is covered before and after a successful command
 result but before turn completion: 14 transport tests passed with sockets enabled.
 Both paths retain unknown outcomes and stale evidence without replay on restore.
+The opt-in verifier now has `--terminate-recheck-server` for this live gate,
+with offline coverage for active-owner checks, shutdown, durable unknown state,
+and blocking work/recheck replay. Live execution remains user-run and unverified.
 
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion

@@ -1,7 +1,7 @@
 """Two synthetic tool turns across reconnect; never invoke installed Codex."""
 import io
 import json
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import sys
 import tempfile
@@ -12,7 +12,7 @@ from modelmate import (NativeWorkflowConnection, NativeRecheckConnection, Rechec
                        ChatShell, ProbeError, WorkflowController)
 from verify import (probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, RECHECK_DISCONNECT_KEYS,
                     PendingApprovalOwner, PassiveApprovalObserver, probe_shared_approval,
-                    SHARED_APPROVAL_KEYS, RUNTIME_RECHECK_KEYS, main)
+                    SHARED_APPROVAL_KEYS, RUNTIME_RECHECK_KEYS, SERVER_LOSS_KEYS, main)
 
 
 SERVER = r'''
@@ -170,24 +170,40 @@ class RecheckProbeTests(unittest.TestCase):
             self.assertEqual(main(), 0)
             server.assert_not_called()
 
-    def probe(self,mode='normal', *, stop=False, disconnect_owner=False, runtime_shared=False):
+    def probe(self,mode='normal', *, stop=False, disconnect_owner=False, runtime_shared=False, server_loss=False):
+        children = []
+        self.server_exited = False
+        endpoint = Mock()
+        endpoint.server.poll.side_effect = lambda: 0 if self.server_exited else None
+        @contextmanager
+        def owned_server():
+            try:
+                yield endpoint
+            finally:
+                self.server_exited = True
+                for backend in children:
+                    if backend.process.poll() is None:
+                        backend.process.terminate()
+                        backend.process.wait(timeout=2)
         def parent(command,timeout):
             self.assertIn('forced_login_method="chatgpt"',command)
             return NativeWorkflowConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
         def child(command,timeout,*,websocket=None):
-            return NativeRecheckConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
+            backend = NativeRecheckConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
+            children.append(backend)
+            return backend
         def observer(command,timeout,*,websocket=None):
             return RecheckRecoveryConnection([sys.executable,'-u','-c',SERVER,str(self.trace),mode],timeout)
         with patch('verify.NativeWorkflowConnection',new=parent), \
              patch('modelmate.NativeRecheckConnection',new=child), \
              patch('modelmate.RecheckRecoveryConnection',new=observer), \
-             patch('modelmate.private_recheck_server',return_value=nullcontext(object())), \
+             patch('modelmate.private_recheck_server',side_effect=lambda _: owned_server() if server_loss else nullcontext(object())), \
              patch('modelmate.UnixWebSocket'), \
              patch('verify.RecheckRecoveryConnection',new=observer), \
              patch('verify.tempfile.mkdtemp',return_value=str(self.scratch)), \
              patch('sys.stderr',new_callable=io.StringIO):
             return probe_rechecks('synthetic',1,stop=stop,disconnect_owner=disconnect_owner,
-                                  runtime_shared=runtime_shared)
+                                  runtime_shared=runtime_shared,server_loss=server_loss)
 
     def records(self):return [json.loads(line) for line in self.trace.read_text().splitlines()]
 
@@ -383,6 +399,40 @@ class RecheckProbeTests(unittest.TestCase):
                  patch('sys.stdout', new_callable=io.StringIO):
                 self.assertEqual(main(), 1)
             probe.assert_called_once_with('synthetic', 120, stop=True, runtime_shared=True)
+
+    def test_server_loss_probe_keeps_unknown_binding_and_blocks_replay(self):
+        result = self.probe('stop_active', stop=True, runtime_shared=True, server_loss=True)
+        self.assertTrue(all(result[key] == 'passed' for key in SERVER_LOSS_KEYS), result)
+        self.assertTrue(self.server_exited)
+        self.assertNotIn('stopRpcAcknowledged', result)
+        self.assertNotIn('PRIVATE_', json.dumps(result))
+        self.assertNotIn(str(self.scratch), json.dumps(result))
+        requests = self.records()
+        self.assertEqual(sum(r['method'] == 'turn/start' for r in requests), 2)
+        self.assertFalse(any(r['method'] == 'turn/interrupt' for r in requests))
+
+    def test_server_loss_probe_cannot_pass_without_observing_active_owner(self):
+        result = self.probe('stop_owner_never_active', stop=True, runtime_shared=True, server_loss=True)
+        self.assertEqual(result['activeRecheckObserved'], 'unverified')
+        self.assertEqual(result['ownedServerExited'], 'unverified')
+        self.assertEqual(result['finalCheckpoint'], 'unverified')
+
+    def test_server_loss_cli_requires_full_opt_in_and_all_evidence(self):
+        args = ['verify.py', '--probe-rechecks', 'synthetic', '--runtime-shared-recheck',
+                '--stop-retained-recheck', '--terminate-recheck-server', '--run-live']
+        with patch('verify.probe_rechecks') as probe, patch('sys.stderr', new_callable=io.StringIO):
+            for missing in ('--run-live', '--runtime-shared-recheck', '--stop-retained-recheck'):
+                with self.subTest(missing=missing), patch('sys.argv', [a for a in args if a != missing]):
+                    with self.assertRaises(SystemExit) as error:
+                        main()
+                    self.assertEqual(error.exception.code, 2)
+            probe.assert_not_called()
+            probe.return_value = dict.fromkeys(SERVER_LOSS_KEYS, 'passed')
+            with patch('sys.argv', args), patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(main(), 0)
+                probe.return_value['resumeBlocksReplay'] = 'unverified'
+                self.assertEqual(main(), 1)
+            probe.assert_called_with('synthetic', 120, stop=True, runtime_shared=True, server_loss=True)
 
 
 if __name__=='__main__':unittest.main()
