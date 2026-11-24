@@ -103,18 +103,20 @@ def private_recheck_server(timeout, *, executable='codex'):
                     raise ProbeError('Private App Server socket startup timed out.')
                 yield endpoint
             finally:
-                if server.poll() is None:
+                # Descendants can outlive the leader, including after a successful wait.
+                try:
+                    os.killpg(server.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    server.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+                finally:
                     try:
-                        os.killpg(server.pid, signal.SIGTERM)
+                        os.killpg(server.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                    try:
-                        server.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(server.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
 
 
 class UnixWebSocket:

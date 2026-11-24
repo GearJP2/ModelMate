@@ -425,6 +425,8 @@ Both paths retain unknown outcomes and stale evidence without replay on restore.
 The opt-in verifier now has `--terminate-recheck-server` for this live gate,
 with offline coverage for active-owner checks, shutdown, durable unknown state,
 and blocking work/recheck replay. Live execution remains user-run and unverified.
+Owned-server cleanup now terminates its process group even if the leader exited
+first; a regression reproduces and fixes a surviving SIGTERM-resistant descendant.
 
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion

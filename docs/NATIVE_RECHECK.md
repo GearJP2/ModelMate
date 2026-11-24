@@ -237,6 +237,9 @@ a user-wide daemon or a persistent background service.
   checkpoint. Do not start or adopt a managed daemon. Limit startup and
   shutdown waits and target only the process and temporary directory owned
   by the controller.
+- Shutdown signals the owned process group even after the server leader exits,
+  waits for the leader with a deadline, and force-stops remaining group members.
+  This is local process cleanup, not evidence of remote turn termination.
 - Keep the installed runtime one Python file using the standard library.
   An offline spike must establish the Unix WebSocket handshake, message
   framing and shutdown behavior before wiring it into workflow dispatch.

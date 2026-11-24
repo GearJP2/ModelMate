@@ -3,6 +3,7 @@ import errno
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import socket
 import struct
@@ -179,6 +180,47 @@ time.sleep(30)
             with private_recheck_server(.1, executable=str(executable)):
                 self.fail('Server without a socket must not be yielded.')
         self.assertLess(time.monotonic() - started, 3)
+
+    def test_owned_server_exit_still_cleans_up_signal_resistant_descendant(self):
+        executable = self.directory / 'forking-codex'
+        executable.write_text('''#!/usr/bin/env python3
+import pathlib, socket, subprocess, sys, time
+worker_file = sys.argv[0] + '.worker'
+code = "import os, pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)"
+subprocess.Popen([sys.executable, '-c', code, worker_file])
+while not pathlib.Path(worker_file).exists(): time.sleep(.01)
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(sys.argv[3].removeprefix('unix://'))
+server.listen()
+time.sleep(30)
+''')
+        executable.chmod(0o700)
+        worker_file = Path(str(executable) + '.worker')
+
+        def running(pid):
+            try:
+                return Path('/proc/' + str(pid) + '/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+            except FileNotFoundError:
+                return False
+
+        def cleanup_worker():
+            if worker_file.exists():
+                try:
+                    os.kill(int(worker_file.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+        self.addCleanup(cleanup_worker)
+        with private_recheck_server(2, executable=str(executable)) as endpoint:
+            worker_pid = int(worker_file.read_text())
+            self.assertTrue(running(worker_pid))
+            endpoint.server.terminate()
+            endpoint.server.wait(timeout=2)
+            self.assertTrue(running(worker_pid))
+        deadline = time.monotonic() + 2
+        while running(worker_pid) and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertFalse(running(worker_pid), 'Owned descendant survived its server context.')
 
     def test_selector_keeps_partial_frame_and_rpc_reader_routes_notification(self):
         notification = b'{"method":"turn/started","params":{"synthetic":true}}'

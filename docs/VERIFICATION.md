@@ -2930,3 +2930,25 @@ not remote turn termination or orphan cleanup after App Server loss. Inspect the
 retained turn through Codex before deciding how to proceed; do not replay it.
 Next eligible P12 work: user-run evidence for this exact verifier version and
 scoped inspection of the retained native outcome, without another inference turn.
+
+### P12 owned process-group cleanup after leader exit — MOCK_VERIFIED
+
+An offline regression starts a fake private server and its child in the owned
+process group. The child installs a SIGTERM-ignore handler before advertising
+readiness. The test terminates and waits for the server leader, confirms the
+child is still running, then exits the private server context. Before the fix,
+the child survived that context and the test failed. The regression has its own
+fallback cleanup so a failure does not leave the synthetic worker running.
+
+`private_recheck_server` now sends SIGTERM to its owned group regardless of the
+leader's exit state, waits for the leader with the existing deadline, and sends
+SIGKILL to remaining group members. It still removes only its private temporary
+directory. The 15 offline transport tests passed with socket permissions enabled.
+The full `python3 -m unittest discover -s tests -v` run passed all 564 tests
+without skips with sockets enabled. Compile checks and `git diff --check` passed.
+No live inference was run.
+
+This covers local descendants that remain in the owned process group. It does
+not establish remote cancellation, descendants that deliberately leave that
+group, or live Codex server-loss behavior. Next eligible P12 gate remains the
+user-run `--terminate-recheck-server` command above against this updated runtime.
