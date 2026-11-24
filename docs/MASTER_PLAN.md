@@ -333,6 +333,16 @@ Approve plan รอ plan grant และ invalidate เมื่อแผนเ�
 ระบุ baseline ต่อ task เพื่อไม่ให้ task ก่อนที่ใช้ strong กลายเป็นสิทธิ์ถาวร
 Manual model selection เป็นการอนุมัติเฉพาะขอบเขตที่แสดง ไม่ขยาย tool permission
 
+P07/P08 manual step selection increment: workflow `/model ID [EFFORT]` now uses
+the existing step-scoped manual model grant. It selects only models with an
+unambiguous existing role binding (or the current role), validates the revised
+plan/catalog/baseline before persisting, and changes only the current step's
+role/effort/reason. It neither dispatches nor grants tools/whole-plan approval.
+Future steps retain their model gates; restore retains the proposed role/effort
+but no grant. Unsupported/ambiguous choices and removal of required strong review
+are rejected without changing the plan. Live manual workflow selection remains
+unverified; this has controller/UI/persistence offline evidence only.
+
 ผ่านเมื่อ: matrix ทั้ง 3 modes × initial selection/escalation/downgrade/plan change;
 ไม่มีการถามซ้ำเมื่อ grant เดิมยังตรง และ stale grant ใช้ไม่ได้
 ไม่รวม: predictive quota percentages หรือ auto permission approval

@@ -431,6 +431,24 @@ Approve plan จะแสดง model และ effort ของทุกขั�
 ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
 นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
 Default จะ decline/pause คำขอเพิ่มสิทธิ์; opt-in approval UI อยู่ด้านล่าง read-only/on-request
+ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
+
+### เลือกโมเดลเองใน workflow
+
+`/model` แสดงตัวเลือกของขั้นปัจจุบัน, role bindings และ catalog ล่าสุดที่ทราบ
+ใช้ `/model ID [EFFORT]` เมื่อไม่มี active attempt เพื่อเลือกโมเดลเฉพาะขั้นนี้
+ถ้าไม่ระบุ effort จะใช้ default ที่ catalog รายงาน ตัวอย่าง `/model MODEL low`
+ไม่เริ่ม turn จนกด `/next`; native host จะอ่าน quota/catalog ใหม่ก่อนเริ่มเช่นเดิม
+
+ID ต้องมี role binding อยู่แล้ว ถ้าตรง role ปัจจุบันจะคง role นั้น ถ้ามีหลาย
+bindings ที่กำกวม ให้ใช้ `/revise-step` ระบุ role ก่อน ไม่จัดบทบาทจากชื่อโมเดล
+ไม่อนุญาตให้เลือกจนลบ strong review ที่แผนเสี่ยงสูงต้องมี
+
+คำสั่งนี้เป็นการอนุมัติโมเดล/effort เฉพาะขั้นปัจจุบันใน process นี้ ไม่ให้สิทธิ์ tools
+และไม่ครอบคลุมขั้นถัดไป ใน Approve plan ยังต้องอนุมัติแผนใหม่ก่อนเริ่ม
+baseline, เกณฑ์ตรวจ, ID และ budget เดิมยังอยู่ และ approval/token เดิมหมดอายุ
+checkpoint เก็บ role/effort/reason ที่แก้ แต่ไม่เก็บ grant; หลัง restore ต้องผ่าน
+gates ใหม่และ resolve bindings อีกครั้ง ไม่ใช้ข้อความ reason แทนการอนุมัติ
 
 ### เปลี่ยนแนวทางของขั้นปัจจุบัน
 
@@ -452,7 +470,6 @@ approval เดิมใช้ไม่ได้ ต้องผ่าน gates 
 การแก้ไม่เพิ่ม budget หากครบสาม attempts แล้ว ต้องตอบ `/continue` ที่ correction-limit
 prompt เพื่ออนุมัติรอบใหม่อย่างชัดเจน ใช้ role ที่มี binding แล้วและ effort ที่ catalog รองรับ
 revision บันทึกใน checkpoint ของแผนที่มีผลจริง โดยไม่เขียนไฟล์แผนหรือ revision ทับ
-ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
 
 รุ่นนี้รับแผนที่ไม่มีคำถามค้าง, manual/rubric/source checks และ test/lint ที่ผูก
 คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ต้องให้ผู้ใช้ตรวจ URL และ claim เอง

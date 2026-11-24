@@ -3557,3 +3557,35 @@ was run. This exposes existing explicit-plan control; automatic workflow and liv
 revision evidence remain separate unfinished work.
 The full offline suite passed all 645 tests with test-owned sockets enabled and
 no skips. Entry-point compile checks and `git diff --check` passed.
+
+### P07/P08 explicit current-step model selection — MOCK_VERIFIED
+
+Workflow `/model` now displays the proposed current selection, existing role
+bindings and last-known catalog. `/model ID [EFFORT]` selects an available bound
+model for the current step only; omitted effort uses the catalog default. It
+retains the current role if it already binds that ID, otherwise requires one
+unambiguous role. Unbound IDs and ambiguous alternative roles require explicit
+bindings/role revision instead of inferring quality from model names.
+
+The controller validates the catalog, baseline and complete revised plan before
+using its existing revision/persistence and manual step-grant mechanisms. Goal,
+criteria, structure, baseline, IDs, counters and future step proposals remain
+unchanged. It cannot remove required strong review or modify an active/finished
+attempt. Selection does not dispatch work, buy quota, authorize tools or approve
+the entire plan. Approve plan still requests its plan grant; the next strong step
+still requests its own authorization. Native `/next` retains fresh admission.
+
+The checkpoint stores the revised role/effort/reason proposal, not the ephemeral
+grant or role-binding configuration. Restore resolves user-supplied bindings and
+requires model approval anew. A reason string or displayed model command cannot
+create consent. Old pending tokens expire when the proposal changes.
+
+All 27 controller and 27 UI tests passed. New cases cover step-only consent across
+two strong steps, unchanged baseline, independent plan approval, removed catalog
+entries before dispatch, invalid/unbound/ambiguous selections, preserving a known
+role when IDs alias, required strong-review enforcement, non-dispatch UI choice,
+active-attempt rejection, stale-token expiry, selected effort and durable restore
+without grants. Compile checks passed. No installed Codex inference or network
+request was run; live manual selection and broader automation remain open.
+The full offline suite passed all 652 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.

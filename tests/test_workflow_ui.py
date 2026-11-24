@@ -106,6 +106,37 @@ class WorkflowUITests(unittest.TestCase):
         self.assertEqual(c.snapshot()['active_attempt']['selection']['model'], POLICY['standard'])
         self.assertEqual(c.snapshot()['steps'][0]['attempts'], 1)
 
+    def test_manual_workflow_model_choice_does_not_dispatch_or_grant_tools(self):
+        shell, c, out, actions = self.shell()
+        before = c.export_checkpoint()
+        shell.line('/model')
+        self.assertIn('roleBindings', out.getvalue())
+        shell.event({'type': 'text', 'text': '/model synthetic-strong low'})
+        self.assertEqual(c.export_checkpoint(), before)
+        shell.line('/model synthetic-strong')
+        self.assertEqual(actions, [])
+        self.assertEqual(c.snapshot()['steps'][0]['attempts'], 0)
+        self.assertEqual(shell.permissions, 'read_only')
+        self.assertIsNone(c.snapshot()['tool_request'])
+        shell.line('/next')
+        self.assertEqual(c.state, 'RUNNING')
+        self.assertEqual(c.snapshot()['active_attempt']['selection'], {'model': POLICY['strong'], 'effort': 'low'})
+        running = c.export_checkpoint()
+        shell.line('/model synthetic-standard medium')
+        self.assertEqual(c.export_checkpoint(), running)
+
+    def test_manual_workflow_model_choice_expires_old_request_and_uses_new_effort(self):
+        shell, c, out, actions = self.shell(self.controller('strong'))
+        shell.line('/next');token = shell.pending['token']
+        shell.line('/model synthetic-strong medium')
+        self.assertEqual(c.state, 'READY')
+        before = c.export_checkpoint()
+        shell.line('/approve ' + token)
+        self.assertEqual(c.export_checkpoint(), before)
+        shell.line('/next')
+        self.assertEqual(c.state, 'RUNNING')
+        self.assertEqual(c.snapshot()['active_attempt']['selection']['effort'], 'medium')
+
     def test_revision_invalidates_approved_plan_before_next_attempt(self):
         c = self.controller();c.change_mode('approve_plan')
         shell, c, out, actions = self.shell(c)
@@ -184,6 +215,27 @@ class WorkflowUITests(unittest.TestCase):
                 self.assertEqual(after['plan']['steps'][0]['objective'], 'Revised current step')
                 self.assertEqual(after['plan']['steps'][0]['effort'], 'medium')
         self.assertEqual(path.read_bytes(), source_bytes)
+
+    def test_manual_step_selection_persists_but_its_grant_is_not_restored(self):
+        directory = tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        with SessionStore(root, root / 'state') as store:
+            sid = store.create('Manual model fixture', thread_id='synthetic-thread',
+                account_hash=hashlib.sha256(b'synthetic').hexdigest())['id']
+            with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY, controller=self.controller()) as c:
+                shell, _, _, actions = self.shell(c)
+                shell.line('/model synthetic-strong medium')
+                self.assertEqual(actions, [])
+                self.assertTrue(c._approvals._grants)
+                before = c.snapshot()
+                self.assertEqual(json.loads(store.read(sid)['workflow']['plan'])['steps'][0]['effort'], 'medium')
+            with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY) as restored:
+                self.assertFalse(restored._approvals._grants)
+                self.assertEqual(restored.snapshot()['steps'], before['steps'])
+                restored.answer_pause(restored.snapshot()['pause_token'], 'continue')
+                request = restored.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)
+                self.assertEqual(request['state'], 'AWAITING_MODEL_APPROVAL')
+                self.assertEqual(request['model_request']['selection'], {'model': POLICY['strong'], 'effort': 'medium'})
 
     def test_callback_return_value_cannot_declare_done_without_controller_evidence(self):
         c = self.controller()

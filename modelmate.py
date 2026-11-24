@@ -1264,6 +1264,39 @@ class WorkflowController:
             return self._pause(self.reason)
         return self._updated()
 
+    def select_step_model(self, model_id, effort, catalog, role_policy=None):
+        """An explicit user choice authorizes this step's model, never tools or the whole plan."""
+        if self._active is not None or self._index >= len(self._steps) or self.state in ('DONE', 'FAILED'):
+            raise ProbeError('Cannot select a model for an active or finished step.')
+        selection = select_model(catalog, model_id, effort)
+        policy = MODEL_ROLE_POLICY if role_policy is None else role_policy
+        if (not isinstance(policy, dict) or any(role not in ROLE_ORDER or not isinstance(model, str)
+                                               or not model for role, model in policy.items())):
+            raise ProbeError('Invalid role binding.')
+        roles = [role for role, model in policy.items() if model == model_id]
+        current = self._plan['steps'][self._index]['role']
+        if current in roles:
+            role = current
+        elif len(roles) == 1:
+            role = roles[0]
+        else:
+            raise ProbeError('Model needs an unambiguous existing role binding; choose the role with /revise-step first.')
+        candidate = copy.deepcopy(self._plan)
+        candidate['steps'][self._index].update(role=role, effort=selection['effort'],
+            reason='Explicit user model selection for this step.')
+        raw = json.dumps(candidate, ensure_ascii=False)
+        route = routing_decision(raw, catalog, policy)
+        if route['state'] != 'ready_for_approval':
+            raise ProbeError('Cannot resolve the revised plan and its model selections.')
+        select_model(catalog, self._approvals.baseline['model'], self._approvals.baseline['effort'])
+        self.revise_step(raw)
+        grant = self._approvals.manual_select(raw, catalog, policy,
+            step_id=self._steps[self._index]['id'], step_index=self._index)
+        if grant['state'] != 'allow_model':
+            self._approvals._invalidate()
+            raise ProbeError('Manual step selection could not be approved; nothing dispatched.')
+        return self.snapshot()
+
     def _attempt(self, attempt_id):
         if self._active is None or not isinstance(attempt_id, str) or attempt_id != self._active['id']:
             raise ProbeError('Invalid or stale workflow attempt.')
@@ -2578,6 +2611,22 @@ class ChatShell:
                             reference = matches[0]['id']
                         coverage[index].append(reference)
                 self.workflow.finish_task(coverage)
+            elif cmd == '/model':
+                if not values:
+                    selection = None
+                    if state['step_index'] < len(state['plan']['steps']):
+                        step = state['plan']['steps'][state['step_index']]
+                        try:selection = select_role(self.catalog, step['role'], self.role_policy, step['effort'])
+                        except ProbeError:pass
+                    self.write(json.dumps({'requested': selection, 'roleBindings':
+                        MODEL_ROLE_POLICY if self.role_policy is None else self.role_policy,
+                        'catalog': self.catalog}, ensure_ascii=True))
+                elif len(values) in (1, 2):
+                    self.workflow.select_step_model(values[0], values[1] if len(values) == 2 else None,
+                                                    self.catalog, self.role_policy)
+                    self.write('เลือกโมเดลเฉพาะขั้นนี้แล้ว; /next จะตรวจ quota/catalog ใหม่ · tools ต้องอนุมัติแยก')
+                else:
+                    raise ProbeError('Use /model ID [EFFORT].')
             elif cmd == '/revise-step':
                 if len(values) != 1:
                     raise ProbeError('Use /revise-step FILE with a JSON object of objective/role/effort/reason changes.')
@@ -2648,12 +2697,12 @@ class ChatShell:
                 return
             cmd, *values = args
             if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/verify-source',
-                                                      '/revalidate', '/revalidate-source', '/finish', '/status', '/mode',
+                                                      '/revalidate', '/revalidate-source', '/finish', '/status', '/mode', '/model',
                                                       '/recheck', '/confirm-recheck', '/recheck-budget',
                                                       '/recover-recheck', '/stop-recheck',
                                                       '/approve', '/decline', '/pause', '/continue', '/revise', '/revise-step'):
                 self.workflow_command(cmd, values)
-            elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
+            elif self.workflow is not None and cmd in ('/sessions', '/delete', '/confirm-delete', '/acknowledge'):
                 self.write('คำสั่งนี้ยังไม่เชื่อม workflow host; ใช้ /workflow เพื่อดูแผนและสถานะ')
             elif cmd == '/help':
                 self.write('/status /mode [auto|ask_to_escalate|approve_plan] /model [ID EFFORT]\n'

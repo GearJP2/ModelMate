@@ -144,6 +144,64 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(running['dispatch']['selection'], {'model': POLICY['strong'], 'effort': 'medium'})
         self.assertEqual(running['dispatch']['tool_permissions'], 'none')
 
+    def test_manual_model_choice_is_current_step_only_and_preserves_baseline(self):
+        plan = copy.deepcopy(PLAN)
+        plan['steps'] = [dict(plan['steps'][0], role='strong') for _ in range(2)]
+        c = self.controller(plan)
+        before = c.snapshot();baseline = copy.deepcopy(c._approvals.baseline)
+        c.select_step_model(POLICY['strong'], 'medium', CATALOG, POLICY)
+        self.assertEqual(c.snapshot()['steps'], before['steps'])
+        self.assertEqual(c.snapshot()['plan']['steps'][1], before['plan']['steps'][1])
+        state, _ = self.check_attempt(c)
+        self.assertEqual(state['history'][0]['selection'], {'model': POLICY['strong'], 'effort': 'medium'})
+        next_step = self.begin(c)
+        self.assertEqual(next_step['state'], 'AWAITING_MODEL_APPROVAL')
+        self.assertEqual(next_step['steps'][1]['attempts'], 0)
+        self.assertEqual(c._approvals.baseline, baseline)
+        self.assertIsNone(next_step['tool_request'])
+
+    def test_manual_model_choice_does_not_approve_whole_plan_or_stale_catalog(self):
+        c = self.controller(mode='approve_plan')
+        c.select_step_model(POLICY['strong'], None, CATALOG, POLICY)
+        request = self.begin(c)
+        self.assertEqual(request['model_request']['scope'], 'plan')
+        self.assertEqual(request['steps'][0]['attempts'], 0)
+        other = self.controller()
+        other.select_step_model(POLICY['strong'], 'low', CATALOG, POLICY)
+        missing = [row for row in CATALOG if row['model'] != POLICY['strong']]
+        paused = self.begin(other, catalog=missing)
+        self.assertEqual(paused['state'], 'PAUSED')
+        self.assertEqual(paused['steps'][0]['attempts'], 0)
+        self.assertFalse(other._approvals._grants)
+
+    def test_invalid_or_ambiguously_bound_manual_model_does_not_change_plan(self):
+        c = self.controller()
+        before = c.export_checkpoint()
+        duplicate = dict(POLICY, economy=POLICY['strong'])
+        unbound = dict(CATALOG[0], model='synthetic-unbound')
+        for model, effort, catalog, policy in (
+                ('missing', 'low', CATALOG, POLICY),
+                (POLICY['strong'], 'unavailable', CATALOG, POLICY),
+                ('synthetic-unbound', 'low', CATALOG + [unbound], POLICY),
+                (POLICY['strong'], 'low', CATALOG, duplicate)):
+            with self.subTest(model=model, effort=effort), self.assertRaises(ProbeError):
+                c.select_step_model(model, effort, catalog, policy)
+            self.assertEqual(c.export_checkpoint(), before)
+        current = self.controller(dict(PLAN, steps=[dict(PLAN['steps'][0], role='strong')]))
+        current.select_step_model(POLICY['strong'], 'low', CATALOG, duplicate)
+        self.assertEqual(current.snapshot()['plan']['steps'][0]['role'], 'strong')
+
+    def test_manual_model_choice_cannot_remove_required_strong_review(self):
+        plan = copy.deepcopy(PLAN)
+        plan['steps'][0]['risk'] = 'high'
+        plan['steps'].append(dict(PLAN['steps'][0], kind='review', role='strong'))
+        c = self.controller(plan)
+        self.check_attempt(c)
+        before = c.export_checkpoint()
+        with self.assertRaises(ProbeError):
+            c.select_step_model(POLICY['standard'], 'low', CATALOG, POLICY)
+        self.assertEqual(c.export_checkpoint(), before)
+
     def test_approve_plan_covers_unchanged_steps_but_each_attempt_checks_quota_again(self):
         plan = copy.deepcopy(PLAN);plan['steps'].append(copy.deepcopy(plan['steps'][0]))
         c = self.controller(plan, 'approve_plan')
