@@ -2977,3 +2977,31 @@ transport tests. It does not prove interactive live Codex behavior, actual
 WebSocket approval routing, or process-loss recovery. Runtime code is unchanged.
 Next eligible P12 gate remains user-run server-loss evidence, followed by scoped
 live interactive CLI verification.
+
+### P10 explicit human source checks — MOCK_VERIFIED
+
+Explicit-plan workflows now accept source checks through the existing opt-in
+entry. `/verify-source CHECK RESULT URL "checked claim and finding"` records
+human-reviewed source evidence only in CHECKING after confirmed turn completion.
+It uses the controller's existing source provenance, URL and finding validation.
+It performs no HTTP request or inference and does not treat the presence of a
+URL as proof. The user is responsible for checking support for the stated claim.
+
+`/revalidate-source STEP.CHECK RESULT URL "checked claim and finding"` explicitly
+rechecks saved source evidence after restore. The URL must match the saved source
+and the verdict must agree with the saved result. Unknown/disagreeing results
+leave evidence stale; changing the URL cannot clear it. Another restore makes
+the evidence stale again. Source verdicts cannot substitute for test/lint exit
+codes or manual/rubric checks, and model text does not invoke the UI commands.
+User-supplied URL/findings stay in local checkpoint metadata, never metrics.
+
+New offline coverage checks native entry without dispatch, out-of-phase and
+malformed commands, invalid URLs/empty findings, duplicate evidence, pass/fail/
+unknown outcomes, explicit criterion acceptance and repeated restore/revalidation.
+All 20 targeted workflow-entry tests passed. The complete offline suite passed
+all 567 tests without skips with sockets enabled. Compile checks for runtime,
+doctor and verifier, plus `git diff --check`, passed. No live inference or web
+request was run. This is explicit human verification, not automatic source
+retrieval, automatic fact checking, a passed G3 gate or full workflow release.
+Next eligible P10 work: scoped live source-check workflow evidence; the pending
+P12 live server-loss command remains a separate gate.

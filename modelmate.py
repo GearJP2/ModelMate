@@ -2001,7 +2001,7 @@ class ChatShell:
     def start(self, prompt=None):
         if self.workflow is not None:
             self.write('ModelMate · Workflow UI prototype · execution ต้องผ่าน host ที่รองรับ')
-            self.write('/workflow /next /verify /revalidate /check /finish /status /mode · /cancel /exit')
+            self.write('/workflow /next /verify /verify-source /revalidate /revalidate-source /check /finish /status /mode · /cancel /exit')
             self.show_workflow()
         elif getattr(self, 'live', False):
             self.write('ModelMate · live ChatGPT/Codex · read-only + on-request')
@@ -2120,6 +2120,7 @@ class ChatShell:
             self.write('โมเดลที่ร้องขอใน attempt นี้: ' + json.dumps(active['selection']))
         if state['stale_evidence']:
             self.write('หลักฐานที่ restore เป็น stale: ตรวจผลปัจจุบันแล้ว /revalidate STEP.CHECK pass|fail|unknown สำหรับ manual/rubric; tool checks ต้องตรวจด้วยเครื่องมือใหม่')
+            self.write('Source checks ใช้ /revalidate-source STEP.CHECK pass|fail|unknown URL "checked claim and finding" โดยตรวจ URL เดิมอีกครั้ง')
             if self.recheck_backend is not None:
                 self.write('/recheck STEP.CHECK แสดงคำสั่ง/model ก่อนยืนยัน · ใช้โควตา subscription')
         operations = self.workflow.recheck_operations()
@@ -2140,7 +2141,12 @@ class ChatShell:
                 if pending_manual:
                     self.write('ใช้ /verify CHECK_NUMBER pass|fail|unknown สำหรับข้อ '
                                + ', '.join(pending_manual) + ' แล้วใช้ /check')
-                else:
+                pending_source = [str(i + 1) for i, check in enumerate(checks)
+                                  if check['kind'] == 'source' and i not in active['checks']]
+                if pending_source:
+                    self.write('ใช้ /verify-source CHECK_NUMBER pass|fail|unknown URL "checked claim and finding" สำหรับข้อ '
+                               + ', '.join(pending_source) + ' · ผู้ใช้ต้องตรวจแหล่งข้อมูลเองก่อนบันทึก')
+                if not pending_manual and not pending_source:
                     self.write('Backend จบแล้ว ใช้ /check เพื่อประเมินผลขั้นนี้')
             elif state['step_index'] == len(state['steps']):
                 self.write('ขั้นงานผ่านแล้ว; ยืนยันเกณฑ์ด้วย /finish เช่น /finish 1=1.1 โดยเลือก ref ที่รองรับเกณฑ์จริง')
@@ -2327,8 +2333,11 @@ class ChatShell:
                 self.workflow_action({'action': cmd[1:], 'task_id': self.workflow.task_id})
                 if isinstance(self.workflow_action, WorkflowHost):
                     return  # Host already emitted workflow_changed and rendered the authoritative state.
-            elif cmd == '/revalidate':
-                if len(values) != 2 or values[1] not in ('pass', 'fail', 'unknown'):
+            elif cmd in ('/revalidate', '/revalidate-source'):
+                source = cmd == '/revalidate-source'
+                if len(values) != (4 if source else 2) or values[1] not in ('pass', 'fail', 'unknown'):
+                    if source:
+                        raise ProbeError('Use /revalidate-source STEP.CHECK pass|fail|unknown URL "checked claim and finding".')
                     raise ProbeError('Use /revalidate STEP.CHECK pass|fail|unknown for saved manual/rubric evidence.')
                 step_number, check_number = (int(part) for part in values[0].split('.'))
                 if not 1 <= step_number <= len(state['steps']) or check_number < 1:
@@ -2339,22 +2348,33 @@ class ChatShell:
                 if active is not None and active['step_id'] == step['id']:
                     candidates = list(active['checks'].values())
                 evidence = next((item for item in candidates if item['check_index'] == check_number - 1), None)
-                if evidence is None or evidence['kind'] not in ('manual', 'rubric'):
+                if evidence is None or evidence['kind'] not in (('source',) if source else ('manual', 'rubric')):
+                    if source:
+                        raise ProbeError('Only saved source evidence accepts source revalidation.')
                     raise ProbeError('Only saved manual/rubric evidence can be revalidated by the user; tool checks need fresh tool observations.')
-                self.workflow.revalidate_check(evidence['id'], origin='manual', result=values[1],
-                    reference='Explicit user revalidation after native resume', finding='User checked current result: ' + values[1])
-            elif cmd == '/verify':
-                if len(values) != 2 or values[1] not in ('pass', 'fail', 'unknown'):
+                if source and values[2] != evidence['reference']:
+                    raise ProbeError('Source revalidation must check the saved source URL.')
+                self.workflow.revalidate_check(evidence['id'], origin='source' if source else 'manual', result=values[1],
+                    reference=values[2] if source else 'Explicit user revalidation after native resume',
+                    finding=values[3] if source else 'User checked current result: ' + values[1])
+            elif cmd in ('/verify', '/verify-source'):
+                source = cmd == '/verify-source'
+                if len(values) != (4 if source else 2) or values[1] not in ('pass', 'fail', 'unknown'):
+                    if source:
+                        raise ProbeError('Use /verify-source CHECK_NUMBER pass|fail|unknown URL "checked claim and finding".')
                     raise ProbeError('Use /verify CHECK_NUMBER pass|fail|unknown (numbers start at 1).')
                 active = state['active_attempt']
                 if state['state'] != 'CHECKING' or active is None or active['status'] != 'completed':
                     raise ProbeError('Verification requires a confirmed completed attempt.')
                 index = int(values[0]) - 1
                 checks = state['plan']['steps'][state['step_index']]['checks']
-                if not 0 <= index < len(checks) or checks[index]['kind'] not in ('manual', 'rubric'):
+                if not 0 <= index < len(checks) or checks[index]['kind'] not in (('source',) if source else ('manual', 'rubric')):
+                    if source:
+                        raise ProbeError('Only source checks accept source verification.')
                     raise ProbeError('Only manual/rubric checks accept user verification.')
-                self.workflow.record_check(active['id'], index, origin='manual', result=values[1],
-                    reference='Explicit user verification in Terminal', finding='User recorded ' + values[1])
+                self.workflow.record_check(active['id'], index, origin='source' if source else 'manual', result=values[1],
+                    reference=values[2] if source else 'Explicit user verification in Terminal',
+                    finding=values[3] if source else 'User recorded ' + values[1])
             elif cmd == '/finish':
                 if not values:
                     raise ProbeError('Use /finish CRITERION_NUMBER=STEP.CHECK[,STEP.CHECK] ... (numbers start at 1).')
@@ -2420,7 +2440,8 @@ class ChatShell:
                 self.write('รูปแบบคำสั่งไม่ถูกต้อง')
                 return
             cmd, *values = args
-            if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/revalidate', '/finish', '/status', '/mode',
+            if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/verify-source',
+                                                      '/revalidate', '/revalidate-source', '/finish', '/status', '/mode',
                                                       '/recheck', '/confirm-recheck', '/recheck-budget',
                                                       '/recover-recheck', '/stop-recheck',
                                                       '/approve', '/decline', '/pause', '/continue', '/revise'):
@@ -2434,6 +2455,7 @@ class ChatShell:
                            '/approve TOKEN /decline TOKEN /pause TOKEN')
                 if self.workflow is not None:
                     self.write('/workflow /next /approve TOKEN --next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · /approve TOKEN อย่างเดียวจะรอ /next')
+                    self.write('/verify-source CHECK_NUMBER pass|fail|unknown URL "checked claim and finding" · /revalidate-source STEP.CHECK pass|fail|unknown URL "checked claim and finding"')
                     if self.recheck_backend is not None:
                         self.write('/recheck STEP.CHECK /confirm-recheck TOKEN /recheck-budget STEP.CHECK continue|revise_scope|pause')
                         if self.recheck_backend.shared_rechecks:
@@ -4867,11 +4889,10 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         return 0
     required = {(i + 1, j + 1) for i, step in enumerate(plan['steps'])
                 for j, check in enumerate(step['checks']) if check['kind'] in ('test', 'lint')}
-    if controller.state != 'READY' or any(check['kind'] == 'source'
-            for step in plan['steps'] for check in step['checks']):
-        raise ProbeError('Live explicit plans require no clarifications; source checks are not supported.')
+    if controller.state != 'READY':
+        raise ProbeError('Live explicit plans require no clarifications.')
     if resume_id is not None and required and not experimental_rechecks:
-        raise ProbeError('Native CLI resume currently supports manual/rubric workflows only; saved tool checks require fresh trusted rechecks.')
+        raise ProbeError('Native CLI resume currently supports manual/rubric/source workflows only; saved tool checks require fresh trusted rechecks.')
     if resume_id is not None and experimental_rechecks:
         if any(op['status'] in ('pending', 'unknown') for op in validate_recheck_ledger(
                 saved['workflow'].get('rechecks', []), workflow_saved_evidence(saved['workflow']))):

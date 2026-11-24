@@ -371,6 +371,12 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 
 ### P10 — Workflow และ correction budget
 
+Source-check CLI increment: explicit `/verify-source` records a human-checked
+URL, claim finding and verdict only after confirmed turn completion. Restored
+source evidence requires `/revalidate-source` against the saved URL and verdict.
+This adds no search/model call or tool grant; offline verification is recorded
+in VERIFICATION.md. Broader live workflow/recovery gates remain open.
+
 ไฟล์: modelmate.py, tests/test_workflow.py
 มี WorkflowController แบบ offline แล้ว: ไม่มี network/process/tool execution
 เชื่อม ModelApprovals และ quota_decision; dispatch descriptor ยังไม่ถูกส่งไป backend
