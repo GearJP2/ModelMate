@@ -3318,3 +3318,57 @@ receipt of terminal status, not isolated model compute time. P14 remains open
 for the missing telemetry and live evidence listed in RELEASE_CHECKLIST.md.
 The complete offline suite passed all 609 tests with test-owned sockets enabled
 and no skips. `git diff --check` passed.
+
+### P09 scoped native patch-approval verifier — MOCK_VERIFIED
+
+Prepared a separate opt-in mode using the existing durable approval harness:
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-workflow-patches MODEL
+```
+
+This command has not been run live. It requests at most two synthetic turns in
+separate retained scratch projects. The first may accept one native file-change
+request adding only approval-marker.txt with one random synthetic line and a
+newline; the second declines its corresponding request. Commands are not
+registered or requested by this patch probe. Sandbox-permitted activity is not
+intercepted by this harness, so this is not a no-tools or general isolation test.
+
+Before arming the existing accept tripwire, the verifier requires the complete
+displayed preview to contain exactly one add change at the marker's relative or
+exact absolute path, with no extra fields. Its diff must be exactly the new
+content or that one line prefixed with plus. Other encodings, additional lines,
+paths, changes, update/delete kinds or rename metadata cannot be accepted. These
+are deliberately narrow recognized encodings, not a general patch parser or a
+claim about all live Codex diff formats. Unexpected/unsupported previews stop
+without retries or permission expansion.
+
+File scope and sentinel checks precede consent. An already observed native file
+completion also fails the pre-consent check even if no marker exists. Acceptance
+must be followed by one completed native file item with the approved item ID and
+matching changes, exact marker contents and a completed turn. File existence or
+a model's claim alone cannot pass. Decline requires a terminal turn, absent marker
+and no passing controller check. Both cases retain one-use token, durable decision
+and no-automatic-DONE checks from the command probe. Reports omit the nonce,
+paths and native IDs, retaining only source hashes and sanitized outcomes.
+
+All 15 focused approval-probe tests passed against synthetic subprocesses.
+Patch cases cover accept/decline, early file effects and native completion,
+unexpected content, failed native completion despite a correct marker, matcher
+boundaries, and CLI opt-in/mutual exclusion. Existing command-probe cases still
+pass. Entry-point compile checks passed; no inference or external web request
+was run. Next eligible evidence remains user-run command approval, followed by
+this separate patch probe with the exact CLI version/runtime/verifier hashes.
+Neither prepared probe satisfies the full live G2 matrix.
+
+The first full offline run completed 616 tests with one recheck-probe error:
+the owner-active observation reason was absent. Inspection found that a bounded
+metadata RPC error could exit before the polling loop recorded that reason;
+the exact underlying error from the first run was not captured. The helper now records the
+unobserved reason before polling and removes it only on an observed active
+owner. RPC errors still propagate, the original timeout is restored, and no
+observer query or STOP success is implied. A deterministic exception regression
+checks this behavior; all 30 focused recheck-probe tests passed after the fix.
+The final full offline suite passed all 617 tests with test-owned sockets enabled
+and no skips. Compile checks and `git diff --check` passed.

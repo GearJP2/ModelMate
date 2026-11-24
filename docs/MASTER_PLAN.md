@@ -381,6 +381,13 @@ offline verified; live G2 evidence and the full permission matrix remain open.
 command accept/decline check. Its offline tests require an observed exact request,
 no early marker/completion, one durable decision and matching native command
 completion after acceptance. No approval event is inconclusive, not a pass.
+`verify.py --run-live --probe-workflow-patches MODEL` now provides the separately
+scoped patch verifier: accept one literal synthetic marker addition, then decline
+its counterpart. It checks the preview, pre-consent file scope, matching native
+file completion, exact marker content, durable decisions and one-use tokens.
+Only plain content or added-line diff encodings of the single new line are
+recognized; other encodings stop without acceptance. This is offline verified
+only and does not satisfy the pending live command or patch gates.
 Native cancellation/loss coverage now exercises real synthetic pipes for cancel,
 exit, EOF, timeout and disconnect, plus server death and a lost accept-send result.
 Shared shutdown discards buffered stdin before closing it, preventing unsent

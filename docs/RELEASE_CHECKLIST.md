@@ -64,6 +64,15 @@ running it. This check has not yet supplied live evidence. Installed CLI
 0.172.0 has matching inspected approval schemas, which does not carry forward
 the live compatibility evidence recorded for 0.171.0.
 
+A separate patch check is prepared as
+`python3 verify.py --run-live --probe-workflow-patches MODEL`. It uses at most two
+subscription turns and may accept one new synthetic marker file, then declines
+the second case. It recognizes only a single literal-line addition in plain
+content or added-line encoding; unsupported diff encodings cannot obtain
+acceptance. Like the command probe, it retains scratch/native threads and has
+offline evidence only. It does not replace the command check or prove broader
+G2 coverage.
+
 Keep release evidence sanitized. Record the runtime and Codex version plus
 the specific result, avoiding account identifiers, session logs and quota
 screenshots in the repository. Use the known scoped probes before running
