@@ -339,6 +339,15 @@ Manual model selection เป็นการอนุมัติเฉพาะ
 
 ### P08 — Terminal chat
 
+Step revision UI increment: `/revise-step FILE` calls the existing controller
+revision API with a bounded JSON object containing only objective/role/effort/
+reason changes for the current step. It preserves effective goal/context, criteria,
+structure, identity and counters, invalidates previous model grants/tokens, and
+persists through the current workflow attachment. It cannot run during any active
+attempt or change a finished task, dispatch work, grant tools or extend budget.
+Roles still need existing bindings and fresh catalog validation. Offline UI and
+durable-restore checks pass; live revision remains unverified.
+
 ไฟล์: modelmate.py, tests/test_cli.py
 รองรับ sr, sr "prompt", --help, blank input, EOF, Unicode ไทย และคำสั่งตาม DESIGN
 เริ่มจาก line-oriented UI; แสดง streaming text ที่ปลอดภัยและ progress

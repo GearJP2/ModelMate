@@ -3526,3 +3526,34 @@ inference or connected account lookup was run. Live work recovery, actual proces
 loss, active interruption and missing-thread discovery remain unverified.
 The full offline suite passed all 640 tests with test-owned sockets enabled and
 no skips. Entry-point compile checks and `git diff --check` passed.
+
+### P08 current-step revision command — MOCK_VERIFIED
+
+The workflow UI now exposes the existing controller revision API as
+`/revise-step FILE`. Its UTF-8 JSON file is bounded to 64 KiB, must be a nonempty
+object, and accepts only objective/role/effort/reason fields. Duplicate keys,
+unknown fields, invalid values, oversized input and unreadable files fail without
+changing the controller. The UI copies the effective current plan and changes
+only that step before the controller revalidates the complete proposal. Thus
+prior clarification/source context in the goal is retained without requiring
+users to recreate the full effective plan file.
+
+The command dispatches nothing and grants no permissions. It invalidates old
+model/plan approvals, retains baseline/criteria/structure/step IDs/counters, and
+persists through the existing session attachment. Existing role bindings and a
+fresh supported catalog selection remain required at `/next`. Any active attempt,
+including a completed turn still awaiting check evaluation, prevents revision.
+Finished tasks cannot be revised. Budget exhaustion still requires its explicit
+extension choice; renaming or changing approach cannot create a fourth attempt.
+
+All 24 focused UI tests passed. New cases exercise downgrade after a pending
+model request with stale-token rejection, approved-plan invalidation, three failed
+attempts followed by revision without a hidden retry, malformed/unknown/oversized
+input, active-attempt rejection before file reading, and durable revision/restore
+with the effective goal and identities unchanged. Paths with spaces and Thai
+text work. A displayed model text containing the command does not execute it.
+Compile checks passed. No installed Codex inference or external network request
+was run. This exposes existing explicit-plan control; automatic workflow and live
+revision evidence remain separate unfinished work.
+The full offline suite passed all 645 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.

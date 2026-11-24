@@ -2339,6 +2339,8 @@ class ChatShell:
         elif self.pending is not None:
             token = self.pending['token']
             self.write('/continue ' + token + ' · /revise ' + token + ' · /pause ' + token)
+        if active is None and state['state'] in ('READY', 'PAUSED', 'AWAITING_MODEL_APPROVAL'):
+            self.write('/revise-step FILE เพื่อแก้ objective/role/effort/reason ของขั้นปัจจุบัน โดยคง ID และ budget')
         if state['state'] == 'CLARIFYING':
             for number, question in enumerate(state['clarifications'], 1):
                 self.write('ต้องชี้แจง ' + str(number) + ': ' + question)
@@ -2576,6 +2578,27 @@ class ChatShell:
                             reference = matches[0]['id']
                         coverage[index].append(reference)
                 self.workflow.finish_task(coverage)
+            elif cmd == '/revise-step':
+                if len(values) != 1:
+                    raise ProbeError('Use /revise-step FILE with a JSON object of objective/role/effort/reason changes.')
+                if state['active_attempt'] is not None or state['state'] in ('DONE', 'FAILED'):
+                    raise ProbeError('Cannot revise an active or finished step.')
+                try:
+                    with open(values[0], 'rb') as source:
+                        content = source.read(65537)
+                    if len(content) > 65536:
+                        raise ProbeError('Revision exceeds 64 KiB.')
+                    changes = json.loads(content.decode('utf-8'), object_pairs_hook=_unique_json_object,
+                                         parse_constant=_invalid_plan_constant)
+                except (OSError, UnicodeError, ValueError, RecursionError):
+                    raise ProbeError('Cannot read revision as a UTF-8 JSON object.') from None
+                if (not isinstance(changes, dict) or not changes
+                        or set(changes) - {'objective', 'role', 'effort', 'reason'}):
+                    raise ProbeError('Revision accepts only objective, role, effort and reason fields.')
+                if state['step_index'] >= len(state['plan']['steps']):
+                    raise ProbeError('No unfinished step to revise.')
+                state['plan']['steps'][state['step_index']].update(changes)
+                self.workflow.revise_step(json.dumps(state['plan'], ensure_ascii=False))
             elif cmd == '/mode':
                 if len(values) > 1:
                     raise ProbeError('Use /mode [auto|ask_to_escalate|approve_plan].')
@@ -2628,7 +2651,7 @@ class ChatShell:
                                                       '/revalidate', '/revalidate-source', '/finish', '/status', '/mode',
                                                       '/recheck', '/confirm-recheck', '/recheck-budget',
                                                       '/recover-recheck', '/stop-recheck',
-                                                      '/approve', '/decline', '/pause', '/continue', '/revise'):
+                                                      '/approve', '/decline', '/pause', '/continue', '/revise', '/revise-step'):
                 self.workflow_command(cmd, values)
             elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
                 self.write('คำสั่งนี้ยังไม่เชื่อม workflow host; ใช้ /workflow เพื่อดูแผนและสถานะ')
@@ -2640,6 +2663,7 @@ class ChatShell:
                 if self.workflow is not None:
                     self.write('/workflow /next /approve TOKEN --next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · /approve TOKEN อย่างเดียวจะรอ /next')
                     self.write('/verify-source CHECK_NUMBER pass|fail|unknown URL "checked claim and finding" · /revalidate-source STEP.CHECK pass|fail|unknown URL "checked claim and finding"')
+                    self.write('/revise-step FILE · JSON changes to objective/role/effort/reason; no budget reset or approval grant')
                     if self.recheck_backend is not None:
                         self.write('/recheck STEP.CHECK /confirm-recheck TOKEN /recheck-budget STEP.CHECK continue|revise_scope|pause')
                         if self.recheck_backend.shared_rechecks:

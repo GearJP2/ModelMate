@@ -190,6 +190,7 @@ Recovery รองรับเฉพาะ recheck ที่บันทึก n
 
 เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/check`, `/mode`
 และคำตอบตาม token เช่น `/approve`, `/decline`, `/continue`, `/revise`, `/pause`
+มี `/revise-step FILE` สำหรับปรับขั้นปัจจุบันเมื่อไม่มี active attempt ตามรายละเอียดด้านล่าง
 แสดงแผน โมเดลที่เสนอ ขั้นปัจจุบัน จำนวนรอบ ผลตรวจ และจำนวนหลักฐานของแต่ละเกณฑ์
 `/approve TOKEN` บันทึกการอนุมัติ ส่วน `/next` ส่งคำขอไปยัง trusted host เพื่อตรวจ quota/catalog/model gates
 ถ้าไม่มี host จะไม่ใช้ attempt slot หรือส่งงานใด ๆ `/cancel` และ `/exit` ขณะ active
@@ -426,9 +427,31 @@ URL และ finding ถูกเก็บใน local checkpoint จึงไ�
 Approve plan จะแสดง model และ effort ของทุกขั้นก่อนขออนุมัติ
 
 ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
+หากจะเปลี่ยนไปใช้ role อื่นระหว่าง session ให้ระบุ binding ของ role นั้นตั้งแต่เริ่มด้วย
 ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
 นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
 Default จะ decline/pause คำขอเพิ่มสิทธิ์; opt-in approval UI อยู่ด้านล่าง read-only/on-request
+
+### เปลี่ยนแนวทางของขั้นปัจจุบัน
+
+สร้างไฟล์ revision JSON เช่น `revision.json`:
+
+```json
+{"objective":"แก้เฉพาะกรณีที่ทดสอบไม่ผ่าน", "role":"standard", "effort":"low", "reason":"ลดขอบเขตงาน"}
+```
+
+จาก workflow ที่ยังไม่มี active attempt ใช้ `/revise-step revision.json`
+หรือ `/revise-step "path with spaces/revision.json"` จะเปลี่ยนเฉพาะ fields ที่ระบุ
+จาก objective/role/effort/reason แล้วแสดงแผนใหม่ ไม่เริ่ม turn หรืออนุมัติโมเดล/tools
+goal รวม clarification/source context, เกณฑ์ตรวจ, โครงสร้าง, ID และ budget เดิมยังอยู่
+approval เดิมใช้ไม่ได้ ต้องผ่าน gates ตาม mode ที่เลือกเมื่อกด `/next` อีกครั้ง
+
+ใช้ได้ตอนรอ model approval หรือพักหลัง `/check` ประเมิน attempt แล้ว
+ห้ามแก้ขณะ attempt ยัง running หรือจบ turn แต่ยังรอตรวจ รวมถึง task ที่จบแล้ว
+`/revise TOKEN` เป็นการเลือกเปลี่ยนแนวทาง; `/revise-step FILE` เป็นการใส่เนื้อหาที่แก้จริง
+การแก้ไม่เพิ่ม budget หากครบสาม attempts แล้ว ต้องตอบ `/continue` ที่ correction-limit
+prompt เพื่ออนุมัติรอบใหม่อย่างชัดเจน ใช้ role ที่มี binding แล้วและ effort ที่ catalog รองรับ
+revision บันทึกใน checkpoint ของแผนที่มีผลจริง โดยไม่เขียนไฟล์แผนหรือ revision ทับ
 ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
 
 รุ่นนี้รับแผนที่ไม่มีคำถามค้าง, manual/rubric/source checks และ test/lint ที่ผูก
