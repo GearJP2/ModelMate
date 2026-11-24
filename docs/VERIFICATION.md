@@ -3090,3 +3090,35 @@ The full offline suite passed all 573 tests with sockets enabled and no skips.
 Workflow approval acceptance remains gated; no live inference was run. Next P09
 work is integration using the explicitly supported command/file-change subset,
 followed by the required live permission matrix.
+
+### P09 durable controller tool-decision state — MOCK_VERIFIED
+
+The controller now supports a distinct AWAITING_TOOL_APPROVAL state through
+trusted host/UI APIs. A request belongs to a controller-owned attempt/step and
+contains validated thread/turn/item/request IDs, command/file-change kind and
+an exact action digest supplied by the trusted host. The host remains responsible
+for validating and displaying the actual native action and calculating its digest.
+This controller API is not exposed to model text or plan proposals.
+
+Workflow checkpoint V3 retains the latest request's status and transition time
+alongside the existing recheck ledger. It saves no approval token, raw command,
+diff or credentials. Tokens are process-local and one-use. A matching explicit
+tool decision is persisted before returning one accept/decline descriptor; it
+does not send an RPC, execute anything, consume another attempt or create test
+evidence. Model approval cannot answer the tool request. A changed native binding
+or action digest expires the old token rather than allowing it to revive.
+
+Pause, terminal observation and restore expire pending tokens. Restore retains
+the binding for inspection and pauses the still-running attempt with unknown
+outcome, so a historical approved status never restores a grant. A failed or
+uncertain write exposes no usable token/accept descriptor and freezes the
+controller until reopening. V1/V2 checkpoints remain readable and rechecks can
+still append under V3; older runtimes reject the new version.
+
+Nine focused `test_permissions.py` offline tests passed. The full offline suite
+passed 581 tests without skips with sockets enabled; the final additional
+uncertain-request-write test was then run in the nine-test targeted suite.
+Compile checks and `git diff --check` passed. No live inference ran. Native
+workflow requests still take the existing decline/stop path: no new execution
+permission or public flag has been enabled. Next eligible P09 work is native/UI
+adapter wiring using the hardened request subset, with live G2 proof still required.

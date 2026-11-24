@@ -92,6 +92,14 @@ Checkpoint version 1 remains readable; version 2 is written only once a recheck 
 reserved. Older ModelMate builds cannot read version-2 checkpoints; do not downgrade
 the runtime after creating one. No session files are migrated during plain reads.
 
+The offline workflow tool-decision API additionally writes workflow checkpoint
+version 3 when a tool request is first recorded. It retains the existing recheck
+ledger plus the latest tool request's attempt, native binding, digest, status and
+transition time. Confirmation tokens are never saved. V1/V2 remain readable;
+older runtimes reject V3 rather than restore a permission. This workflow version
+is separate from the enclosing session metadata version. Native workflow approval
+acceptance is not wired to the API yet.
+
 Implementation order: checkpoint ledger and offline fault-injection tests (done), native
 transport/observation handling (offline-tested), CLI integration (offline-tested),
 then the scoped live verifier (offline-tested). Default tool-check resume stays disabled. Experimental

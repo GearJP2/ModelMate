@@ -957,10 +957,12 @@ class WorkflowController:
         self._current_rechecks = set()
         self._recheck_fault = False
         self._persist = None
+        self._tool_request = self._tool_token = None
+        self._tool_schema = False
 
     def _updated(self):
         if self._recheck_fault:
-            raise ProbeError('Recheck persistence outcome unknown; reopen the checkpoint before further work.')
+            raise ProbeError('Workflow persistence outcome unknown; reopen the checkpoint before further work.')
         if self._persist is not None:
             self._persist(self)
         return self.snapshot()
@@ -982,6 +984,9 @@ class WorkflowController:
             'account_hash': None if self._account_id is None else hashlib.sha256(self._account_id.encode()).hexdigest()}
         if self._rechecks:
             data.update(version=2, rechecks=copy.deepcopy(self._rechecks))
+        if self._tool_schema:
+            data.update(version=3, rechecks=copy.deepcopy(self._rechecks),
+                        tool_request=copy.deepcopy(self._tool_request))
         return validate_workflow_checkpoint(data)
 
     @classmethod
@@ -1002,6 +1007,11 @@ class WorkflowController:
         restored._index, restored._steps = data['step_index'], data['steps']
         restored._active, restored._history = data['active_attempt'], data['history']
         restored._rechecks = data.get('rechecks', [])
+        restored._tool_schema = data['version'] == 3
+        restored._tool_request = data.get('tool_request')
+        if restored._tool_request is not None and restored._tool_request['status'] == 'pending':
+            restored._tool_request['status'] = 'expired'
+            restored._tool_request['timestamp'] = datetime.now(timezone.utc).isoformat()
         for attempt in restored._history + ([restored._active] if restored._active is not None else []):
             if 'checks' in attempt:
                 attempt['checks'] = {e['check_index']: e for e in attempt['checks']}
@@ -1026,11 +1036,67 @@ class WorkflowController:
             'mode': self.mode, 'step_index': self._index, 'steps': self._steps,
             'active_attempt': self._active, 'history': self._history,
             'model_request': self._model_request, 'pause_token': self._pause_token,
+            'tool_request': (dict(self._tool_request, token=self._tool_token)
+                             if self._tool_token is not None else copy.deepcopy(self._tool_request)),
             'choices': ['continue', 'revise_scope', 'pause'] if self.state == 'PAUSED' else [],
             'plan': self._plan,
             'clarifications': self._plan['clarifications'],
             'success_criteria': self._plan['success_criteria'], 'criterion_evidence': self._coverage,
             'stale_evidence': sorted(self._stale_evidence)})
+
+    def request_tool_approval(self, attempt_id, binding, action_digest):
+        """Record a trusted host proposal; only a separate exact UI decision grants one response."""
+        import uuid
+        attempt = self._attempt(attempt_id)
+        if (self._recheck_fault or self._persist is None or self.state != 'RUNNING'
+                or attempt['status'] != 'running' or self._tool_token is not None):
+            raise ProbeError('Tool approval requires a running attempt with no pending tool request.')
+        request = {'id': uuid.uuid4().hex, 'attempt_id': attempt_id, 'step_id': attempt['step_id'],
+                   'binding': copy.deepcopy(binding), 'action_digest': action_digest, 'status': 'pending',
+                   'timestamp': datetime.now(timezone.utc).isoformat()}
+        validate_tool_request(request)
+        self._tool_schema, self._tool_request = True, request
+        self._tool_token = uuid.uuid4().hex
+        self.state = 'AWAITING_TOOL_APPROVAL'
+        self._persist_tool_change()
+        return dict(copy.deepcopy(request), token=self._tool_token)
+
+    def answer_tool_approval(self, token, choice, binding, action_digest):
+        request = self._tool_request
+        if (self._recheck_fault or self.state != 'AWAITING_TOOL_APPROVAL' or request is None or request['status'] != 'pending'
+                or token != self._tool_token or choice not in ('approve', 'decline', 'pause')):
+            raise ProbeError('Invalid or stale workflow tool decision.')
+        if binding != request['binding'] or action_digest != request['action_digest']:
+            self._expire_tool_request()
+            self.state = 'RUNNING'
+            self._persist_tool_change()
+            raise ProbeError('Tool action changed; previous confirmation expired.')
+        request['status'] = 'approved' if choice == 'approve' else 'declined'
+        request['timestamp'] = datetime.now(timezone.utc).isoformat()
+        self._tool_token = None
+        self.state = 'RUNNING'
+        if choice == 'pause':
+            self.state, self.reason = 'PAUSED', 'user_pause'
+            import uuid
+            self._pause_token = uuid.uuid4().hex
+            self._approvals._invalidate()
+        self._persist_tool_change()
+        return {'binding': copy.deepcopy(binding), 'action_digest': action_digest,
+                'decision': 'accept' if choice == 'approve' else 'decline'}
+
+    def _expire_tool_request(self):
+        if self._tool_request is not None and self._tool_request['status'] == 'pending':
+            self._tool_request['status'] = 'expired'
+            self._tool_request['timestamp'] = datetime.now(timezone.utc).isoformat()
+        self._tool_token = None
+
+    def _persist_tool_change(self):
+        try:
+            self._updated()
+        except BaseException:
+            self._tool_token = None
+            self._recheck_fault = True
+            raise
 
     def recheck_operations(self):
         data = self.export_checkpoint()
@@ -1040,7 +1106,7 @@ class WorkflowController:
         if self._recheck_fault or self._persist is None:
             raise ProbeError('Rechecks require a healthy durable workflow attachment.')
         candidate = self.export_checkpoint()
-        candidate.update(version=2, rechecks=self._rechecks + [dict(event,
+        candidate.update(version=3 if self._tool_schema else 2, rechecks=self._rechecks + [dict(event,
             timestamp=datetime.now(timezone.utc).isoformat())])
         validate_workflow_checkpoint(candidate)
         self._rechecks = candidate['rechecks']
@@ -1113,6 +1179,7 @@ class WorkflowController:
 
     def _pause(self, reason):
         import uuid
+        self._expire_tool_request()
         self.state, self.reason = 'PAUSED', reason
         self._pause_token = uuid.uuid4().hex
         self._model_request = None
@@ -1214,6 +1281,7 @@ class WorkflowController:
                 finding='Observed host-bound native command completion; no stdout/stderr retained.')
                 for index, observed in tool_observations.items()}
             attempt['checks'].update(evidence)
+        self._expire_tool_request()
         attempt['status'] = status
         if status == 'completed':
             self.state, self.reason = 'CHECKING', None
@@ -1774,13 +1842,38 @@ def validate_recheck_ledger(events, evidence):
     return copy.deepcopy(list(operations.values()))
 
 
+def validate_tool_request(request):
+    import re
+
+    if (not isinstance(request, dict) or set(request) != {'id', 'attempt_id', 'step_id', 'binding',
+            'action_digest', 'status', 'timestamp'}):
+        raise ProbeError('Invalid workflow tool request fields.')
+    for key in ('id', 'attempt_id', 'step_id'):
+        _workflow_id(request[key])
+    binding = request['binding']
+    if not isinstance(binding, dict) or set(binding) != {'thread_id', 'turn_id', 'item_id', 'request_id', 'kind'}:
+        raise ProbeError('Invalid workflow tool binding.')
+    for key in ('thread_id', 'turn_id', 'item_id'):
+        if not isinstance(binding[key], str) or not binding[key].strip() or len(binding[key]) > 256:
+            raise ProbeError('Invalid workflow tool identity.')
+    rid = binding['request_id']
+    if (type(rid) not in (int, str) or (isinstance(rid, str) and (not rid or len(rid) > 256))
+            or binding['kind'] not in ('command', 'file_change')
+            or not isinstance(request['action_digest'], str)
+            or re.fullmatch('[0-9a-f]{64}', request['action_digest']) is None
+            or request['status'] not in ('pending', 'approved', 'declined', 'expired')):
+        raise ProbeError('Invalid workflow tool action or decision.')
+    _workflow_timestamp(request['timestamp'])
+
+
 def validate_workflow_checkpoint(data):
     """Validate JSON shape and replay the ledger's counters; never restore grants or execute actions."""
     import re
     fields = {'version', 'plan', 'task_id', 'mode', 'baseline', 'state', 'reason', 'step_index',
               'steps', 'active_attempt', 'history', 'criterion_evidence', 'account_hash'}
-    if (not isinstance(data, dict) or type(data.get('version')) is not int or data['version'] not in (1, 2)
-            or set(data) != fields | ({'rechecks'} if data['version'] == 2 else set())):
+    if (not isinstance(data, dict) or type(data.get('version')) is not int or data['version'] not in (1, 2, 3)
+            or set(data) != fields | ({'rechecks'} if data['version'] >= 2 else set())
+            | ({'tool_request'} if data['version'] == 3 else set())):
         raise ProbeError('Invalid or unsupported workflow checkpoint schema.')
     try:
         # shortcut: full checkpoints share the session's 1 MiB cap; add storage changes only when needed.
@@ -1792,7 +1885,7 @@ def validate_workflow_checkpoint(data):
     _workflow_id(data['task_id'])
     _workflow_selection(data['baseline'])
     if data['mode'] not in ('auto', 'ask_to_escalate', 'approve_plan') or data['state'] not in (
-            'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'RUNNING', 'CHECKING',
+            'READY', 'CLARIFYING', 'AWAITING_MODEL_APPROVAL', 'AWAITING_TOOL_APPROVAL', 'RUNNING', 'CHECKING',
             'DONE', 'UNVERIFIED', 'PAUSED', 'FAILED'):
         raise ProbeError('Invalid saved workflow mode/state.')
     if data['reason'] is not None and (not isinstance(data['reason'], str)
@@ -1919,7 +2012,7 @@ def validate_workflow_checkpoint(data):
         raise ProbeError('Attempt history requires an account binding.')
     if active is not None:
         expected = 'RUNNING' if active['status'] == 'running' else 'CHECKING'
-        if state not in (expected, 'PAUSED'):
+        if state not in (expected, 'PAUSED') and not (state == 'AWAITING_TOOL_APPROVAL' and expected == 'RUNNING'):
             raise ProbeError('Saved active-attempt phase is inconsistent.')
     elif index == len(steps):
         if state not in ('CHECKING', 'UNVERIFIED', 'DONE', 'PAUSED'):
@@ -1932,8 +2025,22 @@ def validate_workflow_checkpoint(data):
         raise ProbeError('Failed attempt cannot become ready without a new task.')
     if state == 'DONE' and (index != len(steps) or set(coverage) != criterion_keys):
         raise ProbeError('Saved DONE lacks completed steps or criterion evidence.')
-    if data['version'] == 2:
-        if not data['rechecks']:
+    request = data.get('tool_request')
+    if request is not None:
+        validate_tool_request(request)
+        if request['id'] in attempt_ids or request['id'] in evidence_ids:
+            raise ProbeError('Workflow tool request identity collides with work state.')
+        attempts = [event for event in history if 'kind' not in event] + ([active] if active else [])
+        owner = next((attempt for attempt in attempts if attempt['id'] == request['attempt_id']), None)
+        if owner is None or owner['step_id'] != request['step_id']:
+            raise ProbeError('Workflow tool request has no owning attempt.')
+        if request['status'] == 'pending' and (state != 'AWAITING_TOOL_APPROVAL'
+                or active is None or active['id'] != owner['id'] or active['status'] != 'running'):
+            raise ProbeError('Pending workflow tool request is out of phase.')
+    if state == 'AWAITING_TOOL_APPROVAL' and (request is None or request['status'] != 'pending'):
+        raise ProbeError('Workflow tool wait lacks a pending request.')
+    if data['version'] >= 2:
+        if data['version'] == 2 and not data['rechecks']:
             raise ProbeError('Version 2 checkpoint requires a recheck ledger.')
         operations = validate_recheck_ledger(data['rechecks'], workflow_saved_evidence(data))
         if any(op['id'] in attempt_ids for op in operations):

@@ -358,6 +358,13 @@ WorkflowHost รับ executor_stream ผ่าน selector แยกจาก 
 
 ### P09 — Tool approvals
 
+Controller foundation: workflow checkpoint v3 records the latest bound tool
+request and decision status without a confirmation token or raw action. The
+AWAITING_TOOL_APPROVAL transition, exact one-use decisions, expiry on action
+change/pause/completion/restore and persistence-failure freeze are offline-tested.
+Only trusted host/UI calls can reach these APIs. The native workflow adapter is
+not connected to them yet and still declines requests; no live gate is passed.
+
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
 declines the pending request and expires the token, even if the old diff returns.
