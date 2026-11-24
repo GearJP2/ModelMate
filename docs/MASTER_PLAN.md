@@ -411,10 +411,11 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 
 ### P12 — Resume / cancel / delete
 
-Latest offline increment: recovery-observer connection loss preserves the attached
-unknown recheck checkpoint and stale evidence; subsequent inspection uses the same
-operation without replay or automatic interrupt. `test_native_recheck.py`: 41 tests
-passed. This is MOCK_VERIFIED only; live workflow/server-loss recovery remains open.
+Latest offline increment: recovery-observer connection loss and a terminated owned
+fake server preserve the attached unknown recheck checkpoint and stale evidence.
+Reopening the controller retains the same binding without replay or automatic
+interrupt. `test_native_recheck.py`: 42 tests passed outside the socket-restricted
+sandbox. This is MOCK_VERIFIED only; live workflow/server-loss recovery remains open.
 
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion

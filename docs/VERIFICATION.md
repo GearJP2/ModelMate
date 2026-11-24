@@ -2818,3 +2818,24 @@ interrupt or second `turn/start`.
 inference was requested. This mocks observer failure; it does not prove recovery
 after an actual server or workflow process dies. Next eligible P12 work: exercise
 actual owned-server loss offline and verify retained unknown bindings on resume.
+
+### P12 terminated owned listener and controller reopen — MOCK_VERIFIED
+
+The new regression creates an unknown recheck through the synthetic stdio server,
+then points attached recovery at a real private Unix listener owned by
+`private_recheck_server`. It terminates that fake listener process and waits for
+its exit before attempting recovery. Connecting to the remaining socket fails
+with connection refused. The session record and attached controller checkpoint
+remain unchanged. Closing and reopening the controller preserves the exact
+unknown operation and stale evidence; the synthetic trace contains only the
+original `turn/start`.
+
+`python3 -m unittest discover -s tests -p test_native_recheck.py -v` initially
+reported 41 passed and one socket-permission skip in the restricted sandbox.
+The approved run outside that sandbox passed all 42 tests without skips.
+`git diff --check` passed. Runtime code was unchanged, so the full suite was not
+rerun. No Codex process or live inference was used. This verifies refusal of a
+dead owned endpoint with an existing durable binding; it does not simulate a
+WebSocket turn being interrupted by server death or prove live Codex recovery.
+Next eligible P12 work: offline loss of the workflow process while a recheck is
+active, including writer-lock release and preservation of its unknown outcome.

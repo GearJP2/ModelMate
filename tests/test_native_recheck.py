@@ -1,15 +1,17 @@
 """Native recheck transport against synthetic JSONL servers; no live inference."""
 import hashlib
+import errno
 import json
 from pathlib import Path
 import sys
+import socket
 import tempfile
 import time
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from modelmate import (NativeRecheckConnection, NativeWorkflowConnection, ProbeError, SessionStore, WorkflowController,
-                       validate_workflow_checkpoint)
+                       private_recheck_server, validate_workflow_checkpoint)
 from test_routing import CATALOG, PLAN, POLICY, QUOTA
 
 
@@ -363,6 +365,51 @@ class NativeRecheckTests(unittest.TestCase):
                 self.assertEqual(self.store.read(self.sid), before)
                 observer.interrupt_recheck.assert_not_called()
             self.assertEqual(sum(r['method'] == 'turn/start' for r in self.records()), 1)
+
+    def test_dead_owned_server_preserves_unknown_binding_across_resume(self):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as check:
+            try:
+                check.bind(str(self.project / 'capability.sock'))
+            except PermissionError as exc:
+                if exc.errno in (errno.EPERM, errno.EACCES):
+                    self.skipTest('Environment forbids binding a private Unix socket.')
+                raise
+        executable = self.project / 'fake-codex'
+        executable.write_text('''#!/usr/bin/env python3
+import socket, sys, time
+listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+listener.bind(sys.argv[3].removeprefix('unix://'))
+listener.listen()
+time.sleep(30)
+''')
+        executable.chmod(0o700)
+        backend = NativeWorkflowConnection([sys.executable, '-c', 'import time; time.sleep(30)'], .5)
+        self.addCleanup(backend.close)
+        with self.attach() as parent:
+            backend.store, backend.session_id = self.store, self.sid
+            backend.controller, backend.host = parent, Mock(controller=parent)
+            backend._attachment = MagicMock()
+            connection = self.backend('disconnect')
+            self.start(connection, parent)
+            with self.assertRaises(ProbeError):
+                self.wait(connection)
+            connection.close()
+            operation = connection.operation()
+            backend._shared_recheck_operation = operation['id']
+            before = self.store.read(self.sid)
+            with private_recheck_server(2, executable=str(executable)) as endpoint:
+                backend._recheck_endpoint = endpoint
+                endpoint.server.terminate()
+                endpoint.server.wait(timeout=2)
+                self.assertTrue(endpoint.path.is_socket())
+                with self.assertRaises(ConnectionRefusedError):
+                    backend.recover_shared_recheck()
+                self.assertEqual(self.store.read(self.sid), before)
+                self.assertEqual(parent.export_checkpoint(), before['workflow'])
+        with self.attach() as resumed:
+            self.assertEqual(resumed.recheck_operations()[0], operation)
+            self.assertIn(self.evidence['id'], resumed.snapshot()['stale_evidence'])
+        self.assertEqual(sum(r['method'] == 'turn/start' for r in self.records()), 1)
 
     def test_approval_requests_decline_without_certifying_or_replaying(self):
         with self.attach() as parent:
