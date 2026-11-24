@@ -2857,3 +2857,31 @@ native backend; it does not prove a live backend stops when its owner dies.
 Next eligible P12 work: test an active WebSocket recheck losing its server in
 the offline transport/controller integration, then obtain user-run live evidence
 for the remaining process-loss cases.
+
+### P12 active WebSocket disconnect — MOCK_VERIFIED
+
+Two synthetic WebSocket integration tests attach a durable parent workflow and
+start a real `NativeRecheckConnection` through its normal metadata preflight,
+reservation and turn dispatch. After acknowledging `turn/start`, the server drops
+the connection either before command events or after started/completed command
+events reporting exit code 0, without reporting turn completion. The latter test
+checks that the command observer actually received that successful exit code.
+
+In both paths, draining reports disconnection, the parent persists an unknown
+recheck with no command exit code, and the old evidence stays stale. Disk and
+controller checkpoints match. Reopening keeps the original operation binding and
+refuses a new workflow attempt. The server records exactly one `turn/start` and
+no `turn/interrupt`. No raw prompt or command output is saved to the evidence docs.
+
+The initial sandbox run skipped the socket tests. The approved
+`python3 -m unittest discover -s tests -p test_recheck_transport.py -v` run passed
+all 14 tests without skips. No runtime code changed and no live inference was
+requested. These tests verify a synthetic server disconnect, not Codex process
+termination or live orphan-turn cleanup. Next eligible P12 work is a scoped,
+explicitly opt-in live server-loss verifier with synthetic inputs and retained
+unknown bindings; running it will require a user-requested live command.
+
+The complete offline suite, `python3 -m unittest discover -s tests -v`, passed
+all 560 tests with socket permissions enabled and no skips. `git diff --check`
+also passed. The earlier restricted run passed with socket tests skipped and
+does not substitute for this result.

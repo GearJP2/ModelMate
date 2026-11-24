@@ -419,6 +419,9 @@ sandbox. This is MOCK_VERIFIED only; live workflow/server-loss recovery remains 
 Abrupt workflow-owner exit is also covered offline: 14 ledger tests passed;
 reopening releases the writer lock but retains the unresolved turn binding and
 blocks new work/rechecks until reconciliation. No live process-loss gate is claimed.
+Active WebSocket disconnect is covered before and after a successful command
+result but before turn completion: 14 transport tests passed with sockets enabled.
+Both paths retain unknown outcomes and stale evidence without replay on restore.
 
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion
