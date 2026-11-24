@@ -3005,3 +3005,20 @@ request was run. This is explicit human verification, not automatic source
 retrieval, automatic fact checking, a passed G3 gate or full workflow release.
 Next eligible P10 work: scoped live source-check workflow evidence; the pending
 P12 live server-loss command remains a separate gate.
+
+### P10 durable source checks across native resume — MOCK_VERIFIED
+
+A native-protocol integration test records source evidence through the UI,
+persists the first step, closes its backend and resumes the same durable workflow
+with a second synthetic backend process. The first source finding returns stale.
+The second step records its own source finding, and task completion stays blocked
+until explicit revalidation of the first saved URL. Both work attempts remain at
+one, source findings persist unchanged, and exactly two turns and one native
+resume are observed. Neither source URL nor synthetic private finding appears
+in any model-turn input captured by the fake server.
+
+`python3 -m unittest discover -s tests -p test_native_resume.py -v` passed all
+12 tests. `git diff --check` passed. Only a test and evidence docs changed, so
+the full suite was not rerun. No HTTP request or live inference was run. This
+proves the tested metadata-to-dispatch path, not a general private-context
+isolation boundary. Live source-workflow and server-loss evidence remain open.

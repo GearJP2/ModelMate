@@ -376,6 +376,8 @@ URL, claim finding and verdict only after confirmed turn completion. Restored
 source evidence requires `/revalidate-source` against the saved URL and verdict.
 This adds no search/model call or tool grant; offline verification is recorded
 in VERIFICATION.md. Broader live workflow/recovery gates remain open.
+Durable source-check integration is also offline verified across two synthetic
+backend processes; local source URLs/findings are absent from later turn inputs.
 
 ไฟล์: modelmate.py, tests/test_workflow.py
 มี WorkflowController แบบ offline แล้ว: ไม่มี network/process/tool execution
