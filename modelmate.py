@@ -3264,6 +3264,20 @@ class LiveChatConnection(Connection):
                     self.shell.pending = None
                 self.shell.write('Patch changed or completed after preview; request a fresh preview.')
 
+    def _cache_patch_preview(self, item_id, changes):
+        if not isinstance(item_id, str) or not item_id:
+            raise ProbeError('Invalid patch item identity; nothing approved.')
+        self._previews.pop(item_id, None)
+        if (isinstance(changes, list) and changes and all(isinstance(change, dict)
+                and isinstance(change.get('path'), str) and change['path'].strip()
+                and isinstance(change.get('diff'), str) and change['diff'].strip() for change in changes)):
+            preview = json.dumps(changes, ensure_ascii=True)
+            if len(preview.encode('utf-8')) <= 65536:
+                self._previews[item_id] = preview
+            if len(self._previews) > 100:
+                raise ProbeError('Too many pending file changes.')
+        self._expire_patch_approvals(item_id)
+
     def handle_event(self, message):
         import uuid
         if self.shell is None:
@@ -3292,6 +3306,12 @@ class LiveChatConnection(Connection):
                         return
                 self.send({'id': message['id'], 'result': {'decision': 'decline'}})
                 self.shell.write('ปฏิเสธคำขอซ้อนระหว่างรออนุมัติ')
+                return
+            if (params.get('kind', 'command') != 'command' or params.get('approvalId') is not None
+                    or params.get('environmentId') is not None or params.get('networkApprovalContext') is not None
+                    or params.get('grantRoot') is not None):
+                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                self.shell.write('Unsupported approval scope; nothing approved.')
                 return
             if method == 'item/commandExecution/requestApproval':
                 command, cwd = params.get('command'), params.get('cwd')
@@ -3329,22 +3349,12 @@ class LiveChatConnection(Connection):
             return
         if params.get('turnId') != self.turn_id and method != 'turn/completed':
             return
-        if method == 'item/started':
+        if method == 'item/fileChange/patchUpdated':
+            self._cache_patch_preview(params.get('itemId'), params.get('changes'))
+        elif method == 'item/started':
             item = params.get('item', {})
             if item.get('type') == 'fileChange' and isinstance(item.get('id'), str):
-                self._previews.pop(item['id'], None)
-                changes = item.get('changes')
-                if (isinstance(changes, list) and changes and all(isinstance(change, dict)
-                        and isinstance(change.get('path'), str) and change['path'].strip()
-                        and isinstance(change.get('diff'), str) and change['diff'].strip() for change in changes)):
-                    preview = json.dumps(changes, ensure_ascii=True)
-                    if len(preview.encode('utf-8')) <= 65536:
-                        self._previews[item['id']] = preview
-                    else:
-                        self._previews.pop(item['id'], None)
-                    if len(self._previews) > 100:
-                        raise ProbeError('Too many pending file changes.')
-                self._expire_patch_approvals(item['id'])
+                self._cache_patch_preview(item['id'], item.get('changes'))
             elif isinstance(item.get('id'), str) and item['id'] in self._previews:
                 self._previews.pop(item['id'])
                 self._expire_patch_approvals(item['id'])

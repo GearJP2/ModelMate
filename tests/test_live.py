@@ -176,6 +176,60 @@ class LiveBackendTests(unittest.TestCase):
         self.assertEqual(c.send.call_args.args[0]['method'], 'turn/interrupt')
         self.assertTrue(c.shell.stopping)
 
+    def test_native_patch_update_expires_token_and_requires_a_new_preview(self):
+        c = self.backend();c.turn_id = 'turn';c.shell.active = True
+        params = {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch',
+                  'changes': [{'path': '/tmp/synthetic', 'kind': {'type': 'add'}, 'diff': '+original'}]}
+        c.handle_event({'method': 'item/fileChange/patchUpdated', 'params': params})
+        request = {'id': 'first', 'method': 'item/fileChange/requestApproval', 'params': {
+            'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch', 'startedAtMs': 1}}
+        c.handle_event(request)
+        old = c.shell.pending['token']
+        params['changes'][0]['diff'] = '+changed'
+        c.handle_event({'method': 'item/fileChange/patchUpdated', 'params': params})
+        self.assertIsNone(c.shell.pending)
+        c.shell.line('/approve ' + old)
+        c.send.assert_called_once_with({'id': 'first', 'result': {'decision': 'decline'}})
+        request['id'] = 'second'
+        c.handle_event(request)
+        new = c.shell.pending['token']
+        self.assertNotEqual(old, new)
+        self.assertIn('+changed', c.shell.output.getvalue())
+        c.shell.line('/approve ' + new)
+        self.assertEqual(c.send.call_args.args[0], {'id': 'second', 'result': {'decision': 'accept'}})
+
+    def test_native_patch_update_ignores_foreign_turn_and_invalidates_malformed_changes(self):
+        c = self.backend();c.turn_id = 'turn';c.shell.active = True
+        update = {'method': 'item/fileChange/patchUpdated', 'params': {
+            'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch',
+            'changes': [{'path': '/tmp/synthetic', 'kind': {'type': 'add'}, 'diff': '+original'}]}}
+        c.handle_event(update)
+        c.handle_event({'id': 'request', 'method': 'item/fileChange/requestApproval', 'params': {
+            'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch'}})
+        token = c.shell.pending['token']
+        update['params'].update(turnId='foreign', changes=None)
+        c.handle_event(update)
+        self.assertEqual(c.shell.pending['token'], token)
+        c.send.assert_not_called()
+        update['params']['turnId'] = 'turn'
+        c.handle_event(update)
+        self.assertIsNone(c.shell.pending)
+        c.send.assert_called_once_with({'id': 'request', 'result': {'decision': 'decline'}})
+
+    def test_unrepresented_native_approval_scopes_never_get_an_accept_token(self):
+        for field, value in [('kind', 'writeStdin'), ('kind', 'humanCommand'),
+                             ('approvalId', 'callback'), ('environmentId', 'remote'),
+                             ('networkApprovalContext', {'host': 'example.org'}), ('grantRoot', '/tmp')]:
+            with self.subTest(field=field):
+                c = self.backend();c.turn_id = 'turn';c.shell.active = True
+                params = {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item',
+                          'command': 'printf synthetic', 'cwd': '/tmp', field: value}
+                c.handle_event({'id': 'request', 'method': 'item/fileChange/requestApproval' if field == 'grantRoot'
+                    else 'item/commandExecution/requestApproval', 'params': params})
+                self.assertIsNone(c.shell.pending)
+                self.assertFalse(c._approvals)
+                c.send.assert_called_once_with({'id': 'request', 'result': {'decision': 'decline'}})
+
     def test_duplicate_request_id_declines_once_and_expires_old_token(self):
         c = self.backend();c.turn_id = 'turn';c.shell.active = True
         request = {'id': 'duplicate', 'method': 'item/commandExecution/requestApproval', 'params': {

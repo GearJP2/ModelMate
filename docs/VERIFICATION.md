@@ -3063,3 +3063,30 @@ workflow adapter, retaining independent model/tool approvals and unsupported-pat
 denial; live permission matrix evidence remains required.
 The full `python3 -m unittest discover -s tests -v` run passed all 570 tests
 without skips with socket permissions enabled.
+
+### P09 installed-schema patch updates and approval scopes — MOCK_VERIFIED
+
+Inspected Codex CLI 0.171.0 using `codex --version` and
+`codex app-server generate-json-schema --out /tmp/modelmate-p09-schema`.
+This generated protocol descriptions without opening a model turn or reading an
+account. The installed schema defines `item/fileChange/patchUpdated` with active
+thread/turn/item IDs and replacement changes. The manual shell previously ignored
+that event, so a real native patch update could leave its earlier token valid.
+The event now uses the same preview validation and token invalidation as file
+item starts. A changed patch is declined; a new request needs a new token and
+shows the new diff. Foreign-turn updates do not mutate the active preview.
+
+The same schema distinguishes command approvals from `writeStdin` and
+`humanCommand`, opaque subcommand callbacks, nonlocal environments, managed-network
+context and file-change `grantRoot` requests. These scopes are not represented by
+the current command/diff UI and now decline explicitly without creating an
+accept token. Normal accept-once handling remains available; no session or policy
+amendment accept decision was added. Unknown server-request methods still stop.
+
+All 18 `test_live.py` offline tests passed, covering native updates, re-preview,
+foreign/malformed updates and each declined scope. Compile checks and
+`git diff --check` passed. Source/schema checks are not live permission evidence.
+The full offline suite passed all 573 tests with sockets enabled and no skips.
+Workflow approval acceptance remains gated; no live inference was run. Next P09
+work is integration using the explicitly supported command/file-change subset,
+followed by the required live permission matrix.

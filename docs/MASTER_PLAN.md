@@ -366,6 +366,10 @@ in VERIFICATION.md; workflow approval acceptance and the full live G2 matrix are
 still gated.
 Duplicate pending request IDs also decline once and expire the original token;
 they cannot later receive an accept through the stale confirmation.
+Codex 0.171.0 generated-schema review identified `item/fileChange/patchUpdated`;
+it now shares the validated preview cache/invalidation path. Unsupported callback,
+stdin, managed-human, environment, network and session-root scopes are declined
+without showing an accept token. This is offline/schema evidence, not live G2 proof.
 
 ไฟล์: modelmate.py, tests/test_permissions.py และ integration fixtures
 Implement กลไกที่ P03 พิสูจน์แล้วเท่านั้น
