@@ -588,6 +588,16 @@ python3 modelmate.py --resume-workflow SESSION_ID --role-model standard=gpt-6.1-
 step IDs/attempts/correction budget เดิมยังอยู่ ถ้า native start outcome ไม่ทราบ
 หรือ turn ID ไม่ตรง checkpoint จะไม่เดา ไม่ใช้ turn เก่าแทน และไม่เริ่ม turn ใหม่
 
+work turn รุ่นใหม่ส่ง attempt ID ที่บันทึกก่อน dispatch เป็น `clientUserMessageId`
+ถ้า turn ID หายหลัง start แต่ยังรู้ native thread, resume จะอ่าน full history
+แบบมีเพดานและผูกได้เฉพาะ turn ล่าสุดที่จบแล้ว มี user marker ตรงเพียงรายการเดียว
+ไม่มี marker ซ้ำใน history และไม่มีหน้าประวัติที่ยังอ่านไม่ครบ (สูงสุด 100 turns)
+จากนั้นตรวจ latest ID/status ซ้ำก่อนบันทึก binding การพบ terminal metadata
+ไม่ใช่ผลทดสอบผ่าน: attempt/counters เดิมยังอยู่ และต้องตรวจงานตามปกติ
+แผนเก่าที่ไม่มี marker, thread ID หาย, active/กำกวม/ประวัติไม่ครบ ยังต้องหยุด
+marker ไม่ใช่ idempotency key และไม่อนุญาตให้ส่งคำสั่งเดิมซ้ำ
+เส้นทาง work correlation นี้ผ่าน offline tests เท่านั้น ยังต้องมีหลักฐาน live แยก
+
 ผลตรวจที่ restore มาเป็น stale ตรวจผลปัจจุบันก่อนยืนยัน เช่น:
 
 ```text

@@ -3841,8 +3841,16 @@ class NativeWorkflowConnection(Connection):
             raise ProbeError('Cannot reconcile native workflow history.')
         latest = history[0] if history else None
         active = controller.snapshot()['active_attempt']
+        recovered_turn = None
+        if record['turn_id'] is None and active is not None and active['status'] == 'running':
+            full_history = self.request('thread/turns/list', {'threadId': tid, 'limit': 100,
+                'sortDirection': 'desc', 'itemsView': 'full'})
+            recovered_turn = correlated_work_turn_id(full_history, active['id'])
+            if (recovered_turn is None or not isinstance(latest, dict) or recovered_turn != latest.get('id')
+                    or full_history['data'][0]['status'] != latest.get('status')):
+                raise ProbeError('Native work correlation is unconfirmed; no replay.')
         if latest is not None:
-            if (not isinstance(latest, dict) or latest.get('id') != record['turn_id']
+            if (not isinstance(latest, dict) or latest.get('id') != (recovered_turn or record['turn_id'])
                     or latest.get('status') not in ('completed', 'failed', 'interrupted')):
                 raise ProbeError('Native turn is active or does not match checkpoint; no replay.')
         elif record['turn_id'] is not None or active is not None:
@@ -3852,6 +3860,14 @@ class NativeWorkflowConnection(Connection):
         LiveChatConnection._check_thread(self, result.get('thread'), tid)
         if not native_permissions_confirmed(result):
             raise ProbeError('Resumed workflow permissions were not confirmed.')
+        if recovered_turn is not None:
+            observed = self.request('thread/turns/list', {'threadId': tid, 'limit': 1,
+                'sortDirection': 'desc', 'itemsView': 'summary'}).get('data')
+            if (not isinstance(observed, list) or len(observed) != 1 or not isinstance(observed[0], dict)
+                    or any(observed[0].get(key) != latest.get(key) for key in ('id', 'status'))):
+                raise ProbeError('Native work history changed during correlation; no replay.')
+            record['turn_id'] = recovered_turn
+            store.save(record)
         host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt,
             tool_response=self._respond_tool if self.experimental_tool_approvals else None)
         if latest is not None:
@@ -4002,8 +4018,7 @@ class NativeWorkflowConnection(Connection):
                 'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step'],
                 'verification_commands': verification,
                 'verification_instructions': 'After completing the step, use the native command tool to run each verification command exactly once in its specified cwd. Do not retry commands within this attempt. If execution is unavailable, report that limitation; do not claim a check passed.'}, ensure_ascii=False)}]}
-        if client_message_id is not None:
-            params['clientUserMessageId'] = client_message_id
+        params['clientUserMessageId'] = active['id'] if client_message_id is None else client_message_id
         result = self.request('turn/start', params)
         turn = result.get('turn')
         if not isinstance(turn, dict) or not isinstance(turn.get('id'), str) or not turn['id']:
@@ -4381,6 +4396,32 @@ def correlated_turn_id(history, client_message_id):
     if len(users) == 1 and users[0].get('clientId') == client_message_id:
         return turn['id']
     return None
+
+
+def correlated_work_turn_id(history, client_message_id):
+    """Bind only the latest terminal work turn in a complete bounded history."""
+    if not isinstance(history, dict):
+        return None
+    turns = history.get('data')
+    if (not isinstance(turns, list) or not 1 <= len(turns) <= 100
+            or history.get('nextCursor') is not None):
+        return None
+    match = correlated_turn_id({'data': turns[:1]}, client_message_id)
+    if match is None:
+        return None
+    identities = {match}
+    for turn in turns[1:]:
+        if (not isinstance(turn, dict) or turn.get('itemsView') != 'full'
+                or not isinstance(turn.get('id'), str) or not turn['id'] or turn['id'] in identities
+                or turn.get('status') not in ('completed', 'failed', 'interrupted')
+                or not isinstance(turn.get('items'), list)):
+            return None
+        identities.add(turn['id'])
+        for item in turn['items']:
+            if (not isinstance(item, dict) or item.get('type') == 'userMessage'
+                    and item.get('clientId') == client_message_id):
+                return None
+    return match
 
 
 def read_recovery_thread(connection, project, thread_id):

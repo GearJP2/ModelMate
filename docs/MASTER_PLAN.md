@@ -481,6 +481,17 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 
 ### P12 — Resume / cancel / delete
 
+Work-turn correlation increment: default native work dispatch now sends the
+already-reserved attempt ID as clientUserMessageId. On explicit resume with a
+known thread but missing native turn ID, only a uniquely correlated latest
+terminal turn in complete bounded full history (up to 100 turns) can restore the
+binding. Summary/full status must agree and a fresh latest observation must
+remain unchanged after native resume/permission validation. Counters/attempt IDs
+remain intact; no command is replayed, grant restored or check inferred passed.
+Fake-process lost-reply and binding-write-failure paths are offline verified.
+Legacy unmatched markers, active/incomplete/ambiguous history and missing thread
+IDs remain unresolved. Live work correlation and broader loss gates remain open.
+
 Latest offline increment: recovery-observer connection loss and a terminated owned
 fake server preserve the attached unknown recheck checkpoint and stale evidence.
 Reopening the controller retains the same binding without replay or automatic

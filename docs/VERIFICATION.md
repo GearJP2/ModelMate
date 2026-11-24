@@ -3438,3 +3438,43 @@ G3 evidence was produced. Next P13 evidence is live export/import of a public
 candidate and SearXNG validation; automatic isolation remains separate work.
 The full offline suite passed all 630 tests with test-owned sockets enabled and
 no skips. Entry-point compile checks and `git diff --check` passed.
+
+### P12 terminal work-turn correlation after missing start binding — MOCK_VERIFIED
+
+Default native work dispatch now sends its controller-reserved attempt ID as
+clientUserMessageId. For durable workflows, that ID is persisted before turn/start.
+Explicit recheck markers retain their existing override. The marker supports
+metadata correlation, not remote idempotency or a license to replay a request.
+
+Explicit native resume may recover a missing turn ID on a known work thread.
+It requires complete full history of at most 100 turns, a latest terminal turn
+with exactly one matching user item, no duplicate turn IDs or matching markers
+in older history, and terminal/full metadata for all returned turns. Any cursor,
+missing marker, malformed/ambiguous history or active turn remains unresolved.
+The correlated ID/status must match the separately observed latest summary.
+After thread resume and permission validation, another summary must still match
+before the binding is saved. History is not printed or copied into local state.
+
+The original attempt/counters are preserved. Native completion creates no fresh
+test/source/manual pass or restored grant; normal evidence checks are still
+needed. This does not discover a missing thread ID or widen the CLI's existing
+manual/rubric/source versus experimental tool-check resume requirements.
+
+All 16 focused native-resume tests passed. A fake server persists a turn and then
+actually exits before sending the start reply. A new process recovers that same
+attempt from the original checkpoint, with one total turn/start, no interrupt,
+no check evidence and no additional attempt. A second-step malformed start reply
+and failed native-binding write also recover the new turn, never the old one.
+Unmatched markers leave disk unchanged; changed latest history after resume is
+rejected before saving a binding. Helper tests reject incomplete, duplicated,
+misordered, nonterminal and malformed metadata.
+
+Two old rejection assertions were replaced with positive exact-binding and
+counter/evidence assertions now that matching correlation is implemented; the
+unmatched-marker rejection remains explicit. Compile checks passed. These are
+synthetic process tests, not live inference evidence. The earlier scoped live
+client-ID/recheck records do not prove this multi-turn work-resume path or current
+CLI compatibility. Next eligible evidence is a separately scoped live lost-work
+binding check; active/missing-thread and broader server-loss recovery stay open.
+The full offline suite passed all 634 tests with test-owned sockets enabled and
+no skips. Compile checks and `git diff --check` passed.

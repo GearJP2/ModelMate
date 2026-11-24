@@ -10,7 +10,8 @@ import unittest
 import os
 from unittest.mock import patch
 
-from modelmate import ChatShell, NativeWorkflowConnection, WorkflowController, SessionStore, ProbeError, run_workflow_file
+from modelmate import (ChatShell, NativeWorkflowConnection, WorkflowController, SessionStore, ProbeError,
+                       run_workflow_file, correlated_work_turn_id)
 from test_routing import PLAN, CATALOG, POLICY
 
 SERVER = r'''
@@ -47,16 +48,21 @@ for line in sys.stdin:
   latest=data['latest']
   if mode=='turn_mismatch' and latest:latest=dict(latest,id='foreign')
   result={'data':[] if latest is None or mode=='empty_history' else [latest]}
+  if p.get('itemsView')=='full' and latest is not None:
+   result={'data':[dict(t,itemsView='full') for t in [latest]+data.get('older',[])]}
  elif method=='turn/start':
   data['count']+=1
   objective=json.loads(p['input'][0]['text'])['step']['objective']
   if data['count']==1:data['remembered']=objective
-  data['latest']={'id':str(data['count']),'status':'inProgress' if mode=='hang' else 'completed'}
+  if data['latest'] is not None:data.setdefault('older',[]).insert(0,data['latest'])
+  data['latest']={'id':str(data['count']),'status':'inProgress' if mode=='hang' else 'completed',
+   'items':[{'type':'userMessage','clientId':p.get('clientUserMessageId')}]}
   result={'turn':{} if mode=='unknown_start' else {'id':str(data['count'])}}
  elif method=='turn/interrupt':
   data['latest']['status']='interrupted';result={}
  else:raise RuntimeError(method)
  state.write_text(json.dumps(data))
+ if method=='turn/start' and mode=='lost_start_reply':sys.exit(0)
  print(json.dumps({'id':req['id'],'result':result}),flush=True)
  if method=='turn/start':
   if mode=='hang':continue
@@ -208,24 +214,110 @@ class NativeResumeTests(unittest.TestCase):
         connection.close()
         self.assertEqual(self.store.read(sid),before)
 
-    def test_unknown_start_clears_previous_turn_identity_and_never_replays(self):
+    def test_unknown_start_recovers_by_saved_attempt_marker_without_replay(self):
         sid,_=self.completed_first()
         connection=self.backend('unknown_start')
         host=connection.resume(self.store,sid,self.project,POLICY,self.raw)
         c=host.controller;c.answer_pause(c.snapshot()['pause_token'],'continue')
         request=connection.request
         def assert_cleared(method,params=None):
-            if method=='turn/start':self.assertIsNone(self.store.read(sid)['turn_id'])
+            if method=='turn/start':
+                saved = self.store.read(sid)
+                self.assertIsNone(saved['turn_id'])
+                self.assertEqual(params['clientUserMessageId'], saved['workflow']['active_attempt']['id'])
             return request(method,params)
         connection.request=assert_cleared
         with self.assertRaises(ProbeError):host({'action':'next','task_id':c.task_id})
         connection.close()
         self.assertIsNone(self.store.read(sid)['turn_id'])
+        before = self.store.read(sid)['workflow']
         again=self.backend()
-        with self.assertRaisesRegex(ProbeError,'match checkpoint'):
-            again.resume(self.store,sid,self.project,POLICY,self.raw)
+        recovered = again.resume(self.store,sid,self.project,POLICY,self.raw)
+        state = recovered.controller.snapshot()
+        self.assertEqual(state['state'], 'CHECKING')
+        self.assertEqual(state['active_attempt']['id'], before['active_attempt']['id'])
+        self.assertEqual(state['active_attempt']['status'], 'completed')
+        self.assertEqual(state['active_attempt']['checks'], {})
+        self.assertEqual([s['attempts'] for s in state['steps']], [1, 1])
+        self.assertEqual(self.store.read(sid)['turn_id'], '2')
+        self.assertFalse(recovered.controller._approvals._grants)
         again.close()
         self.assertEqual(sum(r.get('method')=='turn/start' for r in self.records()),2)
+
+    def test_unmatched_work_marker_cannot_bind_an_unknown_start(self):
+        connection = self.backend('unknown_start')
+        host = connection.connect(self.c, self.project, POLICY, store=self.store)
+        sid = connection.session_id
+        with self.assertRaises(ProbeError):host({'action': 'next', 'task_id': self.c.task_id})
+        connection.close()
+        path = Path(str(self.trace) + '.state')
+        native = json.loads(path.read_text())
+        native['latest']['items'][0]['clientId'] = 'unrelated'
+        path.write_text(json.dumps(native))
+        before = self.store.read(sid)
+        again = self.backend()
+        with self.assertRaisesRegex(ProbeError, 'correlation is unconfirmed'):
+            again.resume(self.store, sid, self.project, POLICY, self.raw)
+        again.close()
+        self.assertEqual(self.store.read(sid), before)
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 1)
+
+    def test_lost_start_reply_recovers_original_work_attempt_from_fresh_process(self):
+        connection = self.backend('lost_start_reply')
+        host = connection.connect(self.c, self.project, POLICY, store=self.store)
+        sid = connection.session_id
+        with self.assertRaises(ProbeError):host({'action': 'next', 'task_id': self.c.task_id})
+        connection.close()
+        before = self.store.read(sid)
+        self.assertIsNone(before['turn_id'])
+        again = self.backend()
+        recovered = again.resume(self.store, sid, self.project, POLICY, self.raw)
+        state = recovered.controller.snapshot()
+        self.assertEqual(state['state'], 'CHECKING')
+        self.assertEqual(state['active_attempt']['id'], before['workflow']['active_attempt']['id'])
+        self.assertEqual(state['active_attempt']['checks'], {})
+        self.assertEqual(state['steps'][0]['attempts'], 1)
+        self.assertEqual(self.store.read(sid)['turn_id'], '1')
+        again.close()
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 1)
+        self.assertFalse(any(r.get('method') == 'turn/interrupt' for r in self.records()))
+
+    def test_work_correlation_rejects_incomplete_duplicate_or_nonterminal_history(self):
+        current = dict(id='new', status='completed', itemsView='full',
+                       items=[dict(type='userMessage', clientId='attempt')])
+        old = dict(id='old', status='completed', itemsView='full',
+                   items=[dict(type='userMessage', clientId='previous')])
+        self.assertEqual(correlated_work_turn_id({'data': [current, old]}, 'attempt'), 'new')
+        invalid = [None, {'data': []}, {'data': [current, old], 'nextCursor': 'more'},
+                   {'data': [current, dict(old, id='new')]}, {'data': [dict(current, status='inProgress')]},
+                   {'data': [old, current]}, {'data': [current, dict(old, items=current['items'])]},
+                   {'data': [current, dict(old, itemsView='summary')]}, {'data': [current, 'bad']},
+                   {'data': [current, dict(old, items=[None])] }]
+        for history in invalid:
+            with self.subTest(history=history):
+                self.assertIsNone(correlated_work_turn_id(history, 'attempt'))
+
+    def test_work_recovery_does_not_save_binding_if_latest_history_changes(self):
+        connection = self.backend('lost_start_reply')
+        host = connection.connect(self.c, self.project, POLICY, store=self.store)
+        sid = connection.session_id
+        with self.assertRaises(ProbeError):host({'action': 'next', 'task_id': self.c.task_id})
+        connection.close()
+        before = self.store.read(sid)
+        again = self.backend()
+        request, summary_reads = again.request, []
+        def changed(method, params=None):
+            result = request(method, params)
+            if method == 'thread/turns/list' and params['itemsView'] == 'summary':
+                summary_reads.append(True)
+                if len(summary_reads) == 2:result['data'][0]['id'] = 'foreign'
+            return result
+        again.request = changed
+        with self.assertRaisesRegex(ProbeError, 'history changed'):
+            again.resume(self.store, sid, self.project, POLICY, self.raw)
+        again.close()
+        self.assertEqual(self.store.read(sid), before)
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 1)
 
     def test_binding_save_failure_cannot_reuse_previous_native_turn(self):
         sid,_=self.completed_first()
@@ -240,7 +332,12 @@ class NativeResumeTests(unittest.TestCase):
         connection.close()
         self.assertIsNone(self.store.read(sid)['turn_id'])
         again=self.backend()
-        with self.assertRaises(ProbeError):again.resume(self.store,sid,self.project,POLICY,self.raw)
+        host = again.resume(self.store,sid,self.project,POLICY,self.raw)
+        self.assertEqual(self.store.read(sid)['turn_id'], '2')
+        self.assertEqual(host.controller.snapshot()['active_attempt']['selection'], c.snapshot()['active_attempt']['selection'])
+        self.assertEqual(host.controller.snapshot()['active_attempt']['checks'], {})
+        self.assertEqual(host.controller.snapshot()['steps'][1]['attempts'], 1)
+        again.close()
         self.assertEqual(sum(r.get('method')=='turn/start' for r in self.records()),2)
 
     def test_writer_lock_is_held_until_native_connection_closes(self):
