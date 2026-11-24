@@ -3268,3 +3268,34 @@ applies to diagnostics and both native transports' stdio callers. Next eligible
 P09 gate remains the user-run command-approval verifier; live cancellation and
 other G2 paths still need scoped evidence.
 The complete offline suite passed all 607 tests with sockets enabled and no skips.
+
+### P09 supported approval fields and installed CLI 0.172.0 schema — MOCK_VERIFIED
+
+`codex --version` now reports 0.172.0. Generated its protocol descriptions with
+`codex app-server generate-json-schema --out /tmp/modelmate-p09-schema-0172`.
+Compared parsed JSON with the prior 0.171.0 descriptions: command/file approval
+params and responses plus FileChangePatchUpdatedNotification match exactly.
+This is schema inspection only, not a live account or permission check. Existing
+0.171.0 live records retain their original version and scope.
+
+The shared manual/workflow approval validator now rejects unknown top-level
+request fields rather than ignoring a possible new permission scope. It checks
+provided reason/timestamp/list metadata types and bounds. Legacy requests that
+omit the newer timestamp remain supported. Patch changes require the supported
+path/diff/kind fields, an add/delete/update kind, and valid optional update
+move_path metadata; unknown or malformed kinds invalidate the cached preview.
+
+The strict boundary exposed command/cwd fields incorrectly included in a fake
+file-approval request. Fixed that fixture to match the real file-request schema
+rather than expanding accepted fields. Tests cover an unknown additional write
+permission, malformed metadata, unknown patch kinds and invalid rename metadata.
+A positive known-metadata case confirms that the response is plain accept-once,
+without choosing a proposed policy amendment or changing the read-only profile.
+The native fake-server unknown-scope case leaves its file effect absent.
+
+All 19 manual approval tests and nine native permission tests passed. Compile
+checks and `git diff --check` passed. No live inference was run; the requested
+user-run P09/G2 result remains pending. Next gate remains the scoped live command
+approval verifier, with CLI version and source hashes recorded from that run.
+The full offline suite passed all 608 tests with socket permissions enabled and
+no skips. No inference evidence is inferred from the schema comparison or suite.

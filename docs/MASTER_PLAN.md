@@ -384,6 +384,11 @@ Native cancellation/loss coverage now exercises real synthetic pipes for cancel,
 exit, EOF, timeout and disconnect, plus server death and a lost accept-send result.
 Shared shutdown discards buffered stdin before closing it, preventing unsent
 actions from being flushed to a surviving reader. Live gates remain unverified.
+Approval field sets are now restricted to the supported command/file schemas;
+unknown permission fields and malformed metadata cannot obtain a token. Patch
+entries require a recognized change kind and valid rename metadata. Relevant
+generated schemas match between CLI 0.171.0 and installed 0.172.0; that comparison
+does not establish live 0.172.0 compatibility.
 
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately

@@ -158,9 +158,10 @@ class LiveBackendTests(unittest.TestCase):
         c.handle_event({'method': 'item/started', 'params': {
             'threadId': 'thread', 'turnId': 'turn', 'item': {
                 'type': 'fileChange', 'id': 'patch',
-                'changes': [{'path': '/tmp/synthetic', 'diff': '+synthetic'}]}}})
+                'changes': [{'path': '/tmp/synthetic', 'kind': {'type': 'add'}, 'diff': '+synthetic'}]}}})
         c.handle_event({'id': 'patch-request', 'method': 'item/fileChange/requestApproval', 'params': {
-            'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch'}})
+            'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch',
+            'grantRoot': None, 'reason': None, 'startedAtMs': 1}})
         c.send.assert_not_called()
         self.assertIn('+synthetic', c.shell.output.getvalue())
         c.shell.line('/approve '+c.shell.pending['token'])
@@ -219,16 +220,34 @@ class LiveBackendTests(unittest.TestCase):
     def test_unrepresented_native_approval_scopes_never_get_an_accept_token(self):
         for field, value in [('kind', 'writeStdin'), ('kind', 'humanCommand'),
                              ('approvalId', 'callback'), ('environmentId', 'remote'),
-                             ('networkApprovalContext', {'host': 'example.org'}), ('grantRoot', '/tmp')]:
+                             ('networkApprovalContext', {'host': 'example.org'}), ('grantRoot', '/tmp'),
+                             ('additionalPermissions', {'fileSystem': {'write': ['/tmp']}}),
+                             ('reason', {'unexpected': 'object'}), ('startedAtMs', True),
+                             ('commandActions', {'unexpected': 'object'})]:
             with self.subTest(field=field):
                 c = self.backend();c.turn_id = 'turn';c.shell.active = True
                 params = {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item',
                           'command': 'printf synthetic', 'cwd': '/tmp', field: value}
+                if field == 'grantRoot':
+                    params.pop('command');params.pop('cwd')
                 c.handle_event({'id': 'request', 'method': 'item/fileChange/requestApproval' if field == 'grantRoot'
                     else 'item/commandExecution/requestApproval', 'params': params})
                 self.assertIsNone(c.shell.pending)
                 self.assertFalse(c._approvals)
                 c.send.assert_called_once_with({'id': 'request', 'result': {'decision': 'decline'}})
+
+    def test_known_schema_metadata_keeps_accept_once_without_selecting_amendments(self):
+        c = self.backend();c.turn_id = 'turn';c.shell.active = True
+        params = {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item',
+                  'command': 'printf synthetic', 'cwd': '/tmp', 'kind': 'command', 'reason': 'synthetic check',
+                  'startedAtMs': 1, 'approvalId': None, 'environmentId': None, 'networkApprovalContext': None,
+                  'commandActions': [], 'proposedExecpolicyAmendment': ['printf'],
+                  'proposedNetworkPolicyAmendments': []}
+        c.handle_event({'id': 'request', 'method': 'item/commandExecution/requestApproval', 'params': params})
+        c.send.assert_not_called()
+        c.shell.line('/approve ' + c.shell.pending['token'])
+        c.send.assert_called_once_with({'id': 'request', 'result': {'decision': 'accept'}})
+        self.assertEqual(c.shell.permissions, 'read_only')
 
     def test_duplicate_request_id_declines_once_and_expires_old_token(self):
         c = self.backend();c.turn_id = 'turn';c.shell.active = True
@@ -244,11 +263,11 @@ class LiveBackendTests(unittest.TestCase):
         with self.assertRaises(ProbeError):c._answer_tool(token, 'approve')
 
     def test_patch_approval_cannot_accept_a_changed_invalid_or_completed_preview(self):
-        for mutation in ('changed', 'invalid', 'missing_diff', 'changed_type', 'completed', 'unchanged'):
+        for mutation in ('changed', 'invalid', 'missing_diff', 'unknown_kind', 'bad_move', 'changed_type', 'completed', 'unchanged'):
             with self.subTest(mutation=mutation):
                 c = self.backend();c.turn_id = 'turn';c.shell.active = True
                 item = {'type': 'fileChange', 'id': 'patch',
-                        'changes': [{'path': '/tmp/synthetic', 'diff': '+original'}]}
+                        'changes': [{'path': '/tmp/synthetic', 'kind': {'type': 'add'}, 'diff': '+original'}]}
                 params = {'threadId': 'thread', 'turnId': 'turn', 'item': item}
                 c.handle_event({'method': 'item/started', 'params': params})
                 c.handle_event({'id': 'patch-request', 'method': 'item/fileChange/requestApproval',
@@ -256,11 +275,15 @@ class LiveBackendTests(unittest.TestCase):
                 token = c.shell.pending['token']
                 self.assertIn('+original', c.shell.output.getvalue())
                 if mutation == 'changed':
-                    item['changes'] = [{'path': '/tmp/synthetic', 'diff': '+changed'}]
+                    item['changes'] = [{'path': '/tmp/synthetic', 'kind': {'type': 'add'}, 'diff': '+changed'}]
                 elif mutation == 'invalid':
                     item['changes'] = None
                 elif mutation == 'missing_diff':
-                    item['changes'] = [{'path': '/tmp/synthetic'}]
+                    item['changes'] = [{'path': '/tmp/synthetic', 'kind': {'type': 'add'}}]
+                elif mutation == 'unknown_kind':
+                    item['changes'][0]['kind']['type'] = 'future_operation'
+                elif mutation == 'bad_move':
+                    item['changes'][0]['kind'] = {'type': 'update', 'move_path': {'unexpected': 'object'}}
                 elif mutation == 'changed_type':
                     item['type'] = 'commandExecution'
                 c.handle_event({'method': 'item/completed' if mutation == 'completed' else 'item/started',
@@ -271,7 +294,7 @@ class LiveBackendTests(unittest.TestCase):
                     self.assertIsNone(c.shell.pending)
                     # Returning to the original diff cannot revive an expired token.
                     item['type'] = 'fileChange'
-                    item['changes'] = [{'path': '/tmp/synthetic', 'diff': '+original'}]
+                    item['changes'] = [{'path': '/tmp/synthetic', 'kind': {'type': 'add'}, 'diff': '+original'}]
                     c.handle_event({'method': 'item/started', 'params': params})
                 c.shell.line('/approve ' + token)
                 decision = 'accept' if mutation == 'unchanged' else 'decline'

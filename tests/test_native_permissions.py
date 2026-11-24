@@ -34,7 +34,7 @@ for line in sys.stdin:
     item.update(status='completed',exitCode=0)
     emit({'method':'item/completed','params':{'threadId':'thread','turnId':'1','item':item}})
   elif pending is not None:assert pending['status']=='declined'
-  if mode not in ('scope','no_preview','duplicate') and not mode.startswith('hold_'):
+  if mode not in ('scope','unknown_scope','no_preview','duplicate') and not mode.startswith('hold_'):
    emit({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':'1','status':'completed'}}})
   continue
  if 'id' not in req:continue
@@ -55,8 +55,11 @@ for line in sys.stdin:
   params={'threadId':'foreign' if mode=='foreign' else 'thread','turnId':'1','itemId':'tool',
    'command':'printf synthetic','cwd':project}
   if mode=='scope':params['kind']='writeStdin'
+  if mode=='unknown_scope':params['additionalPermissions']={'fileSystem':{'write':[project]}}
   request={'id':'approval','method':'item/fileChange/requestApproval' if mode in ('patch','patch_update','no_preview')
    else 'item/commandExecution/requestApproval','params':params}
+  if request['method']=='item/fileChange/requestApproval':
+   params.pop('command');params.pop('cwd')
   emit(request)
   if mode=='duplicate':
    request['params']['command']='printf changed';emit(request)
@@ -145,10 +148,10 @@ class NativePermissionTests(unittest.TestCase):
         self.assertEqual([r['result']['decision'] for r in self.records(trace) if 'result' in r], ['decline'])
 
     def test_unsupported_duplicate_or_foreign_requests_never_accept(self):
-        for mode in ('scope', 'no_preview', 'duplicate', 'foreign'):
+        for mode in ('scope', 'unknown_scope', 'no_preview', 'duplicate', 'foreign'):
             with self.subTest(mode=mode):
                 backend, c, _, _, project, trace = self.start(mode)
-                if mode in ('scope', 'no_preview', 'foreign'):
+                if mode != 'duplicate':
                     with self.assertRaises(ProbeError):self.pump(backend, lambda: c.state == 'PAUSED')
                 else:self.pump(backend, lambda: c.state == 'PAUSED')
                 backend.close()

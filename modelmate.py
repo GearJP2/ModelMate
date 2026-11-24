@@ -2999,9 +2999,20 @@ def cache_native_patch_preview(previews, item_id, changes):
     if not isinstance(item_id, str) or not item_id:
         raise ProbeError('Invalid patch item identity; nothing approved.')
     previews.pop(item_id, None)
-    if (isinstance(changes, list) and changes and all(isinstance(change, dict)
-            and isinstance(change.get('path'), str) and change['path'].strip()
-            and isinstance(change.get('diff'), str) and change['diff'].strip() for change in changes)):
+    valid = isinstance(changes, list) and bool(changes)
+    if valid:
+        for change in changes:
+            kind = change.get('kind') if isinstance(change, dict) else None
+            if (not isinstance(change, dict) or set(change) != {'path', 'diff', 'kind'}
+                    or not isinstance(change.get('path'), str) or not change['path'].strip()
+                    or not isinstance(change.get('diff'), str) or not change['diff'].strip()
+                    or not isinstance(kind, dict) or kind.get('type') not in ('add', 'delete', 'update')
+                    or set(kind) - ({'type', 'move_path'} if kind['type'] == 'update' else {'type'})
+                    or (kind.get('move_path') is not None and (not isinstance(kind['move_path'], str)
+                        or not kind['move_path'].strip()))):
+                valid = False
+                break
+    if valid:
         preview = json.dumps(changes, ensure_ascii=True)
         if len(preview.encode('utf-8')) <= 65536:
             previews[item_id] = preview
@@ -3018,11 +3029,23 @@ def native_tool_request(message, thread_id, turn_id, previews):
             or type(message.get('id')) not in (str, int)
             or (isinstance(message['id'], str) and not message['id'])):
         raise ProbeError('Unsupported or stale server request; nothing approved.')
+    command_request = method == 'item/commandExecution/requestApproval'
+    allowed = {'threadId', 'turnId', 'itemId', 'reason', 'startedAtMs'} | (
+        {'approvalId', 'command', 'commandActions', 'cwd', 'environmentId', 'kind', 'networkApprovalContext',
+         'proposedExecpolicyAmendment', 'proposedNetworkPolicyAmendments'} if command_request else {'grantRoot'})
+    if set(params) - allowed:
+        raise ProbeError('Unsupported approval fields; nothing approved.')
+    if ((params.get('reason') is not None and not isinstance(params['reason'], str))
+            or ('startedAtMs' in params and (type(params['startedAtMs']) is not int
+                or not 0 <= params['startedAtMs'] < 2 ** 63))):
+        raise ProbeError('Malformed approval metadata; nothing approved.')
+    if command_request and any(params.get(key) is not None and not isinstance(params[key], list)
+            for key in ('commandActions', 'proposedExecpolicyAmendment', 'proposedNetworkPolicyAmendments')):
+        raise ProbeError('Malformed approval metadata; nothing approved.')
     if (params.get('kind', 'command') != 'command' or params.get('approvalId') is not None
             or params.get('environmentId') is not None or params.get('networkApprovalContext') is not None
             or params.get('grantRoot') is not None):
         raise ProbeError('Unsupported approval scope; nothing approved.')
-    command_request = method == 'item/commandExecution/requestApproval'
     if command_request:
         command, cwd = params.get('command'), params.get('cwd')
         if not isinstance(command, str) or not command.strip() or not isinstance(cwd, str) or not os.path.isabs(cwd):
