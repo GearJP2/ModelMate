@@ -2803,3 +2803,18 @@ event held no command exit code or item ID, and the sentinel was intact.
 This covers the attached controller and shell handlers for a synthetic
 recheck on the runtime-owned server. Interactive Terminal timing, loss of
 the workflow or server, and discovery with a missing thread ID remain open.
+
+### P12 recovery observer connection loss — MOCK_VERIFIED
+
+Added a regression at the attached native workflow boundary. A synthetic recheck
+first loses its owner connection. The recovery observer then raises a connection
+error during inspection. Both the on-disk record and controller checkpoint remain
+unchanged, the operation stays unknown, evidence stays stale, and the observer is
+closed. A subsequent inspection reports the same operation active without an
+interrupt or second `turn/start`.
+
+`python3 -m unittest discover -s tests -p test_native_recheck.py -v` passed all
+41 tests. `git diff --check` passed. No runtime behavior changed and no live
+inference was requested. This mocks observer failure; it does not prove recovery
+after an actual server or workflow process dies. Next eligible P12 work: exercise
+actual owned-server loss offline and verify retained unknown bindings on resume.

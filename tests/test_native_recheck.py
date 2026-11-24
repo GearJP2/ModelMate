@@ -328,6 +328,42 @@ class NativeRecheckTests(unittest.TestCase):
             self.assertIn(self.evidence['id'], parent.snapshot()['stale_evidence'])
             self.assertEqual(self.store.read(self.sid)['workflow'], parent.export_checkpoint())
 
+    def test_shared_recovery_connection_loss_preserves_unknown_checkpoint(self):
+        backend = NativeWorkflowConnection([sys.executable, '-c', 'import time; time.sleep(30)'], .5)
+        self.addCleanup(backend.close)
+        with self.attach() as parent:
+            backend.store, backend.session_id = self.store, self.sid
+            backend.controller, backend.host = parent, Mock(controller=parent)
+            backend._attachment, backend._recheck_endpoint = MagicMock(), Mock()
+            connection = self.backend('disconnect')
+            self.start(connection, parent)
+            with self.assertRaises(ProbeError):
+                self.wait(connection)
+            connection.close()
+            operation = connection.operation()
+            backend._shared_recheck_operation = operation['id']
+            before = self.store.read(self.sid)
+            checkpoint = parent.export_checkpoint()
+            observer = Mock()
+            observer.inspect_recheck.side_effect = ProbeError('Recovery connection lost.')
+            with patch('modelmate.UnixWebSocket'), \
+                 patch('modelmate.RecheckRecoveryConnection', return_value=observer):
+                with self.assertRaisesRegex(ProbeError, 'connection lost'):
+                    backend.recover_shared_recheck()
+                observer.close.assert_called_once_with()
+                self.assertEqual(self.store.read(self.sid), before)
+                self.assertEqual(parent.export_checkpoint(), checkpoint)
+                self.assertEqual(parent.recheck_operations()[0]['status'], 'unknown')
+                self.assertIn(self.evidence['id'], parent.snapshot()['stale_evidence'])
+                observer.inspect_recheck.side_effect = None
+                observer.inspect_recheck.return_value = {'state': 'active',
+                    'operation_id': operation['id'], 'thread_id': operation['thread_id'],
+                    'turn_id': operation['turn_id']}
+                self.assertEqual(backend.recover_shared_recheck()['state'], 'active')
+                self.assertEqual(self.store.read(self.sid), before)
+                observer.interrupt_recheck.assert_not_called()
+            self.assertEqual(sum(r['method'] == 'turn/start' for r in self.records()), 1)
+
     def test_approval_requests_decline_without_certifying_or_replaying(self):
         with self.attach() as parent:
             connection = self.backend('approval');self.start(connection, parent)
