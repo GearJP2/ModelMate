@@ -3401,3 +3401,40 @@ Codex inference or external network request was run. Live clarification entry
 and broader automated workflow behavior remain unverified.
 The full offline suite passed all 622 tests with test-owned sockets enabled and
 no skips. Compile checks and `git diff --check` passed.
+
+### P13 confirmed search-result handoff — MOCK_VERIFIED
+
+Standalone Wikipedia/SearXNG commands accept `--search-json`. Exact query
+confirmation is still required; prompts and the token use stderr and stdout
+receives one versioned JSON packet only after a successful search. The packet
+contains the approved query, destination/provider and passive title/excerpt/URL
+results. It includes no confirmation token or trailing input/history. Cancellation
+emits no packet and performs no search. Export does not start a model turn.
+
+A new workflow can import selected `--source-result FILE:NUMBER` candidates
+before preview/START. JSON input is bounded to 32 KiB, rejects duplicate keys,
+unknown fields/versions, malformed text/hosts and non-HTTP(S) or credential-bearing
+URLs. Up to five results may be selected, numbered from one. Candidates become
+explicitly labeled untrusted goal data in the effective plan, subject to the
+existing 4096-character goal and complete-plan limits. Oversized context fails;
+it is not silently truncated. Source plans, steps and criteria are unchanged.
+Resume rejects the option rather than rewriting an existing plan.
+
+Import neither searches nor follows any URL. Packets are not authenticated
+provenance, source verification, evidence or permission grants. They may contain
+injection text, which remains input data under the existing controller/permission
+rules. Explicit source verdicts still require separate human `/verify-source`
+checks. Hosted search remains disabled in work threads; this manual return path
+does not enable automatic/private-context query generation or satisfy full G3.
+
+All 13 web-policy and 30 workflow-entry tests passed. New cases check JSON-only
+stdout, separate confirmation, cancellation, packet validation, selected-result
+preview, malformed/oversized imports, EOF/START and resume/CLI restrictions.
+The synthetic native entry test receives the chosen URL and injection text in
+the work goal and durable checkpoint, with no grants, changed criteria or tool
+policy. It excludes the unselected URL and forbids HTTP during import/dispatch.
+Compile checks passed. No installed Codex inference, public HTTP lookup or live
+G3 evidence was produced. Next P13 evidence is live export/import of a public
+candidate and SearXNG validation; automatic isolation remains separate work.
+The full offline suite passed all 630 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.

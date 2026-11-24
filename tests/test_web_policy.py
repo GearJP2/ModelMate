@@ -5,10 +5,56 @@ import unittest
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
-from modelmate import ProbeError, main, run_wikipedia_search, search_searxng, search_wikipedia, searxng_host
+from modelmate import (ProbeError, main, run_wikipedia_search, search_searxng, search_wikipedia,
+                       searxng_host, validate_search_packet)
 
 
 class WebPolicyTests(unittest.TestCase):
+    def test_json_export_contains_only_confirmed_query_and_passive_results(self):
+        results = [{'title': 'Source', 'excerpt': 'Public text', 'url': 'https://en.wikipedia.org/?curid=7'}]
+        prompts, output = io.StringIO(), io.StringIO()
+        with patch('sys.argv', ['modelmate.py', '--search-wikipedia', 'en', '--search-json']), \
+             patch('sys.stdin', io.StringIO('public query\nSEARCH deadbeef\nprivate history\n')), \
+             patch('sys.stdout', output), patch('sys.stderr', prompts), \
+             patch('secrets.token_hex', return_value='deadbeef'), \
+             patch('modelmate.search_wikipedia', return_value=results) as search:
+            self.assertEqual(main(), 0)
+        search.assert_called_once_with('public query', 'en')
+        self.assertEqual(json.loads(output.getvalue()), dict(version=1, source='Wikipedia',
+            host='en.wikipedia.org', query='public query', results=results))
+        self.assertIn('SEARCH deadbeef', prompts.getvalue())
+        self.assertNotIn('private history', output.getvalue())
+        self.assertNotIn('deadbeef', output.getvalue())
+
+    def test_cancelled_json_export_writes_no_packet(self):
+        output = io.StringIO()
+        with patch('secrets.token_hex', return_value='deadbeef'), patch('modelmate.search_wikipedia') as search:
+            self.assertEqual(run_wikipedia_search(io.StringIO('query\nCANCEL\n'), io.StringIO(),
+                'en', json_output=output), 2)
+        search.assert_not_called()
+        self.assertEqual(output.getvalue(), '')
+
+    def test_packet_rejects_extra_authority_fields_and_unsafe_urls(self):
+        packet = dict(version=1, source='Wikipedia', host='en.wikipedia.org', query='public',
+            results=[dict(title='Source', excerpt='Text', url='https://example.net/source')])
+        self.assertEqual(validate_search_packet(packet), packet)
+        invalid = [dict(packet, version=True), dict(packet, grant='accept'),
+                   dict(packet, host='user@en.wikipedia.org'), dict(packet, query='private\nquery'),
+                   dict(packet, results=[dict(packet['results'][0], approved=True)]),
+                   dict(packet, results=packet['results'] * 6)]
+        for url in ('file:///etc/passwd', 'javascript:bad', 'https://user:secret@example.net/',
+                    'https://example.net/\nsecret', 'https://example.net:99999/'):
+            invalid.append(dict(packet, results=[dict(packet['results'][0], url=url)]))
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ProbeError):
+                validate_search_packet(value)
+
+    def test_json_flag_requires_search_mode(self):
+        with patch('sys.argv', ['modelmate.py', '--search-json']), \
+             patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit) as error:
+            main()
+        self.assertEqual(error.exception.code, 2)
+
     def test_eof_refusal_or_stale_confirmation_never_sends_query(self):
         for confirmation in ('', 'SEARCH deadbeef', 'SEARCH stale\n', 'SEARCH deadbeef extra\n', 'CANCEL\n'):
             with self.subTest(confirmation=confirmation), patch('secrets.token_hex', return_value='deadbeef'):

@@ -764,6 +764,32 @@ ModelMate อ่านเฉพาะคำค้นที่คุณป้อ�
 เมื่อ JSON ถูกปิดหรือเซิร์ฟเวอร์เปลี่ยนปลายทาง การค้นจะหยุดและแจ้งข้อผิดพลาด
 [เอกสาร Search API](https://docs.searxng.org/dev/search_api.html)
 
+### นำผลค้นเข้าแผนใหม่
+
+ใช้ `--search-json` ร่วมกับโหมดค้นเพื่อส่งออก JSON หลังยืนยันคำค้นเท่านั้น
+คำถามและ token ยืนยันจะแสดงทาง stderr ส่วน stdout มีเฉพาะ packet ผลค้น:
+
+```bash
+python3 modelmate.py --search-wikipedia th --search-json > sources.json
+python3 -m json.tool sources.json
+python3 modelmate.py --workflow plan.json --role-model standard=MODEL \
+  --source-result sources.json:1
+```
+
+ใช้ `--search-web HTTPS_ORIGIN --search-json` ได้เช่นกัน ถ้ายกเลิกจะไม่มี JSON
+ส่งออก `FILE:NUMBER` เลือกผลตามลำดับเริ่มที่ 1 และใช้ซ้ำได้สูงสุดห้ารายการ
+ตัวอย่าง workflow เป็น preview offline; เพิ่ม `--execute-workflow` เมื่อต้องการ
+เข้า START และ approval ตามเดิม การนำเข้าไม่ส่งคำค้นใหม่หรือเปิดลิงก์ใด ๆ
+
+query, ชื่อ, snippet และ URL ที่เลือกจะอยู่ใน goal ที่แสดงก่อน START และเก็บใน
+local checkpoint โดยไม่แก้ไฟล์แผนต้นฉบับ ผลรวมยังต้องอยู่ในเพดาน goal 4096
+อักขระ; ข้อมูลที่เกินเพดานจะถูกปฏิเสธ ไม่ตัดทิ้งเงียบ ๆ ใช้กับแผนใหม่เท่านั้น
+ไม่เขียนแผนที่ resume แล้วทับ Packet เป็นข้อมูลที่ไม่น่าเชื่อถือ ไม่รับรองผู้ส่ง
+ความถูกต้องของ claim หรือสิทธิ์เครื่องมือ ใช้ `/verify-source` แยกเมื่อได้ตรวจจริง
+
+นี่เป็นการส่งผลค้นแยกกลับเข้า workflow ด้วยการเลือกของผู้ใช้ การสร้างคำค้นจาก
+private context และ automatic search ยังไม่เปิด และไม่ถือว่า G3 ผ่านครบ
+
 `firstPassSteps` จะแสดงจำนวนขั้นที่ผ่าน ไม่ผ่าน หรือยังสรุปไม่ได้จาก
 attempt แรกของแต่ละขั้นที่เริ่มแล้ว `firstPassRate` คิดจากขั้นที่รู้ผลผ่าน
 หรือไม่ผ่านเท่านั้น ขั้นที่ยังรอตรวจและ attempt ที่หยุดก่อนประเมินอยู่ใน

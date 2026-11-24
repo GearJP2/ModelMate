@@ -525,6 +525,16 @@ resume missing thread/account mismatch, duplicate delete, partial delete failure
 
 ### P13 — Private-context web search
 
+Confirmed-result handoff: standalone searches can export bounded JSON with
+`--search-json` after exact query confirmation (prompts on stderr). A new workflow
+can select up to five `--source-result FILE:NUMBER` entries. Validated candidates
+are appended as untrusted goal data before START and retained in the effective
+plan checkpoint; import performs no search, URL fetch or evidence/grant creation.
+The source plan and workflow steps/criteria stay unchanged. Existing goal limits
+apply, and resume cannot rewrite this context. This handoff has offline evidence
+only; automatic queries/private-context isolation and the remaining G3 evidence
+are still open.
+
 ไฟล์: modelmate.py, tests/test_web_policy.py, docs/VERIFICATION.md
 ใช้การออกแบบที่ผ่าน G3: execution context ปิด hosted search,
 search context ได้เฉพาะ approved/public query และไม่มี access ไปข้อมูลส่วนตัว
