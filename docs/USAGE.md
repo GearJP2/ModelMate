@@ -428,7 +428,7 @@ Approve plan จะแสดง model และ effort ของทุกขั�
 ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
 ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
 นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
-เพิ่มสิทธิ์จะถูก decline/pause ตาม native transport รุ่นนี้; read-only/on-request
+Default จะ decline/pause คำขอเพิ่มสิทธิ์; opt-in approval UI อยู่ด้านล่าง read-only/on-request
 ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
 
 รุ่นนี้รับแผนที่ไม่มี clarifications, manual/rubric/source checks และ test/lint ที่ผูก
@@ -527,6 +527,31 @@ reader เดิมเพื่อไม่กินคำสั่งถัด�
 เฉพาะ byte count/ascii/control count/paste-marker flag ไม่คัดลอกข้อความดิบ
 EOF, CANCEL และข้อความอื่นยังไม่เปิด backend; ไม่มีการยืนยันโดยอัตโนมัติ
 
+
+### Experimental native tool approvals
+
+Default workflow ยังปฏิเสธ tool approval requests หากต้องทดสอบ UI แบบรับเฉพาะครั้ง
+ให้เพิ่ม `--experimental-tool-approvals` ในคำสั่ง `--workflow` หรือ `--resume-workflow`:
+
+```bash
+python3 modelmate.py --workflow PLAN_JSON --role-model standard=MODEL \
+  --experimental-tool-approvals --execute-workflow
+```
+
+แทน PLAN_JSON และ MODEL ด้วยแผนและ binding จริง; execute ต้องยืนยัน START
+และ `/next` ใช้โควตา subscription ตามเดิม แสดง exact command/cwd หรือ diff ก่อนถาม
+`/approve TOKEN` อนุมัติเครื่องมือครั้งเดียว แยกจาก model approval; ใช้ `--next` กับ tool token ไม่ได้
+`/decline TOKEN` ปฏิเสธ; `/pause TOKEN`, `/cancel` และ EOF ปฏิเสธแล้วขอ interrupt
+ต้องรอ terminal event จึงยืนยันว่าหยุดแล้ว ไม่ถือว่า write/interrupt acknowledgement คือผลสำเร็จ
+
+ยังใช้ read-only/on-request และข้อจำกัด host เดิม ไม่เพิ่ม sandbox profile หรือ session grant
+stdin, callback subcommands, managed-human/network/environment และ session write-root requests
+ที่ UI ยังแสดง scope ไม่ครบจะถูกปฏิเสธ; unknown request หยุดโดยไม่อนุมัติ
+Patch เปลี่ยนหรือ request ID ซ้ำทำให้ token เดิมใช้ไม่ได้; failed send ไม่ถูกส่งซ้ำ
+Native recheck verification turns ยังคงปฏิเสธ approvals ของตัวเอง ไม่ได้รับสิทธิ์จาก flag ของ parent
+
+เส้นทางนี้ผ่าน offline fake-server tests เท่านั้น ยังไม่มี live G2 matrix ครบ
+อย่าใช้ flag นี้เป็นหลักฐานว่าพร้อม release หรือรัน inference เพื่อทำให้ tests ผ่าน
 
 ### Durable workflow resume (experimental, manual/rubric/source)
 

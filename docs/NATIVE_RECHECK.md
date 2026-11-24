@@ -97,8 +97,10 @@ version 3 when a tool request is first recorded. It retains the existing recheck
 ledger plus the latest tool request's attempt, native binding, digest, status and
 transition time. Confirmation tokens are never saved. V1/V2 remain readable;
 older runtimes reject V3 rather than restore a permission. This workflow version
-is separate from the enclosing session metadata version. Native workflow approval
-acceptance is not wired to the API yet.
+is separate from the enclosing session metadata version. Workflows may now opt in
+to the supported native acceptance subset with `--experimental-tool-approvals`;
+it has offline evidence only. Recheck child connections keep their existing
+decline-only behavior and do not inherit that flag from the parent.
 
 Implementation order: checkpoint ledger and offline fault-injection tests (done), native
 transport/observation handling (offline-tested), CLI integration (offline-tested),

@@ -2994,6 +2994,50 @@ def native_permissions_confirmed(result):
             and isinstance(sandbox, dict) and sandbox.get('type') == 'readOnly')
 
 
+def cache_native_patch_preview(previews, item_id, changes):
+    if not isinstance(item_id, str) or not item_id:
+        raise ProbeError('Invalid patch item identity; nothing approved.')
+    previews.pop(item_id, None)
+    if (isinstance(changes, list) and changes and all(isinstance(change, dict)
+            and isinstance(change.get('path'), str) and change['path'].strip()
+            and isinstance(change.get('diff'), str) and change['diff'].strip() for change in changes)):
+        preview = json.dumps(changes, ensure_ascii=True)
+        if len(preview.encode('utf-8')) <= 65536:
+            previews[item_id] = preview
+        if len(previews) > 100:
+            raise ProbeError('Too many pending file changes.')
+
+
+def native_tool_request(message, thread_id, turn_id, previews):
+    params, method = message.get('params', {}), message.get('method')
+    if (method not in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval')
+            or not isinstance(params, dict) or not thread_id or not turn_id
+            or params.get('threadId') != thread_id or params.get('turnId') != turn_id
+            or not isinstance(params.get('itemId'), str) or not params['itemId']
+            or type(message.get('id')) not in (str, int)
+            or (isinstance(message['id'], str) and not message['id'])):
+        raise ProbeError('Unsupported or stale server request; nothing approved.')
+    if (params.get('kind', 'command') != 'command' or params.get('approvalId') is not None
+            or params.get('environmentId') is not None or params.get('networkApprovalContext') is not None
+            or params.get('grantRoot') is not None):
+        raise ProbeError('Unsupported approval scope; nothing approved.')
+    command_request = method == 'item/commandExecution/requestApproval'
+    if command_request:
+        command, cwd = params.get('command'), params.get('cwd')
+        if not isinstance(command, str) or not command.strip() or not isinstance(cwd, str) or not os.path.isabs(cwd):
+            raise ProbeError('Cannot display the exact command; nothing approved.')
+        preview = json.dumps({'command': command, 'cwd': cwd, 'reason': params.get('reason')}, ensure_ascii=True)
+    else:
+        preview = previews.get(params['itemId'])
+        if preview is None:
+            raise ProbeError('Patch has no complete diff preview; nothing approved.')
+    if len(preview.encode('utf-8')) > 65536:
+        raise ProbeError('Approval preview exceeds display limit; nothing approved.')
+    binding = dict(thread_id=thread_id, turn_id=turn_id, item_id=params['itemId'],
+        request_id=message['id'], kind='command' if command_request else 'file_change')
+    return binding, preview
+
+
 class LiveChatConnection(Connection):
     """Manual-model chat using native Codex read-only/on-request permissions."""
     allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume',
@@ -3447,17 +3491,7 @@ class LiveChatConnection(Connection):
                 self.shell.write('Patch changed or completed after preview; request a fresh preview.')
 
     def _cache_patch_preview(self, item_id, changes):
-        if not isinstance(item_id, str) or not item_id:
-            raise ProbeError('Invalid patch item identity; nothing approved.')
-        self._previews.pop(item_id, None)
-        if (isinstance(changes, list) and changes and all(isinstance(change, dict)
-                and isinstance(change.get('path'), str) and change['path'].strip()
-                and isinstance(change.get('diff'), str) and change['diff'].strip() for change in changes)):
-            preview = json.dumps(changes, ensure_ascii=True)
-            if len(preview.encode('utf-8')) <= 65536:
-                self._previews[item_id] = preview
-            if len(self._previews) > 100:
-                raise ProbeError('Too many pending file changes.')
+        cache_native_patch_preview(self._previews, item_id, changes)
         self._expire_patch_approvals(item_id)
 
     def handle_event(self, message):
@@ -3489,26 +3523,11 @@ class LiveChatConnection(Connection):
                 self.send({'id': message['id'], 'result': {'decision': 'decline'}})
                 self.shell.write('ปฏิเสธคำขอซ้อนระหว่างรออนุมัติ')
                 return
-            if (params.get('kind', 'command') != 'command' or params.get('approvalId') is not None
-                    or params.get('environmentId') is not None or params.get('networkApprovalContext') is not None
-                    or params.get('grantRoot') is not None):
+            try:
+                _, preview = native_tool_request(message, self.thread_id, self.turn_id, self._previews)
+            except ProbeError as exc:
                 self.send({'id': message['id'], 'result': {'decision': 'decline'}})
-                self.shell.write('Unsupported approval scope; nothing approved.')
-                return
-            if method == 'item/commandExecution/requestApproval':
-                command, cwd = params.get('command'), params.get('cwd')
-                if not isinstance(command, str) or not command or not isinstance(cwd, str):
-                    raise ProbeError('Cannot display the exact command; nothing approved.')
-                preview = json.dumps({'command': command, 'cwd': cwd, 'reason': params.get('reason')}, ensure_ascii=True)
-            else:
-                preview = self._previews.get(params['itemId'])
-                if preview is None:
-                    self.send({'id': message['id'], 'result': {'decision': 'decline'}})
-                    self.shell.write('ปฏิเสธ patch เพราะไม่มี diff ให้ตรวจ')
-                    return
-            if len(preview.encode('utf-8')) > 65536:
-                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
-                self.shell.write('ปฏิเสธคำขอที่ใหญ่เกินแสดงอย่างครบถ้วน')
+                self.shell.write(str(exc))
                 return
             token = uuid.uuid4().hex
             self.checkpoint(state='AWAITING_TOOL_APPROVAL')
@@ -3668,7 +3687,7 @@ def quota_window_changes(before, after, sampled_at):
 
 
 class NativeWorkflowConnection(Connection):
-    """Opt-in transport for an explicit host plan; no classifier or native approval acceptance."""
+    """Explicit-plan transport; native tool acceptance requires a separate experimental gate."""
     allowed_methods = Connection.allowed_methods | {'thread/start', 'thread/read', 'thread/resume', 'thread/turns/list', 'turn/start', 'turn/interrupt'}
 
     def __init__(self, command, timeout=15, *, websocket=None):
@@ -3682,6 +3701,8 @@ class NativeWorkflowConnection(Connection):
         self._displayed = set()
         self.store = self.session_id = self._attachment = self.controller = None
         self.shared_rechecks = False
+        self.experimental_tool_approvals = False
+        self._native_tool, self._approval_previews = None, {}
         self._recheck_server = self._recheck_endpoint = self._shared_recheck_operation = None
         self._closed = False
         self.measure_quota = False
@@ -3711,6 +3732,8 @@ class NativeWorkflowConnection(Connection):
                     if turn['elapsedSeconds'] is not None else dict(turn) for turn in turns]}
 
     def connect(self, controller, cwd, role_policy=None, *, store=None):
+        if self.experimental_tool_approvals and store is None:
+            raise ProbeError('Experimental workflow tool approvals require durable storage.')
         if self.host is not None or self.thread_id is not None:
             raise ProbeError('Workflow transport is already connected.')
         if not isinstance(controller, WorkflowController):
@@ -3752,7 +3775,8 @@ class NativeWorkflowConnection(Connection):
             record['summary'] = 'Durable native workflow thread confirmed.'
             store.save(record)
         self.controller = controller
-        self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
+        self.host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt,
+            tool_response=self._respond_tool if self.experimental_tool_approvals else None)
         return self.host
 
     def _attach(self, controller, fresh, *, persist_initial=True):
@@ -3802,7 +3826,8 @@ class NativeWorkflowConnection(Connection):
         LiveChatConnection._check_thread(self, result.get('thread'), tid)
         if not native_permissions_confirmed(result):
             raise ProbeError('Resumed workflow permissions were not confirmed.')
-        host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt)
+        host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt,
+            tool_response=self._respond_tool if self.experimental_tool_approvals else None)
         if latest is not None:
             host._seen.add((tid, latest['id']))
         if active is not None:
@@ -3879,6 +3904,11 @@ class NativeWorkflowConnection(Connection):
     def close(self):
         if self._closed:
             return
+        if self.experimental_tool_approvals and self._native_tool is not None and self.host is not None:
+            try:
+                self.host.disconnect()
+            except (ProbeError, OSError, EOFError):
+                pass
         self._closed = True
         try:
             if self.host is not None:
@@ -4002,6 +4032,83 @@ class NativeWorkflowConnection(Connection):
         self._events.append(message)
         self._event_bytes += size
 
+    def _respond_tool(self, response):
+        native = self._native_tool
+        if (not self.experimental_tool_approvals or self._closed or native is None
+                or self.host._binding is None or self.host._terminal is not None
+                or response.get('binding') != native['binding']
+                or response.get('action_digest') != hashlib.sha256(native['preview'].encode('ascii')).hexdigest()
+                or response.get('decision') not in ('accept', 'decline')
+                or any(native['binding'][key] != self.host._binding[key] for key in ('thread_id', 'turn_id'))):
+            raise ProbeError('Native tool response is stale or unbound; nothing sent.')
+        record = self.store.read(self.session_id)
+        request = self.controller.snapshot()['tool_request']
+        if (record['workflow'] != self.controller.export_checkpoint()
+                or record['thread_id'] != native['binding']['thread_id']
+                or record['turn_id'] != native['binding']['turn_id']
+                or request is None or request['binding'] != native['binding']
+                or request['attempt_id'] != self.host._binding['attempt_id']
+                or request['action_digest'] != response['action_digest']
+                or request['status'] != ('approved' if response['decision'] == 'accept' else 'declined')):
+            raise ProbeError('Tool decision was not durably bound; nothing sent.')
+        if (response['decision'] == 'accept' and native['binding']['kind'] == 'file_change'
+                and self._approval_previews.get(native['binding']['item_id']) != native['preview']):
+            raise ProbeError('Native patch changed; nothing approved.')
+        self._native_tool = None  # A failed send has unknown outcome; never replay the decision.
+        self.send({'id': native['binding']['request_id'], 'result': {'decision': response['decision']}})
+
+    def _offer_native_tool(self, message):
+        params = message.get('params', {})
+        active = self.host._binding
+        if (active is None or self.host._terminal is not None
+                or params.get('threadId') != active['thread_id'] or params.get('turnId') != active['turn_id']):
+            self.host._halt('unsupported_capability')
+            raise ProbeError('Foreign or stale workflow tool request; nothing approved.')
+        if self._native_tool is not None:
+            if message['id'] == self._native_tool['binding']['request_id']:
+                self.host.answer_tool_approval(self.controller.snapshot()['tool_request']['token'], 'decline')
+                self.host._halt('unsupported_capability')
+            else:
+                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+            return
+        try:
+            binding, preview = native_tool_request(message, active['thread_id'], active['turn_id'], self._approval_previews)
+        except ProbeError:
+            self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+            self.host._halt('unsupported_capability')
+            raise
+        self._native_tool = dict(binding=binding, preview=preview,
+                                command=params.get('command'), cwd=params.get('cwd'))
+        self.host.offer_tool_approval(binding, preview)
+
+    def _observe_tool_preview(self, message):
+        params, active = message.get('params', {}), self.host._binding
+        if (active is None or params.get('threadId') != active['thread_id']
+                or params.get('turnId') != active['turn_id']):
+            return
+        method, item = message['method'], params.get('item', {})
+        if method in ('item/started', 'item/completed') and not isinstance(item, dict):
+            self.host._halt('unsupported_capability')
+            raise ProbeError('Malformed native tool item; nothing approved.')
+        if method == 'item/fileChange/patchUpdated':
+            cache_native_patch_preview(self._approval_previews, params.get('itemId'), params.get('changes'))
+        elif method == 'item/started' and item.get('type') == 'fileChange':
+            cache_native_patch_preview(self._approval_previews, item.get('id'), item.get('changes'))
+        elif method in ('item/started', 'item/completed') and isinstance(item.get('id'), str):
+            self._approval_previews.pop(item['id'], None)
+        native = self._native_tool
+        if native is None:
+            return
+        binding = native['binding']
+        changed = (binding['kind'] == 'file_change'
+                   and self._approval_previews.get(binding['item_id']) != native['preview'])
+        if (binding['kind'] == 'command' and method in ('item/started', 'item/completed')
+                and item.get('id') == binding['item_id']):
+            changed = (method == 'item/completed' or item.get('type') != 'commandExecution'
+                       or item.get('command') != native['command'] or item.get('cwd') != native['cwd'])
+        if changed:
+            self.host.answer_tool_approval(self.controller.snapshot()['tool_request']['token'], 'decline')
+
     def _display_answer(self, message):
         binding = self.host._binding
         params = message.get('params', {})
@@ -4037,11 +4144,20 @@ class NativeWorkflowConnection(Connection):
             message = self._events.pop(0)
             self._event_bytes -= len(json.dumps(message).encode())
             if 'id' in message:
+                if self.experimental_tool_approvals and message['method'] in (
+                        'item/commandExecution/requestApproval', 'item/fileChange/requestApproval'):
+                    self._offer_native_tool(message)
+                    continue
                 if message['method'] in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval'):
                     self.send({'id': message['id'], 'result': {'decision': 'decline'}})
                 self.host.observe_native(message)
             else:
-                self.host.observe_native(message)
+                if self.experimental_tool_approvals:
+                    self._observe_tool_preview(message)
+                observed = self.host.observe_native(message)
+                if message['method'] == 'turn/completed' and observed:
+                    self._native_tool = None
+                    self._approval_previews.clear()
                 self._observe_measurement(message)
                 self._display_answer(message)
         if self.stdout_closed:
@@ -5044,7 +5160,7 @@ def check_workflow_account(plan, policy):
 
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
                       experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
-                      check_catalog=False, shared_rechecks=False):
+                      check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     if experimental_rechecks and resume_id is None:
@@ -5109,6 +5225,8 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         preview.write('/recheck แสดงแผน; /confirm-recheck TOKEN ใช้โควตาเพิ่มหนึ่ง verification turn')
         if shared_rechecks:
             preview.write('Private recheck server · /recover-recheck และ /stop-recheck TOKEN ใช้ใน session นี้')
+    if experimental_tool_approvals:
+        preview.write('Experimental tool approvals · exact command/diff · accept once only · no session grants')
     if not execute and not check_catalog:
         preview.write('Preview เท่านั้น ไม่เปิด Codex ไม่ใช้โควตา; --execute-workflow เพื่อเริ่มแบบ opt-in')
         return 0
@@ -5137,7 +5255,9 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         report = check_workflow_account(plan, policy)
         preview.write('Workflow preflight · ' + json.dumps(report, ensure_ascii=True))
         return 0 if report['state'] == 'ready' else 2
-    preview.write('Experimental · read-only/on-request · tool approvals ถูกปฏิเสธ · resume ต้องตรวจ native state ใหม่')
+    preview.write('Experimental · read-only/on-request · '
+                  + ('tool approvals require separate exact consent' if experimental_tool_approvals else 'tool approvals ถูกปฏิเสธ')
+                  + ' · resume ต้องตรวจ native state ใหม่')
     preview.write('ใช้โควตา subscription เมื่อกด /next หรือยืนยัน recheck; พิมพ์ START แล้ว Enter เพื่อยืนยันแผน หรือ CANCEL เพื่อยกเลิก:')
     output.flush()
     if not read_workflow_confirmation(input_stream, preview.write):
@@ -5151,6 +5271,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
             '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'])
         backend.measure_quota = measure_quota
         backend.shared_rechecks = shared_rechecks
+        backend.experimental_tool_approvals = experimental_tool_approvals
         if resume_id is None:
             host = backend.connect(controller, os.getcwd(), policy, store=store)
         else:
@@ -5502,6 +5623,8 @@ def main():
                         help='experimental tool-check resume; /confirm-recheck consumes an extra model turn; native threads retained')
     parser.add_argument('--experimental-shared-rechecks', action='store_true',
                         help='experimental private recheck server with recovery inside the attached workflow')
+    parser.add_argument('--experimental-tool-approvals', action='store_true',
+                        help='experimental workflow accept-once command/diff UI; separate from model approvals')
     modes.add_argument('--sessions', action='store_true', help='list local sessions without connecting to Codex')
     modes.add_argument('--show-workflow', metavar='SESSION_ID', help='inspect a cached workflow without resuming it')
     modes.add_argument('--live', action='store_true', help='manual-model live chat using ChatGPT subscription quota')
@@ -5520,6 +5643,8 @@ def main():
         parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
         parser.error('--experimental-rechecks requires --resume-workflow')
+    if args.experimental_tool_approvals and not (args.workflow or args.resume_workflow):
+        parser.error('--experimental-tool-approvals requires --workflow or --resume-workflow')
     if args.experimental_shared_rechecks and not (args.experimental_rechecks and args.execute_workflow):
         parser.error('--experimental-shared-rechecks requires --experimental-rechecks and --execute-workflow')
     if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
@@ -5580,7 +5705,8 @@ def main():
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
                                      experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
                                      measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl,
-                                     check_catalog=args.check_catalog, shared_rechecks=args.experimental_shared_rechecks)
+                                     check_catalog=args.check_catalog, shared_rechecks=args.experimental_shared_rechecks,
+                                     experimental_tool_approvals=args.experimental_tool_approvals)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

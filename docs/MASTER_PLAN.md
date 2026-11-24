@@ -370,6 +370,13 @@ offering a tool token, and persists a decision before the callback. Cancel, EOF,
 pause, timeout and disconnect decline and interrupt; unknown sends never replay.
 No CLI flag or native acceptance path has been enabled by this offline increment.
 
+Native adapter increment: `--experimental-tool-approvals` now explicitly enables
+the supported command/file-change subset for work turns after execute + START.
+It shares manual request/preview validation, matches the persisted decision and
+native binding before one response, and expires changed actions. Default behavior
+and recheck-child approvals remain decline-only. Synthetic file-effect tests are
+offline verified; live G2 evidence and the full permission matrix remain open.
+
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
 declines the pending request and expires the token, even if the old diff returns.
@@ -421,7 +428,7 @@ checks ใช้ผลเครื่องมือจริง; model review �
 การ revise ขั้นเดิมจำกัด objective/role/effort/reason และไม่ล้าง ID/budget/criteria
 WorkflowHost ผูก attempt กับ thread/turn/item และ approved command/cwd; ไม่ใช้ exit code จากคำสั่งอื่นแทน test
 preflight/dispatch/interrupt ยังเป็น trusted callbacks ไม่มี native transport/command runner ในตัว
-request approval ของ workflow ยังไม่รองรับ: ขอหยุดและไม่ตอบ accept; ultra delegation ยังถูกปิด
+Default workflow request approval ยังปฏิเสธ; experimental tool approval subset ตาม P09 ต้อง opt-in แยก; ultra delegation ยังถูกปิด
 
 ผ่านเมื่อ: simple code, plan-heavy code, document task เดินครบ;
 fail 3 attempts แล้วหยุด, model เปลี่ยนชื่อ step ไม่ reset,

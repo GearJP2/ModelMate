@@ -3153,3 +3153,40 @@ server approval requests, and no public flag enables acceptance. No live inferen
 ran. Next eligible P09 work: connect the hardened native request subset to this
 host/UI path under an explicit experimental gate, then obtain live G2 evidence.
 The complete offline suite passed all 588 tests with sockets enabled and no skips.
+
+### P09 opt-in native workflow approval adapter — MOCK_VERIFIED
+
+`--experimental-tool-approvals` explicitly selects the supported native command/
+file-change subset for work turns. Preview is offline, execute still requires
+START, and each tool request needs its own exact UI decision. Manual chat and
+the adapter share native request/scope validation and bounded patch caching.
+Thread/turn/item/request IDs, controller attempt and action digest must match the
+current native action and saved checkpoint before a single response is sent.
+No session/policy-amendment accept decision or sandbox profile change was added.
+
+Native patch updates and reused/completed item identities invalidate pending
+actions. Duplicate request IDs decline once and stop; overlapping requests do
+not replace the visible action. Unsupported scopes, missing previews, malformed
+or foreign requests cannot obtain acceptance. The response handle is consumed
+before send, so a failed send has unknown outcome and is not retried. Direct
+close with a pending request attempts decline and interruption before cleanup.
+Restored historical decisions never restore native handles or confirmation tokens.
+
+The synthetic native server writes a test-owned marker only after receiving
+accept and independently reading a matching approved decision from disk. Command
+and patch cases show no marker before consent, one response after consent, and
+no task completion from approval alone. Decline, close, patch changes, unsupported
+scope, absent diff, duplicate IDs and foreign requests leave the marker absent.
+Only matching completed command observations supply tool-check evidence.
+
+All five native-permission integration tests, 18 manual approval tests and 21
+workflow-entry tests passed. The full offline suite passed all 594 tests without
+skips with sockets enabled. Final entry tests also checked CLI flag forwarding
+and callback setup; compile checks and `git diff --check` passed. No live inference
+was run. Fake-server effects do not prove live sandbox enforcement or G2.
+
+Default workflow behavior remains decline-only. Recheck child connections do
+not inherit this parent flag and still decline approvals. The supported work-turn
+path is experimental and not live-verified. Next eligible P09 work: an explicitly
+opt-in synthetic verifier covering real native accept/decline, changed actions,
+EOF/cancel and sentinel preservation, followed by user-run live evidence.
