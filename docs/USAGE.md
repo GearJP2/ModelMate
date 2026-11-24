@@ -692,6 +692,8 @@ python3 modelmate.py --inspect-work-turn SESSION_ID
 `last` ที่ Codex ส่งมา โดยเฉพาะ turn ที่เรียกเครื่องมืออาจมีหลาย model responses
 จึงไม่ใช่ token รวมทั้ง turn หากไม่มีเหตุการณ์ที่ตรงกัน ค่าจะเป็น null
 ผลสรุปยังเก็บ `tokenUsage.total` ของ thread ตามที่ Codex ส่งมาแยกต่างหาก
+event ที่มาช้าหลังเริ่ม attempt ถัดไปยังอัปเดตรายการของ turn เดิมได้ หากเป็น
+turn ที่ส่งใน CLI session นี้; event ของ thread อื่นหรือ turn ที่ไม่รู้จักจะถูกละไว้
 
 เพิ่ม `--metrics-jsonl FILE` คู่กับ `--execute-workflow` เพื่อบันทึกสรุปหนึ่ง
 บรรทัดเมื่อจบ CLI session ที่เริ่มแล้ว ใช้ไฟล์เดิมหลายรอบเพื่อสะสมข้อมูลได้

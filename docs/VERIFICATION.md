@@ -3299,3 +3299,22 @@ user-run P09/G2 result remains pending. Next gate remains the scoped live comman
 approval verifier, with CLI version and source hashes recorded from that run.
 The full offline suite passed all 608 tests with socket permissions enabled and
 no skips. No inference evidence is inferred from the schema comparison or suite.
+
+### P14 delayed work-turn metrics — MOCK_VERIFIED
+
+Previously the metrics observer accepted only the most recently dispatched turn.
+A delayed usage event for an earlier attempt was discarded after the next start.
+It now keeps process-local measurement bindings for all work turns dispatched in
+the current CLI session, routing usage, reroute and terminal observations to the
+matching attempt. This does not alter controller evidence or permission grants.
+Native IDs remain internal and are absent from measurement output.
+
+The focused metrics suite passed eight tests, including a regression with two
+bound turns: delayed usage and failed terminal update the earlier attempt,
+duplicate terminal events count once, unknown/foreign bindings are ignored, and
+the later attempt stays unknown. Compile checks passed. No live inference or
+external network request was run. Elapsed time remains client-observed through
+receipt of terminal status, not isolated model compute time. P14 remains open
+for the missing telemetry and live evidence listed in RELEASE_CHECKLIST.md.
+The complete offline suite passed all 609 tests with test-owned sockets enabled
+and no skips. `git diff --check` passed.

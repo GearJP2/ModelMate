@@ -3732,6 +3732,7 @@ class NativeWorkflowConnection(Connection):
         self.measure_quota = False
         self._quota_first = self._quota_ready = None
         self._measured_turn = self._latest_usage = None
+        self._measured_turns = {}
         self._work_turn_measurements = []
 
     def workflow_measurements(self):
@@ -4013,16 +4014,20 @@ class NativeWorkflowConnection(Connection):
             record['turn_id'] = turn['id']
             self.store.save(record)
         self._measured_turn['id'] = turn['id']
+        self._measured_turns[turn['id']] = self._measured_turn
         return {'thread_id': self.thread_id, 'turn_id': turn['id']}
 
     def _observe_measurement(self, message):
-        current = self._measured_turn
         params = message.get('params')
-        if (current is None or current['id'] is None or not isinstance(params, dict)
-                or params.get('threadId') != self.thread_id):
+        if not isinstance(params, dict) or params.get('threadId') != self.thread_id:
+            return
+        method = message['method']
+        turn = params.get('turn')
+        turn_id = turn.get('id') if method == 'turn/completed' and isinstance(turn, dict) else params.get('turnId')
+        current = self._measured_turns.get(turn_id) if isinstance(turn_id, str) else None
+        if current is None:
             return
         observed = current['observation']
-        method = message['method']
         if method == 'thread/tokenUsage/updated' and params.get('turnId') == current['id']:
             snapshot = native_token_snapshot(params.get('tokenUsage'))
             if snapshot is not None:

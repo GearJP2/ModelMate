@@ -536,6 +536,13 @@ no duplicate completed-event counts, log write failure ไม่ทำงาน�
 reporting ไม่สร้าง extra inference เพื่อสรุปสถิติ
 ไม่รวม: ประเมินราคา API สำหรับ subscription หรือ token-to-quota สูตรที่ไม่ยืนยัน
 
+P14 late-event correction: measurements now retain in-memory bindings for each
+dispatched work turn in the current CLI session. A delayed usage, reroute or
+terminal event updates its own attempt after another turn starts; foreign and
+unknown bindings remain ignored. Native IDs are not added to metrics output.
+The regression check is offline only; actual dispatch telemetry and release
+evidence remain pending.
+
 ### P15 — Installation และ user guide
 
 ไฟล์: README.md, docs/INSTALL.md, modelmate.py CLI help
