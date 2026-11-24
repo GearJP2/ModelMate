@@ -6,9 +6,10 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
-from modelmate import ChatShell, NativeWorkflowConnection, ProbeError, SessionStore, WorkflowController
-from test_routing import CATALOG, PLAN, POLICY
+from modelmate import ChatShell, NativeWorkflowConnection, ProbeError, SessionStore, WorkflowController, run_chat
+from test_routing import CATALOG, PLAN, POLICY, QUOTA
 
 
 SERVER = r'''
@@ -33,7 +34,7 @@ for line in sys.stdin:
     item.update(status='completed',exitCode=0)
     emit({'method':'item/completed','params':{'threadId':'thread','turnId':'1','item':item}})
   elif pending is not None:assert pending['status']=='declined'
-  if mode not in ('scope','no_preview','duplicate'):
+  if mode not in ('scope','no_preview','duplicate') and not mode.startswith('hold_'):
    emit({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':'1','status':'completed'}}})
   continue
  if 'id' not in req:continue
@@ -160,3 +161,77 @@ class NativePermissionTests(unittest.TestCase):
         backend.close()
         self.assertFalse((project / 'effect').exists())
         self.assertEqual([r['result']['decision'] for r in self.records(trace) if 'result' in r], ['decline'])
+
+    def test_native_cancel_exit_timeout_and_disconnect_decline_then_observe_interruption(self):
+        for event in ('cancel', 'exit', 'timeout', 'disconnect'):
+            with self.subTest(event=event):
+                backend, c, shell, _, project, trace = self.start('hold_' + event)
+                self.pump(backend, lambda: c.state == 'AWAITING_TOOL_APPROVAL')
+                token = shell.pending['token']
+                if event == 'timeout':
+                    backend.host._deadline = time.monotonic() - 1
+                    with self.assertRaisesRegex(ProbeError, 'timed out'):backend.tick()
+                elif event == 'disconnect':backend.host.disconnect()
+                else:shell.cancel(exit_after=event == 'exit')
+                self.pump(backend, lambda: backend.host._terminal is not None)
+                self.assertEqual(backend.host._terminal, 'interrupted')
+                self.assertFalse((project / 'effect').exists())
+                with self.assertRaises(ProbeError):backend.host.answer_tool_approval(token, 'approve')
+                backend.close()
+                records = self.records(trace)
+                self.assertEqual([r['result']['decision'] for r in records if 'result' in r], ['decline'])
+                self.assertEqual(sum(r.get('method') == 'turn/interrupt' for r in records), 1)
+                self.assertEqual(sum(r.get('method') == 'turn/start' for r in records), 1)
+                self.assertNotEqual(c.state, 'DONE')
+
+    def test_native_eof_declines_before_exit_and_waits_for_terminal_confirmation(self):
+        backend, c, _, _, project, trace = self.start('hold_eof')
+        self.pump(backend, lambda: c.state == 'AWAITING_TOOL_APPROVAL')
+        backend.host.on_change = None
+        with tempfile.TemporaryFile() as source:
+            self.assertEqual(run_chat(source, io.StringIO(), backend=backend,
+                workflow=c, workflow_action=backend.host), 0)
+        self.assertEqual(backend.host._terminal, 'interrupted')
+        self.assertFalse((project / 'effect').exists())
+        self.assertEqual([r['result']['decision'] for r in self.records(trace) if 'result' in r], ['decline'])
+
+    def test_native_process_loss_keeps_unresolved_attempt_and_never_restores_permission(self):
+        backend, c, shell, store, project, trace = self.start('hold_lost')
+        self.pump(backend, lambda: c.state == 'AWAITING_TOOL_APPROVAL')
+        token, sid = shell.pending['token'], backend.session_id
+        backend.process.kill();backend.process.wait(timeout=2)
+        backend.read_ready(backend.process.stdout)
+        with self.assertRaisesRegex(ProbeError, 'disconnected'):backend.drain()
+        backend.close()
+        self.assertTrue(all(stream.closed for stream in
+                            (backend.process.stdin, backend.process.stdout, backend.process.stderr)))
+        self.assertIsNone(backend.host._terminal)
+        self.assertFalse((project / 'effect').exists())
+        with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY) as restored:
+            self.assertEqual((restored.state, restored.reason), ('PAUSED', 'outcome_unknown'))
+            self.assertEqual(restored.snapshot()['active_attempt']['status'], 'running')
+            self.assertEqual(restored.snapshot()['steps'][0]['attempts'], 1)
+            request = restored.export_checkpoint()['tool_request']
+            with self.assertRaises(ProbeError):
+                restored.answer_tool_approval(token, 'approve', request['binding'], request['action_digest'])
+        self.assertNotIn('accept', [r['result']['decision'] for r in self.records(trace) if 'result' in r])
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records(trace)), 1)
+
+    def test_lost_accept_send_result_is_not_replayed_and_does_not_imply_rollback(self):
+        backend, c, shell, _, project, trace = self.start('hold_send')
+        self.pump(backend, lambda: c.state == 'AWAITING_TOOL_APPROVAL')
+        token = shell.pending['token']
+        send = backend.send
+        def lost_result(message):
+            send(message)
+            if message.get('result', {}).get('decision') == 'accept':
+                raise OSError('synthetic failure after writing acceptance')
+        with patch.object(backend, 'send', side_effect=lost_result):
+            with self.assertRaises(OSError):backend.host.answer_tool_approval(token, 'approve')
+        self.assertEqual(c.reason, 'connection_lost')
+        with self.assertRaises(ProbeError):backend.host.answer_tool_approval(token, 'approve')
+        backend.request('account/read')
+        self.assertTrue((project / 'effect').exists())
+        self.assertNotEqual(c.state, 'DONE')
+        self.assertEqual([r['result']['decision'] for r in self.records(trace) if 'result' in r], ['accept'])
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records(trace)), 1)

@@ -3239,3 +3239,32 @@ accept/decline path, not patch approval, every G2 permission path, process-loss
 recovery, interactive timing or a no-tools boundary. Raw traces, local IDs and
 reports must not be committed. Next P09 gate: user-run results for this exact
 verifier, followed by separately scoped patch/cancel/failure-path evidence.
+
+### P09 native cancellation, process loss and shutdown input — MOCK_VERIFIED
+
+Expanded the synthetic native handshake tests to cover cancel, exit, timeout,
+disconnect and actual input EOF while a command approval is pending. Each sends
+one decline and one interrupt, observes an interrupted terminal event, performs
+no marker effect and sends no extra turn. Old tokens cannot be accepted later.
+
+Killing the fake server while waiting reproduced a shared cleanup bug:
+Connection.close raised BrokenPipeError again while closing buffered stdin and
+stopped before closing output pipes. Shutdown now closes the raw input pipe
+before its wrapper, discarding any unsent buffered action. A forked-reader test
+keeps a synthetic reader alive after the server leader exits; it receives EOF
+with zero bytes, rather than a late buffered action. All three pipes close.
+The dead-server workflow reopens with its original running attempt unresolved,
+the same attempt count, no restored permission and no replay.
+
+A separate test loses the client result after an accept response was actually
+written. The fake server performs the authorized file effect, while the client
+pauses with connection_lost and cannot resend the consumed acceptance. This
+explicitly does not claim that a connection error rolls back an accepted action.
+
+All nine native-permission tests and nine protocol tests passed. Compile checks
+and `git diff --check` passed. No live inference or network request was run; these
+are local synthetic processes and test-owned effects. The shared close change
+applies to diagnostics and both native transports' stdio callers. Next eligible
+P09 gate remains the user-run command-approval verifier; live cancellation and
+other G2 paths still need scoped evidence.
+The complete offline suite passed all 607 tests with sockets enabled and no skips.

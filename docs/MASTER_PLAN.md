@@ -380,6 +380,10 @@ offline verified; live G2 evidence and the full permission matrix remain open.
 command accept/decline check. Its offline tests require an observed exact request,
 no early marker/completion, one durable decision and matching native command
 completion after acceptance. No approval event is inconclusive, not a pass.
+Native cancellation/loss coverage now exercises real synthetic pipes for cancel,
+exit, EOF, timeout and disconnect, plus server death and a lost accept-send result.
+Shared shutdown discards buffered stdin before closing it, preventing unsent
+actions from being flushed to a surviving reader. Live gates remain unverified.
 
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately

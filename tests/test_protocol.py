@@ -1,6 +1,10 @@
 """Offline transport checks against small JSONL subprocesses."""
 import subprocess
+import os
+from pathlib import Path
+import signal
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import Mock
@@ -9,6 +13,37 @@ from modelmate import Connection, NativeWorkflowConnection, NativeRecheckConnect
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_close_discards_buffered_input_instead_of_flushing_to_a_surviving_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            captured = Path(directory) / 'captured'
+            source = '''import json,os,sys,time
+from pathlib import Path
+pid=os.fork()
+if pid==0:
+ data=sys.stdin.buffer.read()
+ Path(sys.argv[1]).write_bytes(data)
+ os._exit(0)
+print(json.dumps({'method':'synthetic/ready','params':{'pid':pid}}),flush=True)
+time.sleep(30)
+'''
+            c = Connection([sys.executable, '-u', '-c', source, str(captured)], 1)
+            self.addCleanup(c.close)
+            pid = c.receive(time.monotonic() + 2)['params']['pid']
+            def cleanup_reader():
+                try:os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:pass
+            try:
+                c.process.stdin.write(b'UNSENT_ACTION\n')
+                c.close()
+                deadline = time.monotonic() + 2
+                while not captured.exists() and time.monotonic() < deadline:time.sleep(.01)
+                self.assertTrue(captured.exists(), 'Reader did not receive EOF.')
+                self.assertEqual(captured.read_bytes(), b'')
+                self.assertTrue(all(stream.closed for stream in
+                                    (c.process.stdin, c.process.stdout, c.process.stderr)))
+            finally:
+                cleanup_reader()
+
     def test_standalone_commands_cannot_bypass_workflow_permission_gate(self):
         # No server is needed: unsupported requests must fail before any RPC send.
         for connection_type in (Connection, NativeWorkflowConnection, NativeRecheckConnection, RecheckRecoveryConnection):

@@ -329,6 +329,7 @@ class Connection:
             self.process.kill()
             self.process.wait()
         self.selector.close()
+        self.process.stdin.raw.close()  # Discard unsent input; shutdown must not replay a failed action.
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             stream.close()
 
