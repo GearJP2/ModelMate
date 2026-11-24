@@ -358,6 +358,15 @@ WorkflowHost รับ executor_stream ผ่าน selector แยกจาก 
 
 ### P09 — Tool approvals
 
+Manual patch approval hardening: each token retains its thread/turn/item and
+displayed diff. A changed, invalid, completed or type-reused item immediately
+declines the pending request and expires the token, even if the old diff returns.
+Each displayed change must contain a nonempty path and diff. Offline evidence is
+in VERIFICATION.md; workflow approval acceptance and the full live G2 matrix are
+still gated.
+Duplicate pending request IDs also decline once and expire the original token;
+they cannot later receive an accept through the stale confirmation.
+
 ไฟล์: modelmate.py, tests/test_permissions.py และ integration fixtures
 Implement กลไกที่ P03 พิสูจน์แล้วเท่านั้น
 แสดง exact command/cwd หรือ patch ก่อนถาม accept-once/decline

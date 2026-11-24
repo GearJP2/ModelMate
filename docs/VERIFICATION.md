@@ -3038,3 +3038,28 @@ audit work; no dependency or release gate is marked passed.
 Documentation-only audit: `git diff --check` passed. Referenced test files were
 checked for existence; no tests, web lookup or inference were rerun for this
 documentation change. Existing verification records retain their original scope.
+
+### P09 patch preview identity and token invalidation — MOCK_VERIFIED
+
+Inspection found that the manual native shell retained a usable approval token
+after a file-change item's preview changed. Tokens now retain their original
+thread/turn/item binding and displayed patch. New events that change or invalidate
+the diff, reuse the item identity for another type, or complete the item decline
+the pending request and expire its token immediately. Reverting to the old diff
+does not revive the token. An unchanged repeated preview preserves one-use
+approval. An additional check at decision time refuses mismatched cached patches.
+Malformed change entries without a nonempty path and diff cannot supply a preview.
+
+The regression covers changed diff, invalid changes, missing diff, changed item
+type, completion and unchanged-repeat cases. It checks the exact decline/accept
+response, one response only, stale-token rejection and non-revival after restoring
+the original diff. A separate regression repeats a pending command request ID
+with a changed command: the controller sends one decline, clears the visible
+token and rejects any later attempt to accept it. All 15 `test_live.py` offline
+tests passed. Compile checks and
+`git diff --check` passed. No live inference ran and no workflow approval path was
+enabled. Next eligible P09 work: reuse the hardened approval boundary in a gated
+workflow adapter, retaining independent model/tool approvals and unsupported-path
+denial; live permission matrix evidence remains required.
+The full `python3 -m unittest discover -s tests -v` run passed all 570 tests
+without skips with socket permissions enabled.

@@ -176,6 +176,58 @@ class LiveBackendTests(unittest.TestCase):
         self.assertEqual(c.send.call_args.args[0]['method'], 'turn/interrupt')
         self.assertTrue(c.shell.stopping)
 
+    def test_duplicate_request_id_declines_once_and_expires_old_token(self):
+        c = self.backend();c.turn_id = 'turn';c.shell.active = True
+        request = {'id': 'duplicate', 'method': 'item/commandExecution/requestApproval', 'params': {
+            'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item', 'command': 'printf original', 'cwd': '/tmp'}}
+        c.handle_event(request)
+        token = c.shell.pending['token']
+        request['params']['command'] = 'printf changed'
+        c.handle_event(request)
+        self.assertIsNone(c.shell.pending)
+        c.shell.line('/approve ' + token)
+        c.send.assert_called_once_with({'id': 'duplicate', 'result': {'decision': 'decline'}})
+        with self.assertRaises(ProbeError):c._answer_tool(token, 'approve')
+
+    def test_patch_approval_cannot_accept_a_changed_invalid_or_completed_preview(self):
+        for mutation in ('changed', 'invalid', 'missing_diff', 'changed_type', 'completed', 'unchanged'):
+            with self.subTest(mutation=mutation):
+                c = self.backend();c.turn_id = 'turn';c.shell.active = True
+                item = {'type': 'fileChange', 'id': 'patch',
+                        'changes': [{'path': '/tmp/synthetic', 'diff': '+original'}]}
+                params = {'threadId': 'thread', 'turnId': 'turn', 'item': item}
+                c.handle_event({'method': 'item/started', 'params': params})
+                c.handle_event({'id': 'patch-request', 'method': 'item/fileChange/requestApproval',
+                    'params': {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'patch'}})
+                token = c.shell.pending['token']
+                self.assertIn('+original', c.shell.output.getvalue())
+                if mutation == 'changed':
+                    item['changes'] = [{'path': '/tmp/synthetic', 'diff': '+changed'}]
+                elif mutation == 'invalid':
+                    item['changes'] = None
+                elif mutation == 'missing_diff':
+                    item['changes'] = [{'path': '/tmp/synthetic'}]
+                elif mutation == 'changed_type':
+                    item['type'] = 'commandExecution'
+                c.handle_event({'method': 'item/completed' if mutation == 'completed' else 'item/started',
+                                'params': params})
+                if mutation == 'unchanged':
+                    c.send.assert_not_called()
+                else:
+                    self.assertIsNone(c.shell.pending)
+                    # Returning to the original diff cannot revive an expired token.
+                    item['type'] = 'fileChange'
+                    item['changes'] = [{'path': '/tmp/synthetic', 'diff': '+original'}]
+                    c.handle_event({'method': 'item/started', 'params': params})
+                c.shell.line('/approve ' + token)
+                decision = 'accept' if mutation == 'unchanged' else 'decline'
+                self.assertEqual(c.send.call_args.args[0], {'id': 'patch-request', 'result': {'decision': decision}})
+                self.assertEqual(c.send.call_count, 1)
+                with self.assertRaises(ProbeError):c._answer_tool(token, 'approve')
+                if mutation != 'unchanged':
+                    self.assertIsNone(c.shell.pending)
+                    self.assertIn('fresh preview', c.shell.output.getvalue())
+
     def test_pending_tool_is_declined_on_cancel_and_token_expires(self):
         c = self.backend();c.turn_id = 'turn';c.shell.active = True
         c.handle_event({'id': 13, 'method': 'item/commandExecution/requestApproval', 'params': {

@@ -3243,12 +3243,26 @@ class LiveChatConnection(Connection):
     def _answer_tool(self, token, choice):
         request = self._approvals.get(token)
         if (request is None or choice not in ('approve', 'decline', 'pause')
-                or request['turn_id'] != self.turn_id):
+                or request['turn_id'] != self.turn_id or request['thread_id'] != self.thread_id):
             raise ProbeError('Stale or invalid tool approval.')
         self._approvals.pop(token)
         self.checkpoint(state='RUNNING', pause_reason=None)
+        if choice == 'approve' and request.get('patch_preview') is not None:
+            if self._previews.get(request['item_id']) != request['patch_preview']:
+                self.send({'id': request['id'], 'result': {'decision': 'decline'}})
+                self.shell.pending = None
+                raise ProbeError('Patch changed or completed after preview; nothing approved. Request a fresh preview.')
         self.send({'id': request['id'], 'result': {
             'decision': 'accept' if choice == 'approve' else 'decline'}})
+
+    def _expire_patch_approvals(self, item_id):
+        for token, request in list(self._approvals.items()):
+            if (request.get('patch_preview') is not None and request['item_id'] == item_id
+                    and self._previews.get(item_id) != request['patch_preview']):
+                self._answer_tool(token, 'decline')
+                if self.shell.pending is not None and self.shell.pending.get('token') == token:
+                    self.shell.pending = None
+                self.shell.write('Patch changed or completed after preview; request a fresh preview.')
 
     def handle_event(self, message):
         import uuid
@@ -3269,6 +3283,13 @@ class LiveChatConnection(Connection):
                 return
             if self._approvals or self.shell.pending:
                 # Never replace a visible approval with a second pending action.
+                for token, request in list(self._approvals.items()):
+                    if request['id'] == message['id']:
+                        self._answer_tool(token, 'decline')
+                        if self.shell.pending is not None and self.shell.pending.get('token') == token:
+                            self.shell.pending = None
+                        self.shell.write('Duplicate approval request ID; previous token expired.')
+                        return
                 self.send({'id': message['id'], 'result': {'decision': 'decline'}})
                 self.shell.write('ปฏิเสธคำขอซ้อนระหว่างรออนุมัติ')
                 return
@@ -3289,7 +3310,9 @@ class LiveChatConnection(Connection):
                 return
             token = uuid.uuid4().hex
             self.checkpoint(state='AWAITING_TOOL_APPROVAL')
-            self._approvals[token] = {'id': message['id'], 'turn_id': self.turn_id}
+            self._approvals[token] = {'id': message['id'], 'thread_id': self.thread_id,
+                'turn_id': self.turn_id, 'item_id': params['itemId'],
+                'patch_preview': preview if method == 'item/fileChange/requestApproval' else None}
             self.shell.event({'type': 'tool_approval', 'token': token, 'preview': preview})
             return
         if method == 'turn/started':
@@ -3309,8 +3332,11 @@ class LiveChatConnection(Connection):
         if method == 'item/started':
             item = params.get('item', {})
             if item.get('type') == 'fileChange' and isinstance(item.get('id'), str):
+                self._previews.pop(item['id'], None)
                 changes = item.get('changes')
-                if isinstance(changes, list) and changes:
+                if (isinstance(changes, list) and changes and all(isinstance(change, dict)
+                        and isinstance(change.get('path'), str) and change['path'].strip()
+                        and isinstance(change.get('diff'), str) and change['diff'].strip() for change in changes)):
                     preview = json.dumps(changes, ensure_ascii=True)
                     if len(preview.encode('utf-8')) <= 65536:
                         self._previews[item['id']] = preview
@@ -3318,6 +3344,10 @@ class LiveChatConnection(Connection):
                         self._previews.pop(item['id'], None)
                     if len(self._previews) > 100:
                         raise ProbeError('Too many pending file changes.')
+                self._expire_patch_approvals(item['id'])
+            elif isinstance(item.get('id'), str) and item['id'] in self._previews:
+                self._previews.pop(item['id'])
+                self._expire_patch_approvals(item['id'])
         elif method == 'item/agentMessage/delta':
             delta, item_id = params.get('delta'), params.get('itemId')
             if not isinstance(delta, str) or not isinstance(item_id, str):
@@ -3329,6 +3359,9 @@ class LiveChatConnection(Connection):
             self.shell.output.flush()
         elif method == 'item/completed':
             item = params.get('item', {})
+            if isinstance(item.get('id'), str) and item['id'] in self._previews:
+                self._previews.pop(item.get('id'), None)
+                self._expire_patch_approvals(item.get('id'))
             if item.get('type') == 'agentMessage' and item.get('id') not in self._streamed:
                 if not isinstance(item.get('text'), str):
                     raise ProbeError('Invalid assistant text.')
