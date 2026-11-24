@@ -3122,3 +3122,34 @@ Compile checks and `git diff --check` passed. No live inference ran. Native
 workflow requests still take the existing decline/stop path: no new execution
 permission or public flag has been enabled. Next eligible P09 work is native/UI
 adapter wiring using the hardened request subset, with live G2 proof still required.
+
+### P09 workflow host and UI tool-decision wiring — MOCK_VERIFIED
+
+WorkflowHost accepts an optional trusted tool-response callback. A native adapter
+can offer a validated action only for the host's active thread/turn and running
+controller attempt. The bounded, terminal-safe full preview is hashed by the host
+and bound to the controller request. ChatShell reads that authoritative request,
+obtains the unchanged host preview and displays it before exposing the tool token.
+The native adapter is still responsible for validating the action's protocol
+schema and ensuring the preview represents the exact executable action.
+
+Tool `/approve`, `/decline` and `/pause` route through the host and durable
+controller decision before a response callback. `--next` remains a model-choice
+option and is rejected for tool approval. Model text cannot invoke the command,
+and approval does not start another turn or create check evidence. Changed
+preview or native binding expires the confirmation. A failed response pauses
+with connection_lost and cannot be resent using the consumed token.
+
+Cancel, exit, explicit pause, deadline expiry and disconnect attempt one decline
+and one native interrupt. A real input-EOF/selector test confirms that an
+interrupted event is observed before exit, without marking the task DONE. Other
+focused tests cover preview-before-token order, stale and wrong tokens, model
+output injection, exact one-use acceptance, unsafe previews, unsupported adapters,
+bound-action changes and response-send failure. All 15 test_permissions.py tests
+passed. Compile checks and `git diff --check` passed.
+
+This is trusted-host/UI integration only. NativeWorkflowConnection still declines
+server approval requests, and no public flag enables acceptance. No live inference
+ran. Next eligible P09 work: connect the hardened native request subset to this
+host/UI path under an explicit experimental gate, then obtain live G2 evidence.
+The complete offline suite passed all 588 tests with sockets enabled and no skips.

@@ -1441,13 +1441,15 @@ def observed_command_matches(observed, expected):
 
 
 class WorkflowHost:
-    """Trusted executor adapter. No built-in native transport, tool approval or process runner."""
+    """Trusted executor adapter with optional tool responses; no built-in transport or runner."""
 
-    def __init__(self, controller, preflight, dispatch, interrupt, timeout=120):
+    def __init__(self, controller, preflight, dispatch, interrupt, timeout=120, *, tool_response=None):
         if not isinstance(controller, WorkflowController) or not all(callable(fn) for fn in (preflight, dispatch, interrupt)):
             raise ProbeError('Workflow host requires a controller and trusted transport callbacks.')
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ProbeError('Workflow host timeout must be finite and positive.')
+        if tool_response is not None and not callable(tool_response):
+            raise ProbeError('Invalid trusted tool response callback.')
         self.controller = controller
         self.preflight, self.dispatch, self.interrupt = preflight, dispatch, interrupt
         self.timeout = timeout
@@ -1461,6 +1463,55 @@ class WorkflowHost:
         self._deadline = None
         self._starting = self._interrupted = False
         self._connected = True
+        self._tool_response, self._tool_action = tool_response, None
+
+    def offer_tool_approval(self, binding, preview):
+        """Trusted native adapter supplies a fully validated action; this never accepts it."""
+        if (self._tool_response is None or not self._connected or self._starting
+                or self._binding is None or self._terminal is not None
+                or not isinstance(binding, dict)
+                or any(binding.get(key) != self._binding[key] for key in ('thread_id', 'turn_id'))):
+            raise ProbeError('No supported active native tool approval adapter.')
+        if (not isinstance(preview, str) or not preview.strip() or len(preview) > 65536
+                or any(not (32 <= ord(ch) <= 126 or ch == '\n') for ch in preview)):
+            raise ProbeError('Tool preview must be complete, bounded and terminal-safe.')
+        digest = hashlib.sha256(preview.encode('ascii')).hexdigest()
+        request = self.controller.request_tool_approval(self._binding['attempt_id'], binding, digest)
+        self._tool_action = dict(id=request['id'], binding=copy.deepcopy(binding), preview=preview)
+        self._signal()
+        return request
+
+    def tool_preview(self):
+        request = self.controller.snapshot()['tool_request']
+        action = self._tool_action
+        if (self.controller.state != 'AWAITING_TOOL_APPROVAL' or request is None or action is None
+                or request['id'] != action['id'] or request['binding'] != action['binding']
+                or hashlib.sha256(action['preview'].encode('ascii')).hexdigest() != request['action_digest']):
+            if self.controller.state == 'AWAITING_TOOL_APPROVAL':
+                self._tool_action = None
+                self._halt('unsupported_capability')
+            raise ProbeError('No unchanged workflow tool preview is available.')
+        return action['preview']
+
+    def answer_tool_approval(self, token, choice):
+        preview = self.tool_preview()
+        action = self._tool_action
+        if (self._binding is None or self._terminal is not None or (choice == 'approve' and not self._connected)
+                or any(action['binding'][key] != self._binding[key] for key in ('thread_id', 'turn_id'))):
+            self.controller.pause('connection_lost')
+            self._tool_action = None
+            raise ProbeError('Native binding changed; tool confirmation expired.')
+        response = self.controller.answer_tool_approval(token, choice, action['binding'],
+            hashlib.sha256(preview.encode('ascii')).hexdigest())
+        self._tool_action = None
+        try:
+            self._tool_response(response)
+        except BaseException:
+            self._halt('connection_lost')
+            raise
+        if choice == 'pause':
+            self._request_interrupt()
+        self._signal()
 
     def _signal(self):
         if self.on_change is not None:
@@ -1505,7 +1556,11 @@ class WorkflowHost:
     def _request_interrupt(self):
         if self._binding is not None and self._terminal is None and not self._interrupted:
             self._interrupted = True
-            self.interrupt(copy.deepcopy(self._binding))
+            try:
+                if self.controller.state == 'AWAITING_TOOL_APPROVAL' and self._tool_action is not None:
+                    self.answer_tool_approval(self.controller.snapshot()['tool_request']['token'], 'decline')
+            finally:
+                self.interrupt(copy.deepcopy(self._binding))
 
     def _halt(self, reason):
         if reason != 'user_pause':
@@ -2093,6 +2148,7 @@ class ChatShell:
         self.workflow_action = workflow_action
         self.started_at = time.monotonic()
         self._workflow_check_attempt = None
+        self._workflow_tool_shown = None
         self.recheck_backend = self.recheck = self.recheck_pending = None
         self.recheck_stop_pending = None
         self.recheck_commands = {}
@@ -2187,8 +2243,20 @@ class ChatShell:
         self.pending = None
         if state['state'] == 'AWAITING_MODEL_APPROVAL' and request is not None:
             self.pending = {'kind': 'workflow_model', 'token': request['token']}
+        elif state['state'] == 'AWAITING_TOOL_APPROVAL' and isinstance(self.workflow_action, WorkflowHost):
+            tool = state['tool_request']
+            preview = self.workflow_action.tool_preview()
+            shown = (tool['id'], tool['token'], tool['action_digest'])
+            if render or self._workflow_tool_shown != shown:
+                self.write(preview)
+                self.write('Tool approval · accept once only · model approval does not grant tool access')
+                self.write('/approve ' + tool['token'] + ' · /decline ' + tool['token'] + ' · /pause ' + tool['token'])
+                self._workflow_tool_shown = shown
+            self.pending = {'kind': 'workflow_tool', 'token': tool['token']}
         elif state['state'] == 'PAUSED' and not self.active and state['pause_token'] is not None:
             self.pending = {'kind': 'workflow_pause', 'token': state['pause_token']}
+        if state['state'] != 'AWAITING_TOOL_APPROVAL':
+            self._workflow_tool_shown = None
         if not self.active:
             self.stopping = False
             self.stop_deadline = None
@@ -2516,7 +2584,14 @@ class ChatShell:
                 if ((len(values) != 1 and not start_now) or self.pending is None
                         or values[0] != self.pending['token']):
                     raise ProbeError('Invalid or stale workflow choice token.')
-                if self.pending['kind'] == 'workflow_model' and cmd in ('/approve', '/decline', '/pause'):
+                if self.pending['kind'] == 'workflow_tool' and cmd in ('/approve', '/decline', '/pause'):
+                    if start_now:
+                        raise ProbeError('Tool approval accepts once only; --next is a model-approval option.')
+                    self.workflow_action.answer_tool_approval(values[0], cmd[1:])
+                    if cmd == '/pause':
+                        self.cancel()
+                    return
+                elif self.pending['kind'] == 'workflow_model' and cmd in ('/approve', '/decline', '/pause'):
                     if start_now and self.workflow_action is None:
                         raise ProbeError('Workflow executor is unavailable; no attempt consumed or dispatched.')
                     self.workflow.answer_model(values[0], cmd[1:])

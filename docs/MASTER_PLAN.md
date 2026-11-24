@@ -364,6 +364,11 @@ AWAITING_TOOL_APPROVAL transition, exact one-use decisions, expiry on action
 change/pause/completion/restore and persistence-failure freeze are offline-tested.
 Only trusted host/UI calls can reach these APIs. The native workflow adapter is
 not connected to them yet and still declines requests; no live gate is passed.
+Host/UI wiring now supports explicitly supplied trusted preview/response adapters.
+It binds the printable preview digest to the current turn, displays it before
+offering a tool token, and persists a decision before the callback. Cancel, EOF,
+pause, timeout and disconnect decline and interrupt; unknown sends never replay.
+No CLI flag or native acceptance path has been enabled by this offline increment.
 
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately

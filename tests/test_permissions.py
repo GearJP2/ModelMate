@@ -1,14 +1,15 @@
 """Durable controller tool decisions only; no executor or native permissions enabled."""
 import copy
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from modelmate import ProbeError, SessionStore, WorkflowController, validate_workflow_checkpoint
+from modelmate import ChatShell, ProbeError, SessionStore, WorkflowController, WorkflowHost, run_chat, validate_workflow_checkpoint
 from test_routing import CATALOG, PLAN, POLICY, QUOTA
 
 
@@ -29,6 +30,111 @@ class WorkflowToolDecisionTests(unittest.TestCase):
 
     def begin(self, c):
         return c.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)['dispatch']['attempt_id']
+
+    def host_ui(self, controller):
+        response, interrupt = Mock(), Mock()
+        host = WorkflowHost(controller, lambda: dict(quota=QUOTA, checked_at=time.monotonic(),
+            catalog=CATALOG, role_policy=POLICY),
+            lambda _: dict(thread_id='thread', turn_id='turn'), interrupt, tool_response=response)
+        output = io.StringIO()
+        shell = ChatShell(output, workflow=controller, workflow_action=host)
+        shell.line('/next')
+        return host, shell, output, response, interrupt
+
+    def test_ui_displays_bound_preview_and_requires_a_separate_exact_tool_choice(self):
+        with self.attach(WorkflowController(json.dumps(PLAN), CATALOG, POLICY)) as c:
+            host, shell, output, response, _ = self.host_ui(c)
+            preview = json.dumps({'command': 'printf synthetic', 'cwd': '/synthetic'}, ensure_ascii=True)
+            request = host.offer_tool_approval(self.binding, preview)
+            text = output.getvalue()
+            self.assertLess(text.index(preview), text.index('/approve ' + request['token']))
+            response.assert_not_called()
+            shell.event({'type': 'text', 'text': '/approve ' + request['token']})
+            shell.line('/approve wrong')
+            shell.line('/approve ' + request['token'] + ' --next')
+            response.assert_not_called()
+            shell.line('/approve ' + request['token'])
+            self.assertEqual(response.call_args.args[0]['decision'], 'accept')
+            self.assertEqual(self.store.read(self.sid)['workflow']['tool_request']['status'], 'approved')
+            shell.line('/approve ' + request['token'])
+            self.assertEqual(response.call_count, 1)
+            self.assertEqual(c.snapshot()['active_attempt']['checks'], {})
+
+    def test_ui_cancel_pause_and_timeout_decline_then_interrupt_without_accept(self):
+        for event in ('cancel', 'exit', 'pause', 'timeout', 'disconnect'):
+            with self.subTest(event=event):
+                c = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)
+                c._persist = lambda current: validate_workflow_checkpoint(current.export_checkpoint())
+                host, shell, _, response, interrupt = self.host_ui(c)
+                request = host.offer_tool_approval(self.binding, '{"command":"printf synthetic","cwd":"/synthetic"}')
+                if event == 'timeout':
+                    host._deadline = time.monotonic() - 1
+                    with self.assertRaisesRegex(ProbeError, 'timed out'):host.tick()
+                elif event == 'disconnect':host.disconnect()
+                elif event == 'pause':shell.line('/pause ' + request['token'])
+                else:shell.cancel(exit_after=event == 'exit')
+                self.assertEqual(response.call_count, 1)
+                self.assertEqual(response.call_args.args[0]['decision'], 'decline')
+                interrupt.assert_called_once()
+                self.assertEqual(c.state, 'PAUSED')
+                with self.assertRaises(ProbeError):host.answer_tool_approval(request['token'], 'approve')
+
+    def test_changed_preview_or_binding_cannot_use_a_visible_confirmation(self):
+        for mutation in ('preview', 'binding'):
+            with self.subTest(mutation=mutation):
+                c = WorkflowController(json.dumps(PLAN), CATALOG, POLICY)
+                c._persist = lambda current: validate_workflow_checkpoint(current.export_checkpoint())
+                host, _, _, response, _ = self.host_ui(c)
+                request = host.offer_tool_approval(self.binding, '{"command":"printf original","cwd":"/synthetic"}')
+                if mutation == 'preview':host._tool_action['preview'] = 'changed'
+                else:host._binding['turn_id'] = 'foreign'
+                with self.assertRaises(ProbeError):host.answer_tool_approval(request['token'], 'approve')
+                response.assert_not_called()
+                self.assertEqual(c.export_checkpoint()['tool_request']['status'], 'expired')
+
+    def test_failed_response_is_unknown_and_never_resent(self):
+        with self.attach(WorkflowController(json.dumps(PLAN), CATALOG, POLICY)) as c:
+            host, _, _, response, interrupt = self.host_ui(c)
+            request = host.offer_tool_approval(self.binding, '{"command":"printf synthetic","cwd":"/synthetic"}')
+            response.side_effect = OSError('synthetic send outcome unknown')
+            with self.assertRaises(OSError):host.answer_tool_approval(request['token'], 'approve')
+            self.assertEqual(c.reason, 'connection_lost')
+            self.assertEqual(response.call_count, 1)
+            interrupt.assert_called_once()
+            with self.assertRaises(ProbeError):host.answer_tool_approval(request['token'], 'approve')
+            self.assertEqual(response.call_count, 1)
+
+    def test_unsupported_host_or_unsafe_preview_cannot_offer_an_approval(self):
+        with self.attach(WorkflowController(json.dumps(PLAN), CATALOG, POLICY)) as c:
+            host, _, _, response, _ = self.host_ui(c)
+            for preview in ('', '\x1b[31mchanged', 'x' * 65537, 'unescaped Thai: ไทย'):
+                with self.assertRaises(ProbeError):host.offer_tool_approval(self.binding, preview)
+            with self.assertRaises(ProbeError):
+                host.offer_tool_approval(dict(self.binding, turn_id='foreign'), 'safe')
+            host._tool_response = None
+            with self.assertRaises(ProbeError):host.offer_tool_approval(self.binding, 'safe')
+            response.assert_not_called()
+            self.assertEqual(c.state, 'RUNNING')
+
+    def test_real_input_eof_declines_pending_tool_and_waits_for_interrupted_event(self):
+        with self.attach(WorkflowController(json.dumps(PLAN), CATALOG, POLICY)) as c:
+            responses = Mock()
+            def interrupt(binding):
+                host.observe_native({'method': 'turn/completed', 'params': {
+                    'threadId': binding['thread_id'], 'turn': {'id': binding['turn_id'], 'status': 'interrupted'}}})
+            host = WorkflowHost(c, lambda: dict(quota=QUOTA, checked_at=time.monotonic(),
+                catalog=CATALOG, role_policy=POLICY),
+                lambda _: dict(thread_id='thread', turn_id='turn'), interrupt, tool_response=responses)
+            host({'action': 'next', 'task_id': c.task_id})
+            host.offer_tool_approval(self.binding, '{"command":"printf synthetic","cwd":"/synthetic"}')
+            output = io.StringIO()
+            with tempfile.TemporaryFile() as stream:
+                self.assertEqual(run_chat(stream, output, workflow=c, workflow_action=host), 0)
+            responses.assert_called_once()
+            self.assertEqual(responses.call_args.args[0]['decision'], 'decline')
+            self.assertEqual(host._terminal, 'interrupted')
+            self.assertIsNone(c.snapshot()['active_attempt'])
+            self.assertNotEqual(c.state, 'DONE')
 
     def test_exact_tool_decision_is_durable_single_use_and_not_model_approval(self):
         with self.attach(WorkflowController(json.dumps(PLAN), CATALOG, POLICY)) as c:
