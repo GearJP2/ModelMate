@@ -10,7 +10,7 @@ before requesting subscription turns.
 | Case | Task | Acceptance criteria |
 | --- | --- | --- |
 | C1 | Fix an off-by-one boundary in a list helper | Empty, singleton and end-index regression tests pass. |
-| C2 | Implement an option in a small CLI | Added option works and existing input, help and exit codes stay compatible. |
+| C2 | [Implement an option in a small CLI](#c2-cli-authoring-pilot) | Added option works and existing input, help and exit codes stay compatible. |
 | C3 | Add stable de-duplication to an importer | Order and handling of blank and duplicate rows match fixtures. |
 | C4 | Refactor a parser across modules | Existing API and error cases pass the same fixture suite. |
 | C5 | Migrate a local JSON schema | Old data loads, repeat migration is safe and failed writes preserve originals. |
@@ -88,6 +88,68 @@ in each completed run. The initial baseline exits are recorded separately
 in [VERIFICATION.md](VERIFICATION.md). The independent score was calculated
 from the displayed answers. Both local workflows were paused after exit
 before rubric entry. The comparison covers one synthetic repair-choice task.
+
+## C2 CLI authoring pilot
+
+`prepare --case cli` creates the same incomplete row-printing program and UTF-8
+input in two clean projects. This is an actual file-editing task, not a choice
+between supplied repairs. The requested option is `--limit N`: N is nonnegative,
+blank physical rows count, zero prints nothing, and the default prints all rows.
+Help, input encoding and argparse error exits must remain compatible.
+
+The independent checker is copied outside both candidate projects. Its hash is
+bound into the registered native command, which checks and executes the same
+bounded byte snapshot. It tests default output, zero, option-before-path, blank
+rows, limits beyond input length, negative/noninteger arguments, help, unknown
+options and missing files, plus unchanged input. It emits booleans rather than
+candidate stdout/stderr. Candidate invocations have two-second deadlines and
+bounded temporary output files, retaining stricter host file-size limits. A
+timeout stops the checker without another candidate invocation. This Linux/WSL2
+checker executes the candidate; it is not a hostile-code isolation boundary.
+
+Prepare and preview without authentication, model turns or candidate execution:
+
+```bash
+C2_PILOT="$PWD/examples/routing-pilot.py"
+C2_PAIR="$(python3 "$C2_PILOT" prepare --case cli)"
+read -r -p 'Economy model ID: ' C2_ECONOMY
+read -r -p 'Standard model ID: ' C2_STANDARD
+read -r -p 'Strong model ID: ' C2_STRONG
+python3 "$C2_PILOT" run "$C2_PAIR" routed \
+  --economy "$C2_ECONOMY" --standard "$C2_STANDARD" --strong "$C2_STRONG"
+python3 "$C2_PILOT" run "$C2_PAIR" baseline \
+  --economy "$C2_ECONOMY" --standard "$C2_STANDARD" --strong "$C2_STRONG"
+```
+
+Use three distinct available low-effort bindings and keep them fixed. The routed
+arm suggests economy/low; the baseline requests strong/low. Alternate arm order
+across fresh pairs. For a live arm, append `--execute
+--experimental-tool-approvals` to that arm's run command. This explicitly enables
+the existing experimental accept-once UI; it is not enabled by default. Enter
+START, then `/next`; answer any model grant separately. Inspect each native
+command/diff before approving it. Tool approval never uses `--next`.
+
+The model should edit only rows.py, then run the registered check once. After
+confirmed turn completion use `/check`; on a passing step use `/finish 1=1.1`
+and `/exit`. This requests one initial subscription turn per arm; each permitted
+correction is another explicitly started turn. Keep the initial-plus-two
+correction budget fixed; record failures/unknown outcomes rather than extending
+or replaying them to obtain a pass. C2 uses native command evidence; the `score`
+subcommand remains for answer-only cases. Do not run model-authored candidates
+through a host-side scorer outside the approved native execution path.
+
+Before launch, the helper checks the runtime against this checkout. C2 also
+checks the frozen checker and complete initial project bytes, and refuses an
+arm with existing session state. Changed artifacts are not overwritten. Use the
+original pinned checkout or prepare a fresh pair; inspect/resume existing work
+instead of restarting it. Add `--measure-quota`/`--metrics-jsonl FILE` if desired
+and keep source hashes, sanitized check results, model requests, corrections and
+timing. Functional test success alone is not a quality/savings conclusion: review
+the patch independently and retain the quota/dispatch limitations above.
+
+This case is prepared and offline-tested only. No C2 model pair has been run or
+scored, no routing rule was trained from it, and G2/G5 remain open. The real-task
+calibration/held-out work described in MASTER_PLAN remains separate.
 
 ## Two-step economy pilot
 

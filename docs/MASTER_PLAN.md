@@ -621,6 +621,18 @@ evidence remain pending.
 
 ### P16 — Release candidate และ evaluation
 
+C2 authoring fixture increment: `routing-pilot.py prepare --case cli` prepares
+two identical row-printing CLI projects and a hash-bound frozen checker. The
+model must implement --limit N and retain default/help/error behavior; this is
+not another answer-choice task. The routed arm uses the existing suggestion
+policy and explicit bindings, compared with strong-only. Execution requires
+separate explicit experimental native tool approval opt-in; previews are offline.
+The helper refuses changed runtime/CLI initial artifacts or an already-started
+arm. The checker bounds candidate time/output, keeps stricter host limits and
+cannot be replaced with a self-reported pass. Offline fixture/reference/mutant
+checks pass; no model pair or quality/quota claim exists. This does not replace
+the real-task calibration/held-out deliverable below. See EVALUATION.md.
+
 ไฟล์: tests/, docs/VERIFICATION.md, docs/EVALUATION.md, README.md
 ใช้ชุดงานเริ่มต้น 12 งานสังเคราะห์/ได้รับอนุญาต: code 8, analysis/document 4
 รวมงานง่าย, หลายไฟล์, ความเสี่ยงสูง, ambiguity, review, source-backed writing

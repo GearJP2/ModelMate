@@ -3589,3 +3589,51 @@ without grants. Compile checks passed. No installed Codex inference or network
 request was run; live manual selection and broader automation remain open.
 The full offline suite passed all 652 tests with test-owned sockets enabled and
 no skips. Entry-point compile checks and `git diff --check` passed.
+
+### P16 C2 CLI authoring fixture and frozen acceptance — MOCK_VERIFIED
+
+`examples/routing-pilot.py prepare --case cli` now creates two identical CLI
+projects with an incomplete rows.py and public UTF-8 input containing a blank
+row. C2 requires implementing --limit N while preserving default output, input
+encoding, help description and error exits. The routed arm uses the existing
+test-check suggestion (economy/low); the baseline binds strong/low. Standard
+baseline and economy/strong bindings remain explicit and distinct. There is one
+implementation step, not a supplied repair choice or a mandatory strong review.
+
+The prepared native command binds the trusted checker hash. It reads a bounded
+byte snapshot, checks that hash and executes that same snapshot; changing the
+checker cannot replace acceptance with a model's report. The checker uses
+isolated Python candidate invocations, two-second deadlines and bounded private
+temporary stdout/stderr files. Child file-size caps never raise an existing
+stricter host limit. Timeout stops without another candidate invocation. Fixed
+checks cover default/zero/before-path/blank-row/over-limit output, negative and
+noninteger limits, help, unknown options, missing files and unchanged input.
+Reports contain booleans or sanitized error reasons, not candidate output.
+This is not a hostile-code sandbox or proof of the full G2 permission boundary.
+
+Preview is offline. CLI authoring execution requires both --execute and explicit
+--experimental-tool-approvals, followed by the runtime's START/model/tool gates;
+the helper never enables acceptance silently. The registered checker runs within
+that approved native workflow, not a host-side scorer of model-authored code.
+Before launching any pilot runtime, the helper compares its copy with the
+current checkout. C2 also compares the checker, original candidate/input, plan
+and commands with trusted regenerated fixtures, and rejects an arm that already
+has state. It does not overwrite changed artifacts or restart a prior attempt.
+Old prepared runtimes need their original matching checkout or a fresh pair.
+
+Seven C2 tests and six existing routing-pilot tests passed. Tests use only
+developer-written initial/reference/mutant programs: initial code fails the new
+option, the audited reference passes all eleven booleans, and an off-by-one
+mutant/input mutation fails. Checker replacement is blocked before executing its
+marker write. Other cases verify identical arm inputs/commands, offline previews
+in paths with spaces, explicit approval forwarding, stricter resource limits,
+timeout non-replay, and artifact/state rejection before subprocess launch.
+The first complete offline run passed 658 tests before the additional preflight
+artifact guards were added; focused checks then passed with those guards and
+bounded reads. Compile checks and `git diff --check` passed.
+
+No model-authored C2 repair, live pair, inference or external request was run.
+There is no C2 quality/quota result and no new trained routing rule. The real-task
+calibration/held-out deliverable, live approval gates and broader G5 remain open.
+The final full offline suite passed all 659 tests with test-owned sockets enabled
+and no skips. Runtime/diagnostic/example compile checks and `git diff --check` passed.
