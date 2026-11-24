@@ -3190,3 +3190,52 @@ not inherit this parent flag and still decline approvals. The supported work-tur
 path is experimental and not live-verified. Next eligible P09 work: an explicitly
 opt-in synthetic verifier covering real native accept/decline, changed actions,
 EOF/cancel and sentinel preservation, followed by user-run live evidence.
+
+### P09 scoped native command-approval verifier — MOCK_VERIFIED
+
+Prepared an opt-in verifier with at most two synthetic turns in separate durable
+scratch projects. The first case may accept exactly one registered printf command
+that writes a random synthetic line to approval-marker.txt in that case's cwd.
+The second case declines its corresponding command. It accepts the literal
+command or the runtime's supported exact shell-argv wrapper, never rewritten
+shell code. Unexpected command/cwd/kind, missing approval or additional requests
+cannot produce a passing report and are not retried.
+
+Before acceptance, the harness checks that the full bound preview was displayed,
+the marker is absent, the sentinel/project file scope is intact, and no registered
+command completion preceded consent. Its send tripwire allows accept only for
+the explicitly armed request ID/digest and approved controller status. A second
+use of the token must leave both the checkpoint and response count unchanged.
+After acceptance it requires exact marker content, a matching native item and
+observed exit code 0 on a completed turn. After decline it requires terminal
+status, absent marker and intact sentinel. Historical decisions must match disk;
+approval alone must not mark the task DONE.
+
+Eight offline probe tests passed: success, missing approval, unexpected command,
+early file effect, early command completion with absent marker, missing native
+completion despite a marker, unarmed-accept blocking and CLI opt-in/partial-result
+exit status. Fake processes simulate both sides; no installed Codex inference or
+web request was run. Compile checks and `git diff --check` passed.
+The complete offline suite passed all 602 tests with sockets enabled and no skips;
+the focused verifier suite also passed after the final accept-tripwire checks.
+
+User-run live command (up to two subscription turns; explicitly authorizes only
+the bounded synthetic marker write above, then a denial; retains scratch and
+native threads):
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-workflow-approvals gpt-6.1-sol
+```
+
+Use a current available model supporting low effort. Keep the CLI version and
+returned runtime/verifier hashes with sanitized results. All seven
+WORKFLOW_APPROVAL_KEYS checks must be passed for exit 0. Missing approvals may
+reflect native sandbox-permitted behavior; they do not prove this approval path.
+Do not expand permissions to force a pass or rerun inference merely for tests.
+
+This is not live-verified. Even a pass covers only the registered command
+accept/decline path, not patch approval, every G2 permission path, process-loss
+recovery, interactive timing or a no-tools boundary. Raw traces, local IDs and
+reports must not be committed. Next P09 gate: user-run results for this exact
+verifier, followed by separately scoped patch/cancel/failure-path evidence.

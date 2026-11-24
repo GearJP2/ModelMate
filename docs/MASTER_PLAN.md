@@ -376,6 +376,10 @@ It shares manual request/preview validation, matches the persisted decision and
 native binding before one response, and expires changed actions. Default behavior
 and recheck-child approvals remain decline-only. Synthetic file-effect tests are
 offline verified; live G2 evidence and the full permission matrix remain open.
+`verify.py --run-live --probe-workflow-approvals MODEL` is prepared for a scoped
+command accept/decline check. Its offline tests require an observed exact request,
+no early marker/completion, one durable decision and matching native command
+completion after acceptance. No approval event is inconclusive, not a pass.
 
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
