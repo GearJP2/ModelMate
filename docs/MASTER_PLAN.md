@@ -427,6 +427,10 @@ with offline coverage for active-owner checks, shutdown, durable unknown state,
 and blocking work/recheck replay. Live execution remains user-run and unverified.
 Owned-server cleanup now terminates its process group even if the leader exited
 first; a regression reproduces and fixes a surviving SIGTERM-resistant descendant.
+Experimental shared-recheck CLI now has offline pseudoterminal coverage from
+main/START through disconnect, recovery, cancelled/stale STOP tokens and exit.
+The test uses synthetic stdio substitutes for shared transports; live interactive
+and server-loss gates remain unverified.
 
 ไฟล์: modelmate.py, tests/test_lifecycle.py
 ขอบเขตที่เริ่มได้โดยไม่ใช้ P10: manual live chat checkpoints, resume และ deletion

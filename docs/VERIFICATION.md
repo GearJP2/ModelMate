@@ -2952,3 +2952,28 @@ This covers local descendants that remain in the owned process group. It does
 not establish remote cancellation, descendants that deliberately leave that
 group, or live Codex server-loss behavior. Next eligible P12 gate remains the
 user-run `--terminate-recheck-server` command above against this updated runtime.
+
+### P12 experimental shared CLI on terminal input — MOCK_VERIFIED
+
+A subprocess test invokes `modelmate.main` with experimental shared-recheck resume
+flags and a real pseudoterminal for stdin, capturing stdout/stderr through pipes.
+It drives START, recheck preview and explicit confirmation through the actual CLI
+and selector loop. Before START no backend starts; before recheck confirmation no
+child starts. A synthetic recheck disconnect leaves the parent available for
+status and recovery commands. Cancelling a STOP preview makes its token invalid;
+a fresh preview permits one exact interrupt, and reusing that token is rejected.
+Exit leaves an interrupted reconcile event without marking the workflow DONE.
+The synthetic traces contain one recheck `turn/start`, no replay of the work turn,
+and exactly one `turn/interrupt` for the retained recheck binding.
+
+`python3 -m unittest discover -s tests -p test_recheck_ui.py -v` passed all 23
+tests. The updated shared synthetic fixture was also checked with the native
+recheck tests: all 42 passed with sockets enabled (the initial restricted run
+skipped one socket test). `git diff --check` passed. The full suite was not rerun
+because only tests/fixtures and docs changed; both consumers of the fixture passed.
+This test substitutes stdio fake servers for WebSocket clients
+and the private server context; real socket/process ownership has separate
+transport tests. It does not prove interactive live Codex behavior, actual
+WebSocket approval routing, or process-loss recovery. Runtime code is unchanged.
+Next eligible P12 gate remains user-run server-loss evidence, followed by scoped
+live interactive CLI verification.

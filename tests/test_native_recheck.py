@@ -61,10 +61,16 @@ for line in sys.stdin:
    'rateLimits':{'primary':{'usedPercent':100 if mode=='quota_before_turn' and quota_reads>=3 else 5}}}
  elif method=='thread/read':
   result={'thread':thread(params['threadId'])}
+  if mode=='shared_observer' and params['threadId']==tid:
+   stopped=any(json.loads(row).get('method')=='turn/interrupt' for row in Path(trace).read_text().splitlines())
+   result['thread']['status']={'type':'idle' if stopped else 'active'}
   if mode=='work_project':result['thread']['cwd']='/foreign'
   if mode=='work_busy':result['thread']['status']={'type':'active'}
  elif method=='thread/turns/list':
   result={'data':[{'id':'work-turn','status':'completed'}]}
+  if mode=='shared_observer' and params['threadId']==tid:
+   stopped=any(json.loads(row).get('method')=='turn/interrupt' for row in Path(trace).read_text().splitlines())
+   result={'data':[{'id':turn,'status':'interrupted' if stopped else 'inProgress'}]}
   if mode=='recover_lost_reply':
    accepted=[r['params'] for line in Path(trace).read_text().splitlines()
              if (r:=json.loads(line))['method']=='turn/start']

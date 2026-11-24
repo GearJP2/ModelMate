@@ -47,6 +47,40 @@ finally:
 raise SystemExit(status)
 '''
 
+SHARED_DRIVER = r'''
+import json, os, sys
+from contextlib import nullcontext
+from pathlib import Path
+from unittest.mock import patch
+import modelmate
+from test_native_recheck import SERVER
+project,state,sid,trace=sys.argv[1:]
+os.chdir(project)
+os.environ['XDG_STATE_HOME']=state
+with modelmate.SessionStore(project,state) as store:
+ checkpoint=str(store.directory/(sid+'.json'))
+checks=Path(project)/'checks.json'
+checks.write_text(json.dumps({'version':1,'checks':[
+ {'step':1,'check':1,'command':'printf synthetic','cwd':project}]}))
+parent=modelmate.NativeWorkflowConnection
+child=modelmate.NativeRecheckConnection
+observer=modelmate.RecheckRecoveryConnection
+def connect(kind, suffix, mode):
+ return kind([sys.executable,'-u','-c',SERVER,trace+suffix,checkpoint,project,mode],1)
+class Parent(parent):
+ def __init__(self,*args,**kwargs):
+  super().__init__([sys.executable,'-u','-c',SERVER,trace,checkpoint,project,'normal'],1)
+with patch('modelmate.NativeWorkflowConnection',Parent), \
+     patch('modelmate.NativeRecheckConnection',side_effect=lambda *a,**k: connect(child,'.child','disconnect')), \
+     patch('modelmate.RecheckRecoveryConnection',side_effect=lambda *a,**k: connect(observer,'.observer','shared_observer')), \
+     patch('modelmate.private_recheck_server',side_effect=lambda *a,**k: nullcontext(object())), \
+     patch('modelmate.UnixWebSocket'):
+ sys.argv=['modelmate.py','--resume-workflow',sid,'--role-model','standard=synthetic-standard',
+  '--check-commands',str(checks),'--execute-workflow','--experimental-rechecks',
+  '--experimental-shared-rechecks']
+ raise SystemExit(modelmate.main())
+'''
+
 
 class RecheckUITests(unittest.TestCase):
     def setUp(self):
@@ -210,6 +244,57 @@ class RecheckUITests(unittest.TestCase):
         out,err=process.communicate(timeout=5)
         self.assertEqual(process.returncode,0,err.decode())
         self.assertEqual(self.store.read(self.sid)['workflow']['state'],'DONE',out.decode())
+
+    def test_shared_cli_on_terminal_recovers_disconnect_and_consumes_stop_once(self):
+        import pty
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        trace = self.root / 'shared-trace'
+        env = dict(os.environ, PYTHONPATH=str(ROOT) + os.pathsep + str(ROOT / 'tests'))
+        try:
+            process = subprocess.Popen([sys.executable, '-u', '-c', SHARED_DRIVER,
+                str(self.project), str(self.home), self.sid, str(trace)],
+                stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        finally:
+            os.close(slave)
+        self.addCleanup(self.stop, process)
+        self.read_until(process, b'CANCEL')
+        self.assertFalse(trace.exists())
+        os.write(master, b'START\n')
+        self.read_until(process, b'/recheck STEP.CHECK')
+        os.write(master, b'/recheck 1.1\n')
+        preview = self.read_until(process, b'/cancel')
+        token = re.search(rb'/confirm-recheck ([0-9a-f]{32})', preview)[1]
+        self.assertFalse(Path(str(trace) + '.child').exists())
+        os.write(master, b'/confirm-recheck ' + token + b'\n')
+        self.read_until(process, b'Recheck connection lost')
+        os.write(master, b'/status\n/recover-recheck\n')
+        recovery = self.read_until(process, b'/stop-recheck ')
+        # Read a complete line if the pipe split the confirmation after its prefix.
+        if re.search(rb'/stop-recheck ([0-9a-f]{32})', recovery) is None:
+            recovery += self.read_until(process, b'/cancel')
+        stop = re.search(rb'/stop-recheck ([0-9a-f]{32})', recovery)[1]
+        os.write(master, b'/cancel\n/stop-recheck ' + stop + b'\n')
+        self.read_until(process, b'Invalid or expired STOP token')
+        os.write(master, b'/recover-recheck\n')
+        recovery = self.read_until(process, b'/cancel')
+        stop = re.search(rb'/stop-recheck ([0-9a-f]{32})', recovery)[1]
+        os.write(master, b'/stop-recheck ' + stop + b'\n')
+        self.read_until(process, b'Recheck recovery')
+        os.write(master, b'/stop-recheck ' + stop + b'\n')
+        self.read_until(process, b'Invalid or expired STOP token')
+        os.write(master, b'/exit\n')
+        output, error = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 0, error.decode())
+        record = self.store.read(self.sid)
+        self.assertNotEqual(record['workflow']['state'], 'DONE', output.decode())
+        self.assertEqual(record['workflow']['rechecks'][-1]['kind'], 'reconcile')
+        self.assertEqual(record['workflow']['rechecks'][-1]['status'], 'interrupted')
+        requests = [json.loads(line) for path in self.root.glob('shared-trace*')
+                    for line in path.read_text().splitlines()]
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in requests), 1)
+        self.assertEqual([r['params'] for r in requests if r.get('method') == 'turn/interrupt'],
+                         [{'threadId': 'recheck-thread', 'turnId': 'recheck-turn'}])
 
     def test_status_and_exit_remain_responsive_while_recheck_waits(self):
         process=self.spawn('hang');self.read_until(process,b'/recheck STEP.CHECK')
