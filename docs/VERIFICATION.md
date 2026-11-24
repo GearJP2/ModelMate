@@ -3372,3 +3372,32 @@ observer query or STOP success is implied. A deterministic exception regression
 checks this behavior; all 30 focused recheck-probe tests passed after the fix.
 The final full offline suite passed all 617 tests with test-owned sockets enabled
 and no skips. Compile checks and `git diff --check` passed.
+
+### P08/P10 explicit pre-start clarification answers — MOCK_VERIFIED
+
+New workflow previews number their pending questions. Repeatable
+`--clarification NUMBER=ANSWER` arguments can answer those questions before
+controller creation. Every question needs exactly one nonempty bounded answer;
+unknown or duplicate numbers, incomplete answers and an oversized resulting
+goal fail before backend access. Answers may contain equals signs and Unicode.
+Question/answer pairs are placed in question order in the effective goal and
+the complete plan is revalidated. The original plan file is not rewritten.
+
+This uses the existing plan schema and durable checkpoint. It does not revise
+steps or success criteria, change the mode, grant tool/model permissions, or
+generate a plan. Resume rejects the option before reading saved state. Answers
+appear in the normal goal preview before START, reach subsequent work-turn goal
+input and are retained as part of the effective plan in local metadata.
+Unanswered plans remain CLARIFYING and cannot execute. Complete answers still
+require START and the usual `/next` and approval gates.
+
+All 26 focused workflow-entry tests passed. New cases cover numbered offline
+preview, out-of-order answers, Thai text and embedded equals, invalid/partial
+and oversized input, cancellation/EOF, resume rejection and CLI forwarding.
+A synthetic native server receives the resolved goal and its checkpoint; an
+answer requesting blanket approval produces no grants or tool-policy change.
+The original source plan remains identical. Compile checks passed. No installed
+Codex inference or external network request was run. Live clarification entry
+and broader automated workflow behavior remain unverified.
+The full offline suite passed all 622 tests with test-owned sockets enabled and
+no skips. Compile checks and `git diff --check` passed.

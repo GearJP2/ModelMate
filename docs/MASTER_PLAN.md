@@ -424,6 +424,15 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 
 ### P10 — Workflow และ correction budget
 
+P08/P10 explicit clarification entry: a new plan can receive one repeatable
+`--clarification NUMBER=ANSWER` for each numbered question before preview/START.
+All questions must be answered; duplicates, unknown numbers, empty/oversized
+answers and an oversized resulting goal fail before backend access. The effective
+goal retains the question/answer pairs and is revalidated before controller
+creation. Steps, criteria, model/tool grants and the source plan file are not
+rewritten. Resume rejects this option. Synthetic native entry/checkpoint tests
+pass; this is not live evidence or automatic plan generation.
+
 Source-check CLI increment: explicit `/verify-source` records a human-checked
 URL, claim finding and verdict only after confirmed turn completion. Restored
 source evidence requires `/revalidate-source` against the saved URL and verdict.

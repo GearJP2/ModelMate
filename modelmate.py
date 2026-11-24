@@ -2340,8 +2340,9 @@ class ChatShell:
             token = self.pending['token']
             self.write('/continue ' + token + ' · /revise ' + token + ' · /pause ' + token)
         if state['state'] == 'CLARIFYING':
-            for question in state['clarifications']:
-                self.write('ต้องชี้แจง: ' + question)
+            for number, question in enumerate(state['clarifications'], 1):
+                self.write('ต้องชี้แจง ' + str(number) + ': ' + question)
+            self.write('สำหรับแผนใหม่ ใช้ --clarification NUMBER=ANSWER ให้ครบทุกข้อก่อน START')
         if self.active and state['state'] == 'PAUSED':
             self.write('ผลขั้นงานยังไม่ทราบ ต้องรอ host ยืนยัน terminal event ก่อนทำต่อ')
         return state
@@ -5189,9 +5190,12 @@ def check_workflow_account(plan, policy):
 
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
                       experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
-                      check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False):
+                      check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False,
+                      clarifications=()):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
+    if clarifications and resume_id is not None:
+        raise ProbeError('Clarification answers require a new --workflow; saved plans cannot be rewritten.')
     if experimental_rechecks and resume_id is None:
         raise ProbeError('--experimental-rechecks requires --resume-workflow.')
     if shared_rechecks and not (experimental_rechecks and execute and resume_id is not None):
@@ -5214,6 +5218,23 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
             raw = source.read(65537).decode('utf-8')
     mode = mode or 'ask_to_escalate'
     plan = validate_plan(raw)
+    if clarifications:
+        questions = {str(i + 1): question for i, question in enumerate(plan['clarifications'])}
+        answers = {}
+        for value in clarifications:
+            number, separator, answer = value.partition('=')
+            if not separator or number not in questions or number in answers:
+                raise ProbeError('Use one --clarification NUMBER=ANSWER per listed question, starting at 1.')
+            _plan_text(answer)
+            answers[number] = answer
+        if answers.keys() != questions.keys():
+            raise ProbeError('Answer every clarification before starting dependent work.')
+        plan['goal'] += '\n\nUser clarification answers:\n' + json.dumps([
+            {'question': question, 'answer': answers[number]} for number, question in questions.items()
+        ], ensure_ascii=False)
+        plan['clarifications'] = []
+        raw = json.dumps(plan, ensure_ascii=False)
+        plan = validate_plan(raw)
     if suggest_models and not plan['clarifications']:
         raw = json.dumps(suggest_workflow_models(plan), ensure_ascii=False)
         plan = validate_plan(raw)
@@ -5641,6 +5662,8 @@ def main():
     parser.add_argument('--suggest-models', action='store_true',
                         help='recommend role/effort from explicit step risk and checks; requires a new --workflow')
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
+    parser.add_argument('--clarification', action='append', default=[], metavar='NUMBER=ANSWER',
+                        help='answer each numbered question in a new workflow plan before START; repeat for multiple questions')
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
     parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
     parser.add_argument('--measure-quota', action='store_true',
@@ -5662,6 +5685,8 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    if args.clarification and not args.workflow:
+        parser.error('--clarification requires a new --workflow')
     if args.check_catalog and (not args.workflow or args.execute_workflow):
         parser.error('--check-catalog requires --workflow without --execute-workflow')
     if args.measure_quota and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
@@ -5735,7 +5760,8 @@ def main():
                                      experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
                                      measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl,
                                      check_catalog=args.check_catalog, shared_rechecks=args.experimental_shared_rechecks,
-                                     experimental_tool_approvals=args.experimental_tool_approvals)
+                                     experimental_tool_approvals=args.experimental_tool_approvals,
+                                     clarifications=args.clarification)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

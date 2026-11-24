@@ -431,8 +431,22 @@ Approve plan จะแสดง model และ effort ของทุกขั�
 Default จะ decline/pause คำขอเพิ่มสิทธิ์; opt-in approval UI อยู่ด้านล่าง read-only/on-request
 ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
 
-รุ่นนี้รับแผนที่ไม่มี clarifications, manual/rubric/source checks และ test/lint ที่ผูก
+รุ่นนี้รับแผนที่ไม่มีคำถามค้าง, manual/rubric/source checks และ test/lint ที่ผูก
 คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ต้องให้ผู้ใช้ตรวจ URL และ claim เอง
+ถ้าแผนมี `clarifications` ให้ preview เพื่อดูคำถามตามหมายเลข แล้วตอบครบทุกข้อ เช่น:
+
+```bash
+python3 modelmate.py --workflow plan.json --role-model standard=MODEL \
+  --clarification '1=ภาษาไทย' --clarification '2=เฉพาะตัวอย่าง' \
+  --execute-workflow
+```
+
+ไม่ใส่ `--execute-workflow` จะเป็น preview offline ตามเดิม คำตอบจะรวมกับคำถาม
+ใน goal ของแผนที่แสดงก่อน START และบันทึกใน local checkpoint เมื่อเริ่ม session
+ไฟล์ `plan.json` เดิมไม่ถูกแก้ คำตอบต้องครบ ไม่ซ้ำ และอยู่ภายในเพดานข้อความของแผน
+หากคำตอบทำให้ steps หรือเกณฑ์ตรวจต้องเปลี่ยน ให้แก้แผนต้นฉบับก่อนเริ่ม
+คำตอบไม่อนุมัติโมเดลหรือเครื่องมือ และใช้แก้แผนของ session ที่ resume แล้วไม่ได้
+
 checkpoint บันทึกอัตโนมัติแยกโปรเจกต์ ดูด้วย `--sessions`/`--show-workflow ID`
 session ใหม่เป็น durable; experimental resume รองรับ manual/rubric/source ตามหัวข้อด้านล่าง
 ห้ามใช้ manual chat ข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
