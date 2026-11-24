@@ -218,7 +218,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P13 | Web privacy boundary | P03, P09 | IN_PROGRESS: Thai Wikipedia lookup scoped LIVE_VERIFIED; SearXNG general search MOCK_VERIFIED; hosted search remains disabled | จำเป็น |
 | P14 | Metrics และรายงาน | P10, P11 | IN_PROGRESS: local session elapsed/attempts/requested selections MOCK_VERIFIED; usage/backend telemetry unknown | ไม่จำเป็นถ้าไม่แตะ policy |
 | P15 | ติดตั้งและเอกสารผู้ใช้ | P08, P12, P14 | IN_PROGRESS: standalone install/help/preview/alias MOCK_VERIFIED; full release guide follows remaining gates | ตรวจคำกล่าวอ้าง |
-| P16 | End-to-end / evaluation / release | P01–P15 | TODO | จำเป็น |
+| P16 | End-to-end / evaluation / release | P01–P15 | IN_PROGRESS: scoped evaluation pilots and requirement coverage audit; release dependencies/gates remain open | จำเป็น |
 
 Dependency ไม่ได้อนุญาตทำงานขนานโดยอัตโนมัติ
 ลำดับแนะนำระหว่างรอ P01: P00 → P02 → P04 → P05 → P06 → P07 → P08 → P11

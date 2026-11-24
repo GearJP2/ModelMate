@@ -3022,3 +3022,19 @@ in any model-turn input captured by the fake server.
 the full suite was not rerun. No HTTP request or live inference was run. This
 proves the tested metadata-to-dispatch path, not a general private-context
 isolation boundary. Live source-workflow and server-loss evidence remain open.
+
+### P16 requirement coverage audit — release incomplete
+
+RELEASE_CHECKLIST.md now maps all R01–R13 to their current implementation,
+offline test files and outstanding implementation or live-evidence gaps. The
+audit checked the actual fixed `/permissions` behavior, the workflow host's
+unsupported-approval denial, explicit-plan entry, source commands and standalone
+confirmed-query search, alongside existing test/evaluation records. It makes
+workflow approval acceptance, automatic search integration, comparative routing
+quality and remaining lifecycle gates visible rather than inferring completion
+from the offline suite. P16 status is IN_PROGRESS for preparatory evaluation and
+audit work; no dependency or release gate is marked passed.
+
+Documentation-only audit: `git diff --check` passed. Referenced test files were
+checked for existence; no tests, web lookup or inference were rerun for this
+documentation change. Existing verification records retain their original scope.
