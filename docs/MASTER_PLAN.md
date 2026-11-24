@@ -491,6 +491,13 @@ remain intact; no command is replayed, grant restored or check inferred passed.
 Fake-process lost-reply and binding-write-failure paths are offline verified.
 Legacy unmatched markers, active/incomplete/ambiguous history and missing thread
 IDs remain unresolved. Live work correlation and broader loss gates remain open.
+Prepared `verify.py --probe-work-recovery SCRATCH` for a completed synthetic
+workflow-resume probe. It stages the missing second-turn binding on a private
+metadata copy, validates native resume with no new turns, checks unchanged
+attempt/counters/old evidence and no fresh checks/grants, and compares the source
+afterward. A send allowlist blocks starts, interrupts, deletes and approval
+responses before transport. This has offline evidence only; it does not simulate
+an actual live dropped reply or discover a missing native thread.
 
 Latest offline increment: recovery-observer connection loss and a terminated owned
 fake server preserve the attached unknown recheck checkpoint and stale evidence.

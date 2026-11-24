@@ -598,6 +598,25 @@ work turn รุ่นใหม่ส่ง attempt ID ที่บันทึ�
 marker ไม่ใช่ idempotency key และไม่อนุญาตให้ส่งคำสั่งเดิมซ้ำ
 เส้นทาง work correlation นี้ผ่าน offline tests เท่านั้น ยังต้องมีหลักฐาน live แยก
 
+มี verifier สำหรับ scratch ที่จบสำเร็จจาก `--probe-workflow-resume` ของ runtime
+ที่ส่ง attempt marker แล้ว (ตั้งแต่ `e46a1d2`):
+
+```bash
+codex --version
+python3 verify.py --probe-work-recovery SCRATCH
+```
+
+คำสั่งนี้ใช้ศูนย์ model turns ไม่ต้องใส่ `--run-live` จะสร้าง metadata copy
+จำลองว่า binding ของ turn ที่สองหาย แล้วอ่าน metadata/resume thread เดิม
+ห้าม start/interrupt/delete หรือส่งคำตอบ approval สำเร็จแล้วลบเฉพาะ copy;
+หากไม่สำเร็จจะเก็บ copy ไว้และแสดง path ทาง stderr ต้นฉบับไม่ถูกเขียนทับ
+เก็บเฉพาะ version, hashes และผลห้าข้อใน JSON เมื่อต้องส่งหลักฐาน
+
+scratch เก่าที่ไม่มี marker จะผ่านไม่ได้ หากต้องสร้าง source ใหม่ ให้ใช้คำสั่ง
+opt-in `--run-live --probe-workflow-resume MODEL` ตามด้านล่าง ซึ่งใช้สูงสุดสอง
+subscription turns แยกจาก recovery check นี้ ผลบน copy ไม่ใช่หลักฐาน live
+ของการตัดการเชื่อมต่อจริง, active STOP หรือ current test results
+
 ผลตรวจที่ restore มาเป็น stale ตรวจผลปัจจุบันก่อนยืนยัน เช่น:
 
 ```text

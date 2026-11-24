@@ -1356,6 +1356,122 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=No
 RECOVERY_PROBE_KEYS = ('nativeTerminalObserved', 'metadataReconciled', 'historicalResultOnly', 'sourceUnchanged')
 
 
+WORK_RECOVERY_KEYS = ('nativeBindingRecovered', 'attemptPreserved', 'noFreshEvidenceOrGrants',
+                      'noReplay', 'sourceUnchanged')
+
+
+class WorkRecoveryVerificationConnection(NativeWorkflowConnection):
+    """Exercise native resume while preventing starts, interrupts and approval replies."""
+    allowed_methods = {'initialize', 'account/read', 'account/rateLimits/read', 'model/list',
+                       'thread/read', 'thread/turns/list', 'thread/resume'}
+
+    def __init__(self, command, timeout):
+        super().__init__(command, timeout)
+        self.blocked_messages = 0
+
+    def send(self, message):
+        if (message.get('method') not in self.allowed_methods | {'initialized'}
+                or 'result' in message or 'error' in message):
+            self.blocked_messages += 1
+            raise ProbeError('Work recovery verifier blocked a non-recovery message.')
+        super().send(message)
+
+
+def probe_work_recovery(scratch, timeout):
+    """Stage a missing binding on a copy of a successful two-turn workflow probe."""
+    source = target = connection = directory = original = source_id = None
+    result = dict.fromkeys(WORK_RECOVERY_KEYS, 'unverified')
+    result.update(modelTurnsRequested=0, nativeThreadsDeleted=False, copyRetained=False,
+        runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+        verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        scope='Resume-only missing-work-binding recovery on a copy of a completed synthetic workflow probe. '
+              'No new turns, interrupts, approval replies or deletion. Not actual reply/process loss, active recovery or fresh test evidence.')
+    try:
+        result['phase'] = 'source_validation'
+        root = Path(scratch).resolve(strict=True)
+        project = root / 'project'
+        source = SessionStore(project, root / 'state', read_only=True)
+        records = source.list_sessions()
+        if len(records) != 1:
+            raise ProbeError('Expected one retained synthetic workflow session.')
+        original = records[0];source_id = original['id']
+        flow = original.get('workflow')
+        if (not isinstance(flow, dict) or original['goal'] != 'Synthetic durable workflow verification'
+                or flow['state'] != 'DONE' or original['deletion_state'] != 'none'
+                or len(flow['steps']) != 2 or flow['active_attempt'] is not None
+                or any(step['state'] != 'DONE' or step['attempts'] != 1 or step['cycle'] != 0 for step in flow['steps'])
+                or flow.get('rechecks') or flow.get('tool_request')):
+            raise ProbeError('Source is not a completed two-turn synthetic workflow probe.')
+        plan = json.loads(flow['plan'])
+        if any(step['checks'] != [{'kind': 'manual', 'criterion': 'Harness compares displayed answer'}]
+               for step in plan['steps']):
+            raise ProbeError('Source has unsupported workflow checks.')
+        last = flow['history'][-1]
+        if (last.get('kind') is not None or last['status'] != 'completed'
+                or last['step_id'] != flow['steps'][-1]['id'] or not original['turn_id'] or not original['thread_id']):
+            raise ProbeError('Source lacks its final completed work binding.')
+        check_session_sentinel(project, project / 'sentinel.txt')
+
+        directory = Path(tempfile.mkdtemp(prefix='modelmate-work-recovery-copy-'))
+        result['copyRetained'] = True
+        target = SessionStore(project, directory / 'state')
+        created = target.create(original['goal'], account_hash=original['account_hash'])
+        staged = copy.deepcopy(original);staged['id'] = created['id']
+        checkpoint = staged['workflow']
+        active = copy.deepcopy(last);active.update(status='running', checks=[])
+        checkpoint['history'].pop()
+        checkpoint['steps'][-1].update(state='RUNNING', evidence=[])
+        checkpoint.update(state='PAUSED', reason='connection_lost', step_index=1,
+                          active_attempt=active, criterion_evidence={})
+        staged.update(turn_id=None, state='PAUSED', pause_reason='connection_lost', correction_count=0,
+                      step_id=active['step_id'], summary='Isolated synthetic work binding recovery copy.')
+        with target._lock(created['id']):target.save(staged)
+        result['phase'] = 'native_resume'
+        connection = WorkRecoveryVerificationConnection(['codex', 'app-server', '--stdio',
+            '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
+            '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'], timeout)
+        model = flow['baseline']['model']
+        host = connection.resume(target, created['id'], project, {role: model for role in ('economy', 'standard', 'strong')}, flow['plan'])
+        after = target.read(created['id'])
+        state = host.controller.snapshot()
+        if (after['turn_id'] != original['turn_id'] or after['thread_id'] != original['thread_id']
+                or state['active_attempt'] is None or state['active_attempt']['status'] != 'completed'):
+            return result
+        result['nativeBindingRecovered'] = 'passed'
+        unchanged = all(state['active_attempt'][key] == active[key]
+                        for key in ('id', 'step_id', 'cycle', 'number', 'selection'))
+        if (unchanged and state['task_id'] == flow['task_id'] and state['steps'] == checkpoint['steps']
+                and after['workflow']['history'] == checkpoint['history'] and after['workflow']['baseline'] == flow['baseline']):
+            result['attemptPreserved'] = 'passed'
+        if (state['state'] == 'CHECKING' and not state['active_attempt']['checks']
+                and not state['criterion_evidence'] and not host.controller._approvals._grants
+                and state['model_request'] is None and state['tool_request'] is None
+                and set(state['stale_evidence']) == {item['id'] for item in flow['steps'][0]['evidence']}):
+            result['noFreshEvidenceOrGrants'] = 'passed'
+        if not connection._sent_attempts and connection.blocked_messages == 0:
+            result['noReplay'] = 'passed'
+        result['phase'] = 'finished'
+        return result
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result['diagnostic'] = diagnostic_code(exc)
+        return result
+    finally:
+        if connection is not None:connection.close()
+        if target is not None:target.close()
+        if source is not None:
+            try:
+                check_session_sentinel(Path(source.project), Path(source.project) / 'sentinel.txt')
+                result['sourceUnchanged'] = 'passed' if source_id is not None and source.read(source_id) == original else 'failed'
+            except (ProbeError, OSError, ValueError, TypeError):result['sourceUnchanged'] = 'failed'
+            finally:source.close()
+        if directory is not None:
+            if all(result.get(key) == 'passed' for key in WORK_RECOVERY_KEYS):
+                try:shutil.rmtree(directory);result['copyRetained'] = False
+                except OSError:pass
+            if result['copyRetained']:
+                print('Work recovery copy retained (original untouched): ' + str(directory), file=sys.stderr)
+
+
 def probe_recheck_recovery(scratch, timeout, *, lost_binding=False):
     """Inspect retained synthetic IDs on a copy, without native start/interrupt/delete requests."""
     source = target = connection = None
@@ -1738,6 +1854,8 @@ def main():
                         help='after --probe-rechecks, exercise terminal recovery on a copy without the turn ID')
     parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
                         help='metadata-only recovery on an isolated copy of a completed --probe-rechecks scratch; no inference')
+    parser.add_argument('--probe-work-recovery', metavar='SCRATCH',
+                        help='resume-only recovery of a missing work turn ID on a completed workflow probe copy; no new turns')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if args.terminate_recheck_server and not (args.run_live and args.probe_rechecks
@@ -1758,18 +1876,20 @@ def main():
     if args.simulate_lost_recheck_binding and not (
             args.run_live and args.probe_rechecks and not args.stop_retained_recheck):
         parser.error('--simulate-lost-recheck-binding requires --run-live and --probe-rechecks without STOP')
-    if args.probe_recheck_recovery:
-        if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
+    if args.probe_recheck_recovery or args.probe_work_recovery:
+        if (args.probe_recheck_recovery and args.probe_work_recovery) or args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
                                 args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks,
                                 args.probe_turn_correlation, args.probe_shared_approval, args.probe_workflow_approvals,
                                 args.probe_workflow_patches)):
-            parser.error('--probe-recheck-recovery is metadata-only; select it alone without --run-live')
+            parser.error('Recovery probes use no inference; select one alone without --run-live')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             parser.error('--timeout must be finite and positive')
         try:
-            result = probe_recheck_recovery(args.probe_recheck_recovery, args.timeout)
+            result = (probe_work_recovery(args.probe_work_recovery, args.timeout) if args.probe_work_recovery
+                      else probe_recheck_recovery(args.probe_recheck_recovery, args.timeout))
             print(json.dumps(result, indent=2))
-            return 0 if all(result.get(key) == 'passed' for key in RECOVERY_PROBE_KEYS) else 1
+            keys = WORK_RECOVERY_KEYS if args.probe_work_recovery else RECOVERY_PROBE_KEYS
+            return 0 if all(result.get(key) == 'passed' for key in keys) else 1
         except KeyboardInterrupt:
             return 130
     if not args.run_live:

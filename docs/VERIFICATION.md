@@ -3478,3 +3478,51 @@ CLI compatibility. Next eligible evidence is a separately scoped live lost-work
 binding check; active/missing-thread and broader server-loss recovery stay open.
 The full offline suite passed all 634 tests with test-owned sockets enabled and
 no skips. Compile checks and `git diff --check` passed.
+
+### P12 resume-only work-recovery verifier — MOCK_VERIFIED
+
+Prepared an explicitly invoked, zero-new-turn diagnostic:
+
+```sh
+codex --version
+python3 verify.py --probe-work-recovery SCRATCH
+```
+
+SCRATCH must be a successful two-turn `--probe-workflow-resume` result with the
+new work-attempt markers (runtime `e46a1d2` or later). This command itself takes
+no `--run-live`, and refuses combinations with live modes or another recovery
+probe. Creating a fresh source remains a separate explicit two-subscription-turn
+command: `python3 verify.py --run-live --probe-workflow-resume MODEL`.
+
+The source must be a completed synthetic two-step manual-check workflow, one
+attempt per step with no recheck/tool-approval ledger. The verifier reads it
+without writing, validates the sentinel, and creates a private metadata copy.
+Only on that copy, it moves the final attempt back to its reserved running
+state, removes its native turn binding/check evidence and criterion coverage,
+and retains all IDs, selections, counters and earlier history. The ordinary
+native resume path must correlate the existing final turn and reach CHECKING.
+This is a staged missing checkpoint field after completion, not actual live
+reply loss. Fresh account/quota/catalog/permissions remain required.
+
+A dedicated send allowlist permits metadata requests and thread/resume only;
+turn/thread start, interrupt, delete and any server-request approval/error reply
+are rejected before transport. Passing requires all five WORK_RECOVERY_KEYS:
+nativeBindingRecovered, attemptPreserved, noFreshEvidenceOrGrants, noReplay and
+sourceUnchanged. Earlier evidence must remain stale and the recovered attempt
+must have no checks/grants/criterion coverage. Reports contain source hashes and
+sanitized outcomes, not prompts, markers, account/native IDs or source paths.
+Successful verification removes only the owned copy. Failure retains it and
+prints its local path on stderr; original metadata and project remain untouched.
+
+All 14 focused workflow-resume probe tests and seven existing recheck-recovery
+probe tests passed. New tests exercise successful two-turn-copy recovery with
+zero additional turn/start RPCs, unchanged source bytes, marker absence,
+invented evidence detection, incomplete-source rejection, pre-transport mutation
+tripwires and CLI exclusivity/partial-result exit status. The staging fixture
+was corrected to use RUNNING step state under an active reservation and compare
+canonical exported history rather than its internal check dictionaries; runtime
+checkpoint validation was retained. Compile checks passed. No installed Codex
+inference or connected account lookup was run. Live work recovery, actual process
+loss, active interruption and missing-thread discovery remain unverified.
+The full offline suite passed all 640 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.
