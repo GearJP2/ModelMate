@@ -362,13 +362,14 @@ Controller foundation: workflow checkpoint v3 records the latest bound tool
 request and decision status without a confirmation token or raw action. The
 AWAITING_TOOL_APPROVAL transition, exact one-use decisions, expiry on action
 change/pause/completion/restore and persistence-failure freeze are offline-tested.
-Only trusted host/UI calls can reach these APIs. The native workflow adapter is
-not connected to them yet and still declines requests; no live gate is passed.
+Only trusted host/UI calls can reach these APIs. At this foundation milestone,
+the native workflow adapter was not connected and still declined requests;
+the opt-in adapter integration is described below. No live gate is passed.
 Host/UI wiring now supports explicitly supplied trusted preview/response adapters.
 It binds the printable preview digest to the current turn, displays it before
 offering a tool token, and persists a decision before the callback. Cancel, EOF,
 pause, timeout and disconnect decline and interrupt; unknown sends never replay.
-No CLI flag or native acceptance path has been enabled by this offline increment.
+That host/UI increment alone enabled no CLI flag or native acceptance path.
 
 Native adapter increment: `--experimental-tool-approvals` now explicitly enables
 the supported command/file-change subset for work turns after execute + START.

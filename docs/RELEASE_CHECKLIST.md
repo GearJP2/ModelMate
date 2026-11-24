@@ -7,7 +7,7 @@ for the particular path, client version and platform being shipped. See
 | Gate | Evidence available | Remaining |
 | --- | --- | --- |
 | G1 account and dispatch | Live metadata-only catalog preview, requested-model paths, context recall and scoped resume | Reported dispatch telemetry is incomplete. |
-| G2 permissions and lifecycle | Scoped live native workflow denial, interruption, metadata inspection, recheck recovery, scoped deletion and attached runtime-owned STOP after recheck client loss | Verify live server/process-loss recovery, interactive CLI timing and varied permission failures. |
+| G2 permissions and lifecycle | Scoped live native workflow denial, interruption, metadata inspection, recheck recovery, scoped deletion and attached runtime-owned STOP after recheck client loss. Experimental workflow accept-once and its bounded verifier have offline evidence only. | Obtain the scoped command accept/decline verifier result, then separately verify patch approvals, live cancellation/failure paths, server/process-loss recovery and interactive CLI timing. |
 | G3 private search | Live Thai Wikipedia lookup and offline general search through a configured SearXNG endpoint | Live SearXNG instance validation. Hosted search remains disabled in work threads. |
 | G4 quota and billing | Offline admission and explicit recovery from exhausted or unknown quota. Live telemetry with observed account windows | Live exhausted/unknown admission paths and version-specific billing guarantees. |
 | G5 evaluation | Scored C1, C3, A1 and the two-step economy pilot. Three checkpoint display pairs graded with original and format-repaired outcomes. | Expand independent task coverage and establish a defensible quota signal before estimating savings or enabling the trial rule by default. |
@@ -52,6 +52,17 @@ authorize enabling gated workflow approvals, automatic search or a release.
   and confirm a second. Check the destination and cited links in the result.
 
 ## Live checks with explicit opt-in
+
+The next prepared P09 check is
+`python3 verify.py --run-live --probe-workflow-approvals MODEL` from a normal
+authenticated Terminal. It uses at most two subscription turns and may accept
+one bounded synthetic marker write, then declines the second case. Record the
+CLI version, runtime/verifier hashes and all seven check results. Missing
+approval requests are inconclusive; do not widen permissions to obtain them.
+See the scoped verifier record in [VERIFICATION.md](VERIFICATION.md) before
+running it. This check has not yet supplied live evidence. Installed CLI
+0.172.0 has matching inspected approval schemas, which does not carry forward
+the live compatibility evidence recorded for 0.171.0.
 
 Keep release evidence sanitized. Record the runtime and Codex version plus
 the specific result, avoiding account identifiers, session logs and quota
