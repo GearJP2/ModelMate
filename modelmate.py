@@ -2403,7 +2403,7 @@ class ChatShell:
         if state['state'] == 'CLARIFYING':
             for number, question in enumerate(state['clarifications'], 1):
                 self.write('ต้องชี้แจง ' + str(number) + ': ' + question)
-            self.write('สำหรับแผนใหม่ ใช้ --clarification NUMBER=ANSWER ให้ครบทุกข้อก่อน START')
+            self.write('สำหรับแผนใหม่ ใช้ --clarification NUMBER=ANSWER หรือ --execute-workflow เพื่อตอบก่อน START')
         if self.active and state['state'] == 'PAUSED':
             self.write('ผลขั้นงานยังไม่ทราบ ต้องรอ host ยืนยัน terminal event ก่อนทำต่อ')
         return state
@@ -5329,6 +5329,35 @@ def check_workflow_account(plan, policy):
         connection.close()
 
 
+def read_workflow_clarifications(questions, input_stream, output):
+    """Read complete UTF-8 answer lines without prefetching START or workflow commands."""
+    answers = []
+    for number, question in enumerate(questions, 1):
+        output.write('Clarification ' + str(number) + ': ' + terminal_text(question) + '\n')
+        output.write('พิมพ์คำตอบหนึ่งบรรทัด หรือ CANCEL เพื่อพักก่อนเริ่ม backend\n');output.flush()
+        data = bytearray()
+        while len(data) <= 16384:
+            byte = os.read(input_stream.fileno(), 1)
+            if not byte:
+                output.write('พัก clarification แล้ว · ไม่เปิด backend\n')
+                return None
+            if byte == b'\n':
+                break
+            data.extend(byte)
+        else:
+            raise ProbeError('Clarification answer exceeds its line limit.')
+        try:
+            answer = data.decode('utf-8').removesuffix('\r')
+        except UnicodeError:
+            raise ProbeError('Clarification answer is not complete UTF-8; nothing started.') from None
+        if answer.strip() == 'CANCEL':
+            output.write('พัก clarification แล้ว · ไม่เปิด backend\n')
+            return None
+        _plan_text(answer)
+        answers.append(str(number) + '=' + answer)
+    return answers
+
+
 def run_plan_draft(prompt, model, effort, destination, input_stream, output):
     """One explicitly selected planning turn; validated output grants no execution."""
     _plan_text(prompt)
@@ -5445,6 +5474,10 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     if automatic_workflow and mode != 'auto':
         raise ProbeError('Experimental automatic advancement requires a new Auto workflow.')
     plan = validate_plan(raw)
+    if execute and resume_id is None and plan['clarifications'] and not clarifications:
+        clarifications = read_workflow_clarifications(plan['clarifications'], input_stream, output)
+        if clarifications is None:
+            return 2
     if clarifications:
         questions = {str(i + 1): question for i, question in enumerate(plan['clarifications'])}
         answers = {}

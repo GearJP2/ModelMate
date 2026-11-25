@@ -453,7 +453,7 @@ planning turn นี้เป็น ephemeral และยังไม่มี 
 
 อ่าน goal/criteria/steps/reasons ในไฟล์ก่อนใช้ `--workflow new-plan.json` พร้อม
 bindings ของทุก role ที่แผนใช้ หากมี clarifications ให้ตอบผ่าน `--clarification`
-ให้ครบตาม flow เดิม การ execute ยังต้อง opt-in/START และผ่าน model/tool gates
+ให้ครบ หรือใช้ --execute-workflow เพื่อตอบแบบ interactive ก่อน START การ execute ยังต้อง opt-in/START และผ่าน model/tool gates
 ของ workflow อีกครั้ง คำสั่งนี้ยังไม่เชื่อม plain prompt ไปเป็น workflow อัตโนมัติ
 มีหลักฐาน fake-server/offline เท่านั้น ยังไม่ได้ทดสอบ live ด้วย quota จริง
 
@@ -525,9 +525,16 @@ approval เดิมใช้ไม่ได้ ต้องผ่าน gates 
 prompt เพื่ออนุมัติรอบใหม่อย่างชัดเจน ใช้ role ที่มี binding แล้วและ effort ที่ catalog รองรับ
 revision บันทึกใน checkpoint ของแผนที่มีผลจริง โดยไม่เขียนไฟล์แผนหรือ revision ทับ
 
-รุ่นนี้รับแผนที่ไม่มีคำถามค้าง, manual/rubric/source checks และ test/lint ที่ผูก
+ก่อนเริ่ม execution ต้องตอบคำถามค้างให้ครบ รองรับ manual/rubric/source checks และ test/lint ที่ผูก
 คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ต้องให้ผู้ใช้ตรวจ URL และ claim เอง
-ถ้าแผนมี `clarifications` ให้ preview เพื่อดูคำถามตามหมายเลข แล้วตอบครบทุกข้อ เช่น:
+ถ้าแผนมี `clarifications` การ preview จะยังแสดงคำถามโดยไม่อ่าน input
+เมื่อใช้ `--execute-workflow` โดยไม่ส่ง --clarification ระบบจะถามทุกข้อก่อนเปิด
+backend ให้ตอบทีละบรรทัด หรือ CANCEL เพื่อพัก EOF/บรรทัดไม่ครบจะไม่เริ่มงาน
+หลังตอบครบยังต้องอ่าน effective plan และพิมพ์ START แยกต่างหาก คำว่า START
+ที่ใช้เป็นคำตอบไม่ใช่การอนุมัติ execution คำตอบผิด UTF-8 ว่าง เกินเพดาน หรือทำให้
+ผลรวม goal เกินขนาดจะหยุดโดยไม่เรียกโมเดลเพิ่ม
+
+หากต้องการระบุคำตอบผ่าน arguments ยังใช้ --clarification ให้ครบทุกข้อได้ เช่น:
 
 ```bash
 python3 modelmate.py --workflow plan.json --role-model standard=MODEL \

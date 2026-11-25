@@ -308,7 +308,7 @@ class WorkflowEntryTests(unittest.TestCase):
                 self.assertLessEqual(methods, {'initialize', 'initialized', 'account/read',
                                                'account/rateLimits/read', 'model/list'})
 
-    def test_unsupported_checks_and_clarification_cannot_execute(self):
+    def test_unsupported_checks_and_clarification_cannot_bypass_start(self):
         with patch('modelmate.NativeWorkflowConnection.__init__',side_effect=AssertionError('backend forbidden')):
             for kind in ('test','lint'):
                 self.plan['steps'][0]['checks'][0]['kind']=kind
@@ -317,7 +317,8 @@ class WorkflowEntryTests(unittest.TestCase):
             self.plan['steps'][0]['checks'][0]['kind']='manual'
             self.plan['clarifications']=['Need an answer']
             self.path.write_text(json.dumps(self.plan))
-            with self.assertRaises(ProbeError):self.run_file(True,text='START\n')
+            self.assertEqual(self.run_file(True,text=''),2)
+            self.assertEqual(self.run_file(True,text='START\n'),0)
 
     def test_source_checks_reach_native_entry_with_explicit_user_verification(self):
         from modelmate import NativeWorkflowConnection

@@ -362,6 +362,18 @@ unverified; this has controller/UI/persistence offline evidence only.
 
 ### P08 — Terminal chat
 
+Interactive pre-START clarification increment: executing a new explicit plan
+with unanswered questions and no --clarification arguments now asks every
+question before backend construction. Complete bounded UTF-8 answer lines reuse
+the existing numbered-answer/effective-goal validation; no planning/classifier
+turn is added. Preview stays offline and does not consume input. EOF/incomplete
+line/CANCEL pause before backend access, invalid answers fail closed, and START
+must be entered separately after effective-plan preview. Questions/answers do
+not change steps, criteria, grants, counters or the source plan. Supplied flags
+remain strict/all-or-none and resume cannot rewrite clarification context. Five
+new line-boundary/native integration tests and thirty workflow-entry tests pass;
+this is offline evidence, not live clarification compatibility.
+
 Step revision UI increment: `/revise-step FILE` calls the existing controller
 revision API with a bounded JSON object containing only objective/role/effort/
 reason changes for the current step. It preserves effective goal/context, criteria,

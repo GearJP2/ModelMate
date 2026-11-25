@@ -4325,3 +4325,44 @@ planning/permission/quota/release gates remain open. No live inference was run.
 Full offline verification passed all 733 tests in 146.391 seconds, with no skips.
 Compile and diff checks passed. Tested runtime SHA-256:
 `f97d26a2cbfbe7736bebd1334f3ff5312d67d8952e780d1de4ce634c2cf415a7`.
+
+
+### P08/P10 interactive clarification before START (2026-11-25)
+
+Executing a new explicit plan with unanswered clarifications and no supplied
+--clarification arguments now collects answers interactively before constructing
+any backend. It reads each UTF-8 line directly from the input FD without buffered
+prefetch, with a 16 KiB encoded line bound and existing 4096-character answer /
+effective-goal limits. EOF, incomplete lines or CANCEL stop without connecting.
+Invalid UTF-8, empty/oversized answers and an oversized combined goal fail before
+model access. There is no reprompt/retry/model-generated answer or inference.
+Preview reads no input. Explicit answer flags still require every question once;
+partial/duplicate/unknown flags remain errors. Resume behavior is unchanged.
+
+Collected numbered answers enter the same existing validated effective-goal path
+as argument answers. Steps, success criteria, role bindings, model/tool grants,
+controller counters and original plan file remain unchanged. The answered plan
+is previewed before a separate exact START confirmation. START used as an answer
+cannot also authorize execution; cancellation at that later confirmation still
+stops before backend construction. Questions/file contents and answer text remain
+data, not authority to grant tools or accept evidence.
+
+All five new tests passed using real input FDs: Thai multi-question answers,
+no consumption of later confirmation/commands, EOF/incomplete-line/CANCEL paths,
+invalid UTF-8/empty/oversized/combined-overflow answers, untouched offline preview,
+and a fake-native execution receiving the answered effective goal with one total
+turn/start. A malicious-looking answer requesting all tools creates no model
+grant and changes no steps/criteria. Source plan bytes remain unchanged.
+All thirty existing workflow-entry tests passed, including unanswered EOF stopping
+and an answer of START still requiring a distinct execution confirmation. The
+backend-forbidden guard in that test remains intact.
+
+Runtime/diagnostic compile and diff checks pass. No live
+account/model/quota or real prompt/credential was used. Interactive handling of
+unknown terminal environments and broader live gates remain unverified. Draft
+creation and this explicit workflow entry are still separate commands; automatic
+plain-prompt handoff, routing/evaluation and complete release readiness remain open.
+
+Final full offline verification passed all 738 tests in 135.119 seconds with no
+skips. Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`1134b4b997282d1b2ad68d42fd851c0248bf820365d9c6bc056f593a8a29dd8e`.
