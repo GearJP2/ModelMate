@@ -3746,3 +3746,23 @@ paths does not prove resistance to arbitrary hostile code or prompt injection.
 G3 remains open. Next: prepare and independently test the actual bounded search
 worker and data-only result handling under reviewed mounts; keep automated
 private-context search disabled until its required evidence exists.
+
+
+### P13 consistent candidate URL validation (2026-11-25)
+
+A regression test reproduced SearXNG accepting `:0`, `:99999` and nonnumeric ports
+as candidates even though later JSON packet validation rejected them. A single
+shared URL predicate now applies the packet constraints before selecting the
+first five SearXNG candidates. Invalid entries are skipped; later valid entries
+remain available for human display and packet export. Credentials, non-HTTP(S)
+schemes, whitespace/control text and overlong URLs remain rejected. Valid explicit
+ports remain supported. No candidate URL is fetched or treated as an instruction.
+
+All 14 web-policy and 30 workflow-entry tests passed. Existing workflow tests
+confirm injected source text reaches the goal as untrusted data without changing
+steps/criteria, model grants or the default tool policy. This is offline evidence;
+it does not establish arbitrary prompt-injection resistance, live SearXNG support
+or G3 completion. No search worker or automatic search path was enabled.
+
+The full offline suite passed all 671 tests in 135.547 seconds with no skips.
+Runtime/diagnostic compile checks and `git diff --check` passed.

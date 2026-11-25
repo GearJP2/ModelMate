@@ -5700,7 +5700,7 @@ def searxng_host(origin):
 
 
 def search_searxng(query, host):
-    from urllib.parse import urlencode, urlsplit
+    from urllib.parse import urlencode
 
     body = urlencode({'q': query, 'format': 'json'}).encode('ascii')
     rows = read_search_json(host, '/search', 'POST', body, source='SearXNG').get('results')
@@ -5711,14 +5711,7 @@ def search_searxng(query, host):
         if not isinstance(row, dict):
             continue
         url, title, content = (row.get(key) for key in ('url', 'title', 'content'))
-        if (not isinstance(url, str) or len(url) > 4096 or not isinstance(title, str) or not title.strip()
-                or terminal_text(url) != url or any(c.isspace() for c in url)):
-            continue
-        try:
-            link = urlsplit(url)
-            if link.scheme not in ('http', 'https') or not link.hostname or link.username is not None:
-                continue
-        except ValueError:
+        if not isinstance(title, str) or not title.strip() or not valid_search_url(url):
             continue
         results.append({'title': search_text(title, 300),
                         'excerpt': search_text(content, 600) if isinstance(content, str) else '',
@@ -5728,9 +5721,21 @@ def search_searxng(query, host):
     return results
 
 
-def validate_search_packet(packet):
+def valid_search_url(value):
     from urllib.parse import urlsplit
 
+    if (not isinstance(value, str) or not value or len(value) > 4096
+            or terminal_text(value) != value or any(c.isspace() for c in value)):
+        return False
+    try:
+        url = urlsplit(value)
+        return (url.scheme in ('http', 'https') and bool(url.hostname)
+                and url.username is None and url.password is None and url.port != 0)
+    except ValueError:
+        return False
+
+
+def validate_search_packet(packet):
     if (not isinstance(packet, dict) or set(packet) != {'version', 'source', 'host', 'query', 'results'}
             or type(packet['version']) is not int or packet['version'] != 1
             or packet['source'] not in ('Wikipedia', 'SearXNG')
@@ -5752,13 +5757,8 @@ def validate_search_packet(packet):
             if (not isinstance(value, str) or len(value) > limit or terminal_text(value) != value
                     or any(c in value for c in '\n\r\t') or field != 'excerpt' and not value.strip()):
                 raise ProbeError('Invalid search packet text.')
-        try:
-            url = urlsplit(result['url'])
-            if (url.scheme not in ('http', 'https') or not url.hostname or url.username is not None
-                    or url.password is not None or any(c.isspace() for c in result['url']) or url.port == 0):
-                raise ValueError
-        except ValueError:
-            raise ProbeError('Invalid search packet URL.') from None
+        if not valid_search_url(result['url']):
+            raise ProbeError('Invalid search packet URL.')
     return packet
 
 

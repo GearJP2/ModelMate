@@ -585,6 +585,11 @@ isolation/injection evidence is complete.
 Missing utility/namespace capability fails closed as unverified; no installation,
 privileged fallback or host permission expansion is attempted. See VERIFICATION.
 
+Search URL validation is shared between SearXNG candidate filtering and packet
+import/export. Invalid, zero or out-of-range ports are skipped before candidates
+are displayed/exported; valid explicit ports remain passive source data. This
+has offline regression evidence, not live SearXNG or G3 verification.
+
 Confirmed-result handoff: standalone searches can export bounded JSON with
 `--search-json` after exact query confirmation (prompts on stderr). A new workflow
 can select up to five `--source-result FILE:NUMBER` entries. Validated candidates
