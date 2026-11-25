@@ -18,6 +18,12 @@ from test_routing import CATALOG, PLAN, POLICY, QUOTA
 
 
 class WorkflowUITests(unittest.TestCase):
+    def revision_file(self, content):
+        directory = tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / 'แก้ขั้นงาน with spaces.json'
+        path.write_bytes(content if isinstance(content, bytes) else json.dumps(content).encode())
+        return path
+
     def controller(self, role='standard'):
         plan = copy.deepcopy(PLAN);plan['steps'][0]['role'] = role
         return WorkflowController(json.dumps(plan), CATALOG, POLICY)
@@ -74,6 +80,162 @@ class WorkflowUITests(unittest.TestCase):
         self.assertIn('unavailable', out.getvalue())
         self.assertEqual(c.state, 'READY')
         self.assertEqual(c.snapshot()['steps'][0]['attempts'], 0)
+
+    def test_revision_after_model_request_downgrades_without_grant_or_dispatch(self):
+        shell, c, out, actions = self.shell(self.controller('strong'))
+        shell.line('/next')
+        old_token = shell.pending['token']
+        before = c.snapshot()
+        path = self.revision_file({'objective': 'ทำเฉพาะตัวอย่าง', 'role': 'standard', 'reason': 'Reduced scope'})
+        shell.event({'type': 'text', 'text': '/revise-step ' + json.dumps(str(path))})
+        self.assertEqual(c.snapshot(), before)
+        with patch('modelmate.subprocess.Popen', side_effect=AssertionError('no execution')):
+            shell.line('/revise-step ' + json.dumps(str(path), ensure_ascii=False))
+        after = c.snapshot()
+        self.assertEqual(after['state'], 'READY')
+        self.assertEqual(after['steps'], before['steps'])
+        self.assertEqual(after['plan']['goal'], before['plan']['goal'])
+        self.assertEqual(after['success_criteria'], before['success_criteria'])
+        self.assertEqual(after['plan']['steps'][0]['objective'], 'ทำเฉพาะตัวอย่าง')
+        self.assertFalse(c._approvals._grants)
+        self.assertIsNone(after['tool_request'])
+        self.assertEqual(len(actions), 1)
+        shell.line('/approve ' + old_token)
+        self.assertEqual(c.snapshot(), after)
+        shell.line('/next')
+        self.assertEqual(c.snapshot()['active_attempt']['selection']['model'], POLICY['standard'])
+        self.assertEqual(c.snapshot()['steps'][0]['attempts'], 1)
+
+    def test_manual_workflow_model_choice_does_not_dispatch_or_grant_tools(self):
+        shell, c, out, actions = self.shell()
+        before = c.export_checkpoint()
+        shell.line('/model')
+        self.assertIn('roleBindings', out.getvalue())
+        shell.event({'type': 'text', 'text': '/model synthetic-strong low'})
+        self.assertEqual(c.export_checkpoint(), before)
+        shell.line('/model synthetic-strong')
+        self.assertEqual(actions, [])
+        self.assertEqual(c.snapshot()['steps'][0]['attempts'], 0)
+        self.assertEqual(shell.permissions, 'read_only')
+        self.assertIsNone(c.snapshot()['tool_request'])
+        shell.line('/next')
+        self.assertEqual(c.state, 'RUNNING')
+        self.assertEqual(c.snapshot()['active_attempt']['selection'], {'model': POLICY['strong'], 'effort': 'low'})
+        running = c.export_checkpoint()
+        shell.line('/model synthetic-standard medium')
+        self.assertEqual(c.export_checkpoint(), running)
+
+    def test_manual_workflow_model_choice_expires_old_request_and_uses_new_effort(self):
+        shell, c, out, actions = self.shell(self.controller('strong'))
+        shell.line('/next');token = shell.pending['token']
+        shell.line('/model synthetic-strong medium')
+        self.assertEqual(c.state, 'READY')
+        before = c.export_checkpoint()
+        shell.line('/approve ' + token)
+        self.assertEqual(c.export_checkpoint(), before)
+        shell.line('/next')
+        self.assertEqual(c.state, 'RUNNING')
+        self.assertEqual(c.snapshot()['active_attempt']['selection']['effort'], 'medium')
+
+    def test_revision_invalidates_approved_plan_before_next_attempt(self):
+        c = self.controller();c.change_mode('approve_plan')
+        shell, c, out, actions = self.shell(c)
+        shell.line('/next');old = shell.pending['token']
+        shell.line('/approve ' + old)
+        self.assertTrue(c._approvals._grants)
+        path = self.revision_file({'objective': 'Revised objective', 'role': 'strong'})
+        shell.line('/revise-step ' + json.dumps(str(path), ensure_ascii=False))
+        self.assertFalse(c._approvals._grants)
+        shell.line('/next')
+        self.assertEqual(c.state, 'AWAITING_MODEL_APPROVAL')
+        self.assertNotEqual(shell.pending['token'], old)
+        self.assertEqual(c.snapshot()['steps'][0]['attempts'], 0)
+
+    def test_revision_keeps_correction_limit_until_explicit_budget_extension(self):
+        shell, c, out, actions = self.shell()
+        for _ in range(3):
+            shell.line('/next');self.finish(shell, c, 1)
+        shell.line('/revise ' + shell.pending['token'])
+        before = c.snapshot()
+        path = self.revision_file({'objective': 'Try a different approach'})
+        shell.line('/revise-step ' + json.dumps(str(path), ensure_ascii=False))
+        self.assertEqual(c.snapshot()['steps'], before['steps'])
+        self.assertEqual(c.snapshot()['history'], before['history'])
+        shell.line('/continue ' + shell.pending['token']);shell.line('/next')
+        self.assertEqual(c.reason, 'correction_limit')
+        self.assertIsNone(c.snapshot()['active_attempt'])
+        self.assertEqual(c.snapshot()['steps'][0]['attempts'], 3)
+        shell.line('/continue ' + shell.pending['token']);shell.line('/next')
+        self.assertEqual(c.snapshot()['steps'][0]['cycle'], 1)
+        self.assertEqual(c.snapshot()['steps'][0]['attempts'], 1)
+        self.assertEqual(sum(e.get('kind') == 'budget_extension' for e in c.snapshot()['history']), 1)
+
+    def test_revision_rejects_invalid_fields_and_does_not_read_during_active_attempt(self):
+        shell, c, out, actions = self.shell()
+        before = c.export_checkpoint()
+        for content in ({}, [], {'checks': []}, {'goal': 'other'}, {'risk': 'normal'},
+                        {'role': 'unknown'}, {'objective': ''}, {'reason': 'x' * 4097},
+                        b'{"objective":"first","objective":"second"}', b'\xff', b'x' * 65537):
+            path = self.revision_file(content)
+            shell.line('/revise-step ' + json.dumps(str(path), ensure_ascii=False))
+            self.assertEqual(c.export_checkpoint(), before)
+        shell.line('/revise-step /missing/synthetic-revision.json')
+        self.assertEqual(c.export_checkpoint(), before)
+        shell.line('/next')
+        running = c.export_checkpoint()
+        with patch('builtins.open', side_effect=AssertionError('must reject before reading')):
+            shell.line('/revise-step /not-read.json')
+        self.assertEqual(c.export_checkpoint(), running)
+        c.finish_attempt(c.snapshot()['active_attempt']['id'], 'completed')
+        completed = c.export_checkpoint()
+        shell.line('/revise-step /not-read.json')
+        self.assertEqual(c.export_checkpoint(), completed)
+
+    def test_revision_is_durable_and_keeps_effective_goal_and_step_identity(self):
+        directory = tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        plan = copy.deepcopy(PLAN);plan['goal'] += '\nPreviously approved source/clarification context'
+        c = WorkflowController(json.dumps(plan), CATALOG, POLICY)
+        path = self.revision_file({'objective': 'Revised current step', 'effort': 'medium'})
+        source_bytes = path.read_bytes()
+        with SessionStore(root, root / 'state') as store:
+            sid = store.create('Revision fixture', thread_id='synthetic-thread',
+                account_hash=hashlib.sha256(b'synthetic').hexdigest())['id']
+            with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY, controller=c):
+                before = c.snapshot()
+                shell, _, _, _ = self.shell(c, connected=False)
+                shell.line('/revise-step ' + json.dumps(str(path), ensure_ascii=False))
+                saved = store.read(sid)['workflow']
+                self.assertEqual(json.loads(saved['plan']), c.snapshot()['plan'])
+                self.assertEqual(json.loads(saved['plan'])['goal'], plan['goal'])
+            with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY) as restored:
+                after = restored.snapshot()
+                self.assertEqual(after['steps'], before['steps'])
+                self.assertEqual(after['task_id'], before['task_id'])
+                self.assertEqual(after['plan']['steps'][0]['objective'], 'Revised current step')
+                self.assertEqual(after['plan']['steps'][0]['effort'], 'medium')
+        self.assertEqual(path.read_bytes(), source_bytes)
+
+    def test_manual_step_selection_persists_but_its_grant_is_not_restored(self):
+        directory = tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        with SessionStore(root, root / 'state') as store:
+            sid = store.create('Manual model fixture', thread_id='synthetic-thread',
+                account_hash=hashlib.sha256(b'synthetic').hexdigest())['id']
+            with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY, controller=self.controller()) as c:
+                shell, _, _, actions = self.shell(c)
+                shell.line('/model synthetic-strong medium')
+                self.assertEqual(actions, [])
+                self.assertTrue(c._approvals._grants)
+                before = c.snapshot()
+                self.assertEqual(json.loads(store.read(sid)['workflow']['plan'])['steps'][0]['effort'], 'medium')
+            with store.workflow(sid, QUOTA, time.monotonic(), CATALOG, POLICY) as restored:
+                self.assertFalse(restored._approvals._grants)
+                self.assertEqual(restored.snapshot()['steps'], before['steps'])
+                restored.answer_pause(restored.snapshot()['pause_token'], 'continue')
+                request = restored.request_attempt(QUOTA, time.monotonic(), CATALOG, POLICY)
+                self.assertEqual(request['state'], 'AWAITING_MODEL_APPROVAL')
+                self.assertEqual(request['model_request']['selection'], {'model': POLICY['strong'], 'effort': 'medium'})
 
     def test_callback_return_value_cannot_declare_done_without_controller_evidence(self):
         c = self.controller()

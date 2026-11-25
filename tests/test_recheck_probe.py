@@ -12,7 +12,8 @@ from modelmate import (NativeWorkflowConnection, NativeRecheckConnection, Rechec
                        ChatShell, ProbeError, WorkflowController)
 from verify import (probe_rechecks, RECHECK_PROBE_KEYS, RECHECK_STOP_KEYS, RECHECK_DISCONNECT_KEYS,
                     PendingApprovalOwner, PassiveApprovalObserver, probe_shared_approval,
-                    SHARED_APPROVAL_KEYS, RUNTIME_RECHECK_KEYS, SERVER_LOSS_KEYS, main)
+                    SHARED_APPROVAL_KEYS, RUNTIME_RECHECK_KEYS, SERVER_LOSS_KEYS, main,
+                    wait_for_recheck_owner)
 
 
 SERVER = r'''
@@ -344,6 +345,16 @@ class RecheckProbeTests(unittest.TestCase):
         self.assertEqual(result['stopObservationReason'], 'owner_active_not_observed')
         self.assertNotIn('observedBeforeStop', result)
         self.assertNotIn('stopRpcAcknowledged', result)
+
+    def test_owner_observation_error_keeps_reason_and_restores_timeout(self):
+        child = Mock(timeout=10, thread_id='synthetic')
+        result = {}
+        with patch('verify.read_recovery_thread', side_effect=ProbeError('Codex request timed out.')):
+            with self.assertRaisesRegex(ProbeError, 'timed out'):
+                wait_for_recheck_owner(child, self.root, 1, result)
+        self.assertEqual(result['stopObservationReason'], 'owner_active_not_observed')
+        self.assertEqual(child.timeout, 10)
+        self.assertNotIn('observedBeforeStop', result)
 
     def test_shared_stop_requires_full_live_opt_in(self):
         args = ['verify.py', '--probe-rechecks', 'synthetic', '--shared-stop-server']

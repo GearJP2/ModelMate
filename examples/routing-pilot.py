@@ -7,6 +7,8 @@ import json
 import math
 import os
 from pathlib import Path
+import runpy
+import shlex
 import shutil
 import subprocess
 import sys
@@ -76,6 +78,9 @@ def prepare(case):
     runtime = scratch / 'modelmate.py'
     (scratch / 'case.txt').write_text(case + '\n', encoding='utf-8')
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'modelmate.py', runtime)
+    checker = scratch / 'check-cli.py'
+    if case == 'cli':
+        shutil.copyfile(Path(__file__).with_name('cli-pilot-check.py'), checker)
     objective = (
         'Choose the repair for this Python function and answer with exactly one letter A, B, C or D. '
         'Use only the code in this prompt. Do not call tools or read or modify files.\n'
@@ -103,6 +108,8 @@ def prepare(case):
             plan = dedupe_plan(role)
         elif case == 'incident':
             plan = incident_plan(role)
+        elif case == 'cli':
+            plan = prepare_cli(project, role, checker)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
@@ -147,16 +154,86 @@ def prepare_economy(project, role):
             ]}
 
 
-def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=False, metrics_jsonl=None):
+def prepare_cli(project, role, checker):
+    source_checker = Path(__file__).with_name('cli-pilot-check.py')
+    fixture = runpy.run_path(str(source_checker))
+    (project / fixture['INPUT_NAME']).write_text(fixture['INPUT'], encoding='utf-8')
+    (project / 'rows.py').write_text(
+        "import argparse\nimport sys\nfrom pathlib import Path\n\n"
+        "def main():\n"
+        "    parser = argparse.ArgumentParser(description='Print input rows.')\n"
+        "    parser.add_argument('path')\n"
+        "    args = parser.parse_args()\n"
+        "    try:\n"
+        "        rows = Path(args.path).read_text(encoding='utf-8').splitlines()\n"
+        "    except (OSError, UnicodeError):\n"
+        "        parser.error('Cannot read input rows.')\n"
+        "    sys.stdout.buffer.write(''.join(row + '\\n' for row in rows).encode('utf-8'))\n\n"
+        "if __name__ == '__main__':\n    main()\n", encoding='utf-8')
+    checker_code = source_checker.read_bytes()
+    digest = hashlib.sha256(checker_code).hexdigest()
+    bootstrap = ("import hashlib,pathlib,sys; p=" + repr(str(checker)) + "; "
+        "source=open(p,'rb'); code=source.read(" + str(len(checker_code) + 1) + "); source.close(); "
+        "valid=hashlib.sha256(code).hexdigest()==" + repr(digest) + "; "
+        "print('{\"checkerIntegrity\":false}') if not valid else None; "
+        "sys.exit(2) if not valid else None; "
+        "exec(compile(code,p,'exec'),{'__name__':'__main__','__file__':p})")
+    checks = {'version': 1, 'checks': [{'step': 1, 'check': 1, 'cwd': '.',
+        'command': 'python3 -I -B -c ' + shlex.quote(bootstrap)}]}
+    (project / 'checks.json').write_text(json.dumps(checks, indent=2) + '\n', encoding='utf-8')
+    criterion = 'Frozen CLI checks pass: default/blank rows, nonnegative limit, help and compatible error exits; input remains unchanged.'
+    return {'version': 1, 'goal': 'Add --limit N to the row-printing CLI without changing existing behavior',
+        'clarifications': [], 'success_criteria': [criterion], 'steps': [{
+            'kind': 'implement', 'objective': 'Edit only rows.py to implement optional --limit N. '
+            'N is a nonnegative integer; print at most the first N physical rows, including blank rows. '
+            'Zero prints nothing; a limit beyond the input length prints all rows. Without --limit, '
+            'preserve existing output. Keep the description, help, missing-file handling and argparse '
+            'error exit code 2. Do not modify inputs, plans, commands or the frozen checker. '
+            'Use native patch approval when needed; do not widen permissions. After implementation, '
+            'run the registered check once and report the outcome. No network or unrelated commands.',
+            'role': role, 'effort': 'low', 'risk': 'normal',
+            'reason': 'A bounded single-file option with independent frozen CLI checks.',
+            'checks': [{'kind': 'test', 'criterion': criterion}],
+        }]}
+
+
+def frozen_file_matches(path, expected):
+    with path.open('rb') as source:
+        return source.read(len(expected) + 1) == expected
+
+
+def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=False, metrics_jsonl=None,
+        tool_approvals=False):
     if standard == strong or not standard.strip() or not strong.strip():
         raise ValueError('Choose two distinct model IDs that support low effort.')
     scratch = scratch.resolve(strict=True)
     project = scratch / arm / 'project'
     runtime = scratch / 'modelmate.py'
+    if not frozen_file_matches(runtime, (Path(__file__).resolve().parents[1] / 'modelmate.py').read_bytes()):
+        raise ValueError('Prepared runtime differs from this checkout; use its original revision or prepare a new pair.')
     state = scratch / arm / 'state'
     checks = project / 'checks.json'
     plan_path = project / 'plan.json'
     case_file = scratch / 'case.txt'
+    case = case_file.read_text(encoding='utf-8').strip() if case_file.is_file() else 'c1'
+    if tool_approvals and case != 'cli':
+        raise ValueError('Experimental tool approvals are scoped to the CLI authoring pilot.')
+    if execute and case == 'cli' and not tool_approvals:
+        raise ValueError('Executing the CLI authoring pilot requires explicit --experimental-tool-approvals.')
+    if case == 'cli':
+        if state.exists():
+            raise ValueError('CLI arm already has state; inspect/resume it or prepare a new pair, never replay it.')
+        checker = scratch / 'check-cli.py'
+        if not frozen_file_matches(checker, Path(__file__).with_name('cli-pilot-check.py').read_bytes()):
+            raise ValueError('Frozen CLI checker changed; do not start this arm.')
+        with tempfile.TemporaryDirectory(prefix='modelmate-cli-reference-') as directory:
+            reference = Path(directory)
+            expected = prepare_cli(reference, 'standard' if arm == 'routed' else 'strong', checker)
+            (reference / 'plan.json').write_text(json.dumps(expected, indent=2) + '\n', encoding='utf-8')
+            names = {path.name for path in reference.iterdir()}
+            if ({path.name for path in project.iterdir()} != names or any(
+                    not frozen_file_matches(project / name, (reference / name).read_bytes()) for name in names)):
+                raise ValueError('Frozen CLI inputs changed; do not start this arm.')
     measured_pair = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() in ('dedupe', 'incident')
     mode = 'approve_plan'
     if checks.is_file():
@@ -168,12 +245,14 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
             '--role-model', 'strong=' + strong]
     if checks.is_file():
         if not economy or economy in (standard, strong) or not economy.strip():
-            raise ValueError('The economy pilot requires a third distinct model ID supporting low effort.')
+            raise ValueError('Command-check pilots require a third distinct model ID supporting low effort.')
         args.extend(['--check-commands', str(checks), '--role-model', 'economy=' + economy])
     if arm == 'routed':
         args.append('--suggest-models')
     if execute:
         args.append('--execute-workflow')
+    if tool_approvals:
+        args.append('--experimental-tool-approvals')
     if measure_quota or (execute and measured_pair):
         args.append('--measure-quota')
     if metrics_jsonl is not None:
@@ -314,7 +393,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -324,6 +403,8 @@ def main():
     launch.add_argument('--execute', action='store_true', help='enable START and turn approval, which can use quota')
     launch.add_argument('--measure-quota', action='store_true', help='include observed live quota-window changes')
     launch.add_argument('--metrics-jsonl', help='append a private metrics report without account quota data')
+    launch.add_argument('--experimental-tool-approvals', action='store_true',
+                        help='explicit native patch/command approval UI for the CLI authoring pilot')
     grade = actions.add_parser('score', help='score a turn answer with the case rubric')
     grade.add_argument('answer')
     grade.add_argument('--case', choices=('c1', 'dedupe', 'incident'), default='c1')
@@ -339,7 +420,7 @@ def main():
             return 0
         if args.action == 'run':
             return run(args.scratch, args.arm, args.standard, args.strong, args.execute, args.economy,
-                       args.measure_quota, args.metrics_jsonl)
+                       args.measure_quota, args.metrics_jsonl, args.experimental_tool_approvals)
         if args.action == 'compare':
             return compare(args.baseline, args.routed, args.baseline_row, args.routed_row)
         scorers = {'c1': score, 'dedupe': score_dedupe, 'incident': score_incident}

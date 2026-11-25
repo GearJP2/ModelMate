@@ -365,14 +365,14 @@ class RecheckUITests(unittest.TestCase):
             self.assertEqual(self.entry(execute=True,text='START\n'),0)
         self.assertEqual(chat.call_args.kwargs['recheck_commands'],self.bindings)
 
-    def active_session(self, code):
+    def active_session(self, code, *, complete=True, record_evidence=True):
         record=self.store.create('active check',thread_id='work-thread',
             account_hash=hashlib.sha256(QUOTA['accountId'].encode()).hexdigest())
         self.sid=record['id']
         with self.attach(WorkflowController(self.plan,CATALOG,POLICY)) as controller:
             aid=controller.request_attempt(QUOTA,time.monotonic(),CATALOG,POLICY)['dispatch']['attempt_id']
-            controller.finish_attempt(aid,'completed')
-            controller.record_check(aid,0,origin='tool',exit_code=code,reference='synthetic',finding='observed')
+            if complete:controller.finish_attempt(aid,'completed')
+            if record_evidence:controller.record_check(aid,0,origin='tool',exit_code=code,reference='synthetic',finding='observed')
             record=self.store.read(self.sid);record['turn_id']='work-turn';self.store.save(record)
 
     def test_completed_active_attempt_can_bind_checks_without_replaying_work(self):
@@ -390,11 +390,55 @@ class RecheckUITests(unittest.TestCase):
         self.assertFalse(any(json.loads(line)['method']=='turn/start' for line in (self.root/'active.trace').read_text().splitlines()))
 
     def test_unknown_active_check_is_not_silently_retried(self):
+        from modelmate import NativeWorkflowConnection
+        from test_native_recheck import SERVER
+        for complete, evidence in ((True, True), (True, False), (False, False)):
+            with self.subTest(complete=complete, evidence=evidence):
+                self.active_session(None, complete=complete, record_evidence=evidence)
+                original = self.store.read(self.sid)['workflow']['active_attempt']
+                trace = self.root / ('unknown-' + str(complete) + '-' + str(evidence) + '.trace')
+                def factory(command, timeout=15):
+                    return NativeWorkflowConnection([sys.executable, '-u', '-c', SERVER, str(trace),
+                        str(self.store.directory / (self.sid + '.json')), str(self.project), 'normal'], 1)
+                def interact(source, output, **kwargs):
+                    controller = kwargs['workflow']
+                    shell = ChatShell(output, workflow=controller, workflow_action=kwargs['workflow_action'],
+                                      catalog=CATALOG, role_policy=POLICY)
+                    if controller.state == 'PAUSED':
+                        shell.line('/continue ' + controller.snapshot()['pause_token'])
+                    shell.line('/verify 1 pass')
+                    shell.event({'type': 'text', 'text': 'All tests passed'})
+                    shell.line('/check')
+                    state = controller.snapshot()
+                    self.assertEqual(state['state'], 'UNVERIFIED')
+                    self.assertIsNone(state['active_attempt'])
+                    self.assertEqual(state['history'][-1]['id'], original['id'])
+                    self.assertEqual(state['history'][-1]['checks'][0]['result'], 'unknown')
+                    self.assertEqual(state['steps'][0]['attempts'], 1)
+                    self.assertEqual(state['steps'][0]['evidence'], [])
+                    shell.line('/next')
+                    self.assertEqual(controller.state, 'UNVERIFIED')
+                    return 0
+                with patch('modelmate.NativeWorkflowConnection', side_effect=factory), \
+                     patch('modelmate.run_chat', side_effect=interact):
+                    self.assertEqual(self.entry(execute=True, text='START\n'), 0)
+                self.assertFalse(any(json.loads(line).get('method') in ('turn/start', 'turn/interrupt')
+                                     for line in trace.read_text().splitlines()))
+
+    def test_unknown_check_resume_refuses_an_active_native_thread(self):
+        from modelmate import NativeWorkflowConnection
+        from test_native_recheck import SERVER
         self.active_session(None)
-        with patch('modelmate.NativeWorkflowConnection') as backend:
-            with self.assertRaisesRegex(ProbeError,'known saved tool results'):
-                self.entry(execute=True,text='START\n')
-            backend.assert_not_called()
+        before = self.store.read(self.sid)
+        trace = self.root / 'unknown-busy.trace'
+        def factory(command, timeout=15):
+            return NativeWorkflowConnection([sys.executable, '-u', '-c', SERVER, str(trace),
+                str(self.store.directory / (self.sid + '.json')), str(self.project), 'work_busy'], 1)
+        with patch('modelmate.NativeWorkflowConnection', side_effect=factory):
+            with self.assertRaises(ProbeError):self.entry(execute=True, text='START\n')
+        self.assertEqual(self.store.read(self.sid), before)
+        self.assertFalse(any(json.loads(line).get('method') in ('turn/start', 'turn/interrupt')
+                             for line in trace.read_text().splitlines()))
 
     def test_unresolved_reservation_blocks_resume_and_metadata_removal(self):
         with self.attach() as parent:

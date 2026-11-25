@@ -56,8 +56,8 @@ Preflight ไม่ใช่การจอง quota หรือ hard spending 
 ค่าเริ่มต้นยังไม่เปิด tool-check resume; รุ่นทดลองต้องระบุ `--experimental-rechecks`
 กับ `--resume-workflow`, command bindings และ `--execute-workflow`
 `/recheck STEP.CHECK` แสดงคำสั่ง/โมเดล แล้ว `/confirm-recheck TOKEN` ใช้โควตาเพิ่ม
-หนึ่ง verification turn Native threads ถูกเก็บไว้; unknown outcomes ยังต้องหยุด
-และการลบ metadata ที่มี recheck ถูกปิดจนกว่าจะมี scoped cleanup
+หนึ่ง verification turn Native threads ถูกเก็บไว้; recheck outcomes ที่ยังไม่ทราบ
+ยังต้องหยุดและเก็บ metadata ไว้เพื่อ recovery/การลบแบบ scoped ตามหัวข้อด้านล่าง
 ดู [ข้อกำหนด native recheck](NATIVE_RECHECK.md) สำหรับขอบเขตที่เหลือ
 ไม่เปิด effort ultra ที่มี automatic delegation
 การส่ง model ID เป็นการร้องขอโมเดล ไม่ใช่ execution telemetry ที่ยืนยัน actual dispatch
@@ -184,12 +184,13 @@ Recovery รองรับเฉพาะ recheck ที่บันทึก n
 มี `WorkflowController` สำหรับทดสอบลำดับขั้น/ผลตรวจ/งบแก้ไขแบบออฟไลน์แล้ว
 ผูกกับ `SessionStore.workflow(...)` เพื่อบันทึกแต่ละ transition และคืนสถานะข้าม process ได้
 มี Workflow UI แบบ host-injected ผ่าน `run_chat(..., workflow=controller, workflow_action=host)` แล้ว
-มี experimental explicit-plan CLI ตามหัวข้อด้านล่าง; ยังไม่มี auto execution
+มี experimental explicit-plan CLI ตามหัวข้อด้านล่าง; default ยังเดินงานด้วยคำสั่งผู้ใช้
 มีผลสดเฉพาะ happy paths ที่บันทึกใน VERIFICATION.md
 รายละเอียดสัญญา trusted host callbacks และข้อจำกัดอยู่ใน [ผลตรวจ P10](VERIFICATION.md)
 
 เมื่อ host ผูก workflow เข้า shell จะมี `/workflow`, `/status`, `/next`, `/check`, `/mode`
 และคำตอบตาม token เช่น `/approve`, `/decline`, `/continue`, `/revise`, `/pause`
+มี `/revise-step FILE` สำหรับปรับขั้นปัจจุบันเมื่อไม่มี active attempt ตามรายละเอียดด้านล่าง
 แสดงแผน โมเดลที่เสนอ ขั้นปัจจุบัน จำนวนรอบ ผลตรวจ และจำนวนหลักฐานของแต่ละเกณฑ์
 `/approve TOKEN` บันทึกการอนุมัติ ส่วน `/next` ส่งคำขอไปยัง trusted host เพื่อตรวจ quota/catalog/model gates
 ถ้าไม่มี host จะไม่ใช้ attempt slot หรือส่งงานใด ๆ `/cancel` และ `/exit` ขณะ active
@@ -426,13 +427,185 @@ URL และ finding ถูกเก็บใน local checkpoint จึงไ�
 Approve plan จะแสดง model และ effort ของทุกขั้นก่อนขออนุมัติ
 
 ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
+หากจะเปลี่ยนไปใช้ role อื่นระหว่าง session ให้ระบุ binding ของ role นั้นตั้งแต่เริ่มด้วย
 ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
-นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
+โดย default นี่คือ model policy ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
 Default จะ decline/pause คำขอเพิ่มสิทธิ์; opt-in approval UI อยู่ด้านล่าง read-only/on-request
 ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
 
-รุ่นนี้รับแผนที่ไม่มี clarifications, manual/rubric/source checks และ test/lint ที่ผูก
+### สร้าง draft plan จาก prompt ด้วยโมเดลที่เลือก
+
+```sh
+sr --draft-plan new-plan.json --model MODEL "เพิ่มตัวกรองรายการในโปรเจกต์นี้"
+```
+
+คำสั่งนี้แสดงโมเดล/effort และ goal ก่อนขอ `START` เพื่อใช้หนึ่ง planning turn
+เลือก effort ได้ด้วย `--effort`; ไม่เรียก classifier เพื่อเลือกโมเดลเริ่มต้น
+EOF/CANCEL/บรรทัดยืนยันไม่ครบไม่เปิด backend ใช้ native read-only/on-request;
+คำขอขยายสิทธิ์ถูก decline คำสั่งที่ sandbox อนุญาตยังอยู่ภายใต้นโยบาย native เดิม
+ไม่ได้รับประกันว่าการบอกโมเดลไม่ใช้ tools เป็นขอบเขตความปลอดภัย
+
+ผลต้องเป็น JSON plan เดียวที่ validator รับและ goal ตรงกับคำขอ จึงสร้างไฟล์ใหม่
+mode 0600 ใน directory ที่มีอยู่แล้ว ไม่เขียนทับไฟล์เดิมหรือไฟล์ที่ถูกสร้างแข่งกัน
+invalid/missing/multiple output, permission/quota unknown หรือ disconnect จะหยุด
+โดยไม่ retry หรือเริ่มงานตามข้อเสนอ การได้ draft ไม่ได้แปลว่าเกณฑ์งานผ่าน
+planning turn นี้เป็น ephemeral และยังไม่มี resume
+
+อ่าน goal/criteria/steps/reasons ในไฟล์ก่อนใช้ `--workflow new-plan.json` พร้อม
+bindings ของทุก role ที่แผนใช้ หากมี clarifications ให้ตอบผ่าน `--clarification`
+ให้ครบ หรือใช้ --execute-workflow เพื่อตอบแบบ interactive ก่อน START การ execute ยังต้อง opt-in/START และผ่าน model/tool gates
+ของ workflow อีกครั้ง คำสั่งนี้ยังไม่เชื่อม plain prompt ไปเป็น workflow อัตโนมัติ
+มีหลักฐาน fake-server/offline เท่านั้น ยังไม่ได้ทดสอบ live ด้วย quota จริง
+
+### จาก prompt ไป draft และ workflow ในคำสั่งเดียว
+
+```sh
+sr --plan-workflow new-plan.json --model PLANNER \
+  --role-model standard=WORK_MODEL "เพิ่มตัวกรองรายการในโปรเจกต์นี้"
+```
+
+START แรกอนุญาต planning turn เดียวด้วย PLANNER แล้วบันทึก draft ใหม่แบบเดียวกับ
+--draft-plan จากนั้นแสดง workflow preview ค่า default ยังไม่ execute work
+จึงมีค่าใช้ quota สำหรับ planning หลังยืนยัน แม้ไม่ได้ใส่ --execute-workflow
+ใช้ --check-catalog ร่วมกับโหมดนี้ไม่ได้ เพื่อคงสัญญาว่า catalog-only ไม่เรียก inference
+
+หากเพิ่ม --execute-workflow จะถาม clarification ที่ค้าง แล้วแสดง effective plan
+และขอ START แยกสำหรับ execution โมเดลของงานใช้ role bindings ที่ระบุ ไม่สืบทอด
+model/tool grants หรือ attempt budget จาก planning เลือก --workflow-mode ได้ตามเดิม
+รวม opt-in Auto advancement; default ยังเป็น Ask to escalate และ native tool gates เดิม
+
+ต้องระบุ standard work binding ก่อน planning และ bindings ของ role อื่นที่ draft ใช้
+หาก draft ต้องการ bindings/check commands ที่ยังไม่มี จะหยุดก่อนเริ่ม work backend
+ไฟล์ draft ยังอยู่ ให้ตรวจแล้วใช้ --workflow FILE ต่อได้โดยไม่ต้องสร้าง draft ซ้ำ
+คำสั่งตรวจต้องเป็น user-owned --check-commands; โมเดลสร้างสิทธิ์หรือคำสั่งจาก plan ไม่ได้
+
+ยกเลิก START แรกจะไม่มี draft ยกเลิกช่วง clarification หรือ START ที่สองจะไม่เริ่ม work
+แต่เก็บ draft ที่ผ่าน validator แล้วไว้ goal ที่เปลี่ยนระหว่าง handoff จะถูกปฏิเสธ
+รายงาน Plan-workflow timing แยก wall time ของ planning/workflow และเวลารวม รวมเวลารอผู้ใช้
+ถ้าจบก่อน handoff ช่วง workflow เป็น null ส่วน usage และ JSONL ของ workflow
+ยังวัดเฉพาะ workflow ไม่รวม planning usage และไม่สร้างยอด token/model รวมเอง
+ยังเป็น experimental/offline-tested flow และ plain prompt ปกติยังไม่ใช้โหมดนี้เอง
+
+### Experimental Auto advancement
+
+สำหรับแผนใหม่เท่านั้น ใช้ `--workflow-mode auto --experimental-auto-advance`
+เพื่อเริ่ม attempt เมื่อ controller เป็น READY โดยไม่ต้อง `/next` ซ้ำ ตัวอย่าง preview
+ที่ไม่เปิด Codex หรือใช้โควตา:
+
+```sh
+sr --workflow plan.json --role-model standard=MODEL --workflow-mode auto --experimental-auto-advance
+```
+
+ระบุ bindings ของทุก role ที่แผนใช้ด้วย หากจะทดลอง live ต้องเพิ่ม
+`--execute-workflow` และพิมพ์ `START` หลังอ่าน preview การยืนยันนี้อนุญาตให้เริ่ม
+attempts ในแผนนี้ รวม initial + ไม่เกินสอง corrections ต่อขั้น โดยตรวจ
+account/quota/catalog/model gates ใหม่ทุก attempt ไม่อนุมัติ tools แทนผู้ใช้
+และไม่ขยาย read-only/on-request หาก quota/permission ไม่ทราบจะพัก
+
+สำหรับขั้นที่ทุก check เป็น test/lint ระบบจะประเมินด้วย trusted host evidence
+หลัง native ยืนยันว่าจบ attempt แล้ว ไม่ส่งคำสั่งตรวจซ้ำ เมื่อผ่านจะเริ่มขั้นถัดไป
+เมื่อ fail ที่ทราบผลจะเริ่ม correction ภายใน budget เดิม ส่วน missing/unknown
+จะเป็น UNVERIFIED และหยุด หากมี manual/rubric/source check แม้เพียงข้อเดียว
+ยังต้องให้ผู้ใช้ตรวจและสั่ง `/check` เอง pending approval, การพัก และขั้นที่รอ
+mapping เกณฑ์สำเร็จจะไม่เดินต่อเอง หากไม่ระบุ --criterion-map ยังต้องใช้ `/finish`
+กับ accepted evidence เพื่อรับรองเกณฑ์งาน ไม่ใช้ข้อความโมเดลว่า tests passed แทนหลักฐาน
+
+`/cancel`, `/exit` และ EOF ไม่อนุญาตงานเพิ่ม การส่งงานที่ล้มเหลว/ผลไม่แน่ชัด
+จะปิด automatic advancement ใน process นี้โดยไม่ replay ต้องตรวจสถานะก่อนทำต่อ
+flag นี้ไม่ถูกบันทึกหรือ restore และใช้ร่วมกับ `--resume-workflow` ไม่ได้
+โหมดอื่นและการไม่ใส่ flag ยังทำงานแบบเดิม ส่วน prompt ธรรมดายังไม่สร้างแผนอัตโนมัติ
+มีหลักฐาน offline/fake-native เท่านั้น ยังไม่ผ่าน live automation/release gates
+
+### ระบุ criterion mapping สำหรับ Auto completion
+
+หากต้องการให้ Auto จบ task โดยไม่ต้อง /finish ให้เตรียม mapping ของผู้ใช้ เช่น:
+
+```json
+{"version": 1, "criteria": {"1": ["1.1"]}}
+```
+
+ตัวอย่างนี้ระบุว่า success criterion 1 ใช้ evidence จาก step 1 check 1
+ต้องครอบคลุมทุก criterion ด้วยเลขเริ่มที่ 1 และอ้างเฉพาะ check ที่ประกาศไว้
+ใส่ --criterion-map criteria.json ร่วมกับ --workflow-mode auto และ
+--experimental-auto-advance เช่น preview offline:
+
+```sh
+sr --workflow plan.json --role-model standard=MODEL --workflow-mode auto \
+  --experimental-auto-advance --criterion-map criteria.json
+```
+
+อ่าน criteria/checks และ mapping ใน preview ก่อนเพิ่ม --execute-workflow/ยืนยัน START
+นี่คือการระบุโดยผู้ใช้ว่า check ใดครอบคลุมเกณฑ์ใด ไม่ใช่ semantic verification จากโมเดล
+ระบบ resolve เป็น accepted evidence IDs ปัจจุบันหลังทุกขั้นผ่าน แล้วเรียก controller
+ตัวเดิมที่ /finish ใช้ unknown, missing, failed, stale หรือ unresolved recheck ไม่ทำให้ DONE
+การ apply mapping ทำครั้งเดียว หากปฏิเสธจะหยุด auto และรอผู้ใช้ตรวจ ไม่ retry หรือเรียกโมเดลเพิ่ม
+
+Mapping ไม่อนุมัติ tools ไม่เปลี่ยน budget และไม่ถูก restore เป็น opt-in ของ session
+ไฟล์ผิด schema/เกิน 32 KiB/อ้าง UUID เอง/อ้าง check ที่ไม่มีจะถูกปฏิเสธก่อน backend
+หากมี human checks ยังต้องตรวจและ /check ตามเดิมก่อน completion เกิดได้
+ใช้กับ --plan-workflow ได้ โดยตรวจ mapping เทียบ draft และ preview ก่อน START ของ work
+
+### เลือกโมเดลเองใน workflow
+
+`/model` แสดงตัวเลือกของขั้นปัจจุบัน, role bindings และ catalog ล่าสุดที่ทราบ
+ใช้ `/model ID [EFFORT]` เมื่อไม่มี active attempt เพื่อเลือกโมเดลเฉพาะขั้นนี้
+ถ้าไม่ระบุ effort จะใช้ default ที่ catalog รายงาน ตัวอย่าง `/model MODEL low`
+ไม่เริ่ม turn จนกด `/next`; native host จะอ่าน quota/catalog ใหม่ก่อนเริ่มเช่นเดิม
+
+ID ต้องมี role binding อยู่แล้ว ถ้าตรง role ปัจจุบันจะคง role นั้น ถ้ามีหลาย
+bindings ที่กำกวม ให้ใช้ `/revise-step` ระบุ role ก่อน ไม่จัดบทบาทจากชื่อโมเดล
+ไม่อนุญาตให้เลือกจนลบ strong review ที่แผนเสี่ยงสูงต้องมี
+
+คำสั่งนี้เป็นการอนุมัติโมเดล/effort เฉพาะขั้นปัจจุบันใน process นี้ ไม่ให้สิทธิ์ tools
+และไม่ครอบคลุมขั้นถัดไป ใน Approve plan ยังต้องอนุมัติแผนใหม่ก่อนเริ่ม
+baseline, เกณฑ์ตรวจ, ID และ budget เดิมยังอยู่ และ approval/token เดิมหมดอายุ
+checkpoint เก็บ role/effort/reason ที่แก้ แต่ไม่เก็บ grant; หลัง restore ต้องผ่าน
+gates ใหม่และ resolve bindings อีกครั้ง ไม่ใช้ข้อความ reason แทนการอนุมัติ
+
+### เปลี่ยนแนวทางของขั้นปัจจุบัน
+
+สร้างไฟล์ revision JSON เช่น `revision.json`:
+
+```json
+{"objective":"แก้เฉพาะกรณีที่ทดสอบไม่ผ่าน", "role":"standard", "effort":"low", "reason":"ลดขอบเขตงาน"}
+```
+
+จาก workflow ที่ยังไม่มี active attempt ใช้ `/revise-step revision.json`
+หรือ `/revise-step "path with spaces/revision.json"` จะเปลี่ยนเฉพาะ fields ที่ระบุ
+จาก objective/role/effort/reason แล้วแสดงแผนใหม่ ไม่เริ่ม turn หรืออนุมัติโมเดล/tools
+goal รวม clarification/source context, เกณฑ์ตรวจ, โครงสร้าง, ID และ budget เดิมยังอยู่
+approval เดิมใช้ไม่ได้ ต้องผ่าน gates ตาม mode ที่เลือกเมื่อกด `/next` อีกครั้ง
+
+ใช้ได้ตอนรอ model approval หรือพักหลัง `/check` ประเมิน attempt แล้ว
+ห้ามแก้ขณะ attempt ยัง running หรือจบ turn แต่ยังรอตรวจ รวมถึง task ที่จบแล้ว
+`/revise TOKEN` เป็นการเลือกเปลี่ยนแนวทาง; `/revise-step FILE` เป็นการใส่เนื้อหาที่แก้จริง
+การแก้ไม่เพิ่ม budget หากครบสาม attempts แล้ว ต้องตอบ `/continue` ที่ correction-limit
+prompt เพื่ออนุมัติรอบใหม่อย่างชัดเจน ใช้ role ที่มี binding แล้วและ effort ที่ catalog รองรับ
+revision บันทึกใน checkpoint ของแผนที่มีผลจริง โดยไม่เขียนไฟล์แผนหรือ revision ทับ
+
+ก่อนเริ่ม execution ต้องตอบคำถามค้างให้ครบ รองรับ manual/rubric/source checks และ test/lint ที่ผูก
 คำสั่งผ่าน --check-commands ตามหัวข้อด้านล่าง; source checks ต้องให้ผู้ใช้ตรวจ URL และ claim เอง
+ถ้าแผนมี `clarifications` การ preview จะยังแสดงคำถามโดยไม่อ่าน input
+เมื่อใช้ `--execute-workflow` โดยไม่ส่ง --clarification ระบบจะถามทุกข้อก่อนเปิด
+backend ให้ตอบทีละบรรทัด หรือ CANCEL เพื่อพัก EOF/บรรทัดไม่ครบจะไม่เริ่มงาน
+หลังตอบครบยังต้องอ่าน effective plan และพิมพ์ START แยกต่างหาก คำว่า START
+ที่ใช้เป็นคำตอบไม่ใช่การอนุมัติ execution คำตอบผิด UTF-8 ว่าง เกินเพดาน หรือทำให้
+ผลรวม goal เกินขนาดจะหยุดโดยไม่เรียกโมเดลเพิ่ม
+
+หากต้องการระบุคำตอบผ่าน arguments ยังใช้ --clarification ให้ครบทุกข้อได้ เช่น:
+
+```bash
+python3 modelmate.py --workflow plan.json --role-model standard=MODEL \
+  --clarification '1=ภาษาไทย' --clarification '2=เฉพาะตัวอย่าง' \
+  --execute-workflow
+```
+
+ไม่ใส่ `--execute-workflow` จะเป็น preview offline ตามเดิม คำตอบจะรวมกับคำถาม
+ใน goal ของแผนที่แสดงก่อน START และบันทึกใน local checkpoint เมื่อเริ่ม session
+ไฟล์ `plan.json` เดิมไม่ถูกแก้ คำตอบต้องครบ ไม่ซ้ำ และอยู่ภายในเพดานข้อความของแผน
+หากคำตอบทำให้ steps หรือเกณฑ์ตรวจต้องเปลี่ยน ให้แก้แผนต้นฉบับก่อนเริ่ม
+คำตอบไม่อนุมัติโมเดลหรือเครื่องมือ และใช้แก้แผนของ session ที่ resume แล้วไม่ได้
+
 checkpoint บันทึกอัตโนมัติแยกโปรเจกต์ ดูด้วย `--sessions`/`--show-workflow ID`
 session ใหม่เป็น durable; experimental resume รองรับ manual/rubric/source ตามหัวข้อด้านล่าง
 ห้ามใช้ manual chat ข้าม checkpoint ผลค้าง และห้ามเริ่มคำสั่งเดิมซ้ำเมื่อผลยังไม่ทราบ
@@ -574,6 +747,35 @@ python3 modelmate.py --resume-workflow SESSION_ID --role-model standard=gpt-6.1-
 step IDs/attempts/correction budget เดิมยังอยู่ ถ้า native start outcome ไม่ทราบ
 หรือ turn ID ไม่ตรง checkpoint จะไม่เดา ไม่ใช้ turn เก่าแทน และไม่เริ่ม turn ใหม่
 
+work turn รุ่นใหม่ส่ง attempt ID ที่บันทึกก่อน dispatch เป็น `clientUserMessageId`
+ถ้า turn ID หายหลัง start แต่ยังรู้ native thread, resume จะอ่าน full history
+แบบมีเพดานและผูกได้เฉพาะ turn ล่าสุดที่จบแล้ว มี user marker ตรงเพียงรายการเดียว
+ไม่มี marker ซ้ำใน history และไม่มีหน้าประวัติที่ยังอ่านไม่ครบ (สูงสุด 100 turns)
+จากนั้นตรวจ latest ID/status ซ้ำก่อนบันทึก binding การพบ terminal metadata
+ไม่ใช่ผลทดสอบผ่าน: attempt/counters เดิมยังอยู่ และต้องตรวจงานตามปกติ
+แผนเก่าที่ไม่มี marker, thread ID หาย, active/กำกวม/ประวัติไม่ครบ ยังต้องหยุด
+marker ไม่ใช่ idempotency key และไม่อนุญาตให้ส่งคำสั่งเดิมซ้ำ
+เส้นทาง work correlation นี้ผ่าน offline tests เท่านั้น ยังต้องมีหลักฐาน live แยก
+
+มี verifier สำหรับ scratch ที่จบสำเร็จจาก `--probe-workflow-resume` ของ runtime
+ที่ส่ง attempt marker แล้ว (ตั้งแต่ `e46a1d2`):
+
+```bash
+codex --version
+python3 verify.py --probe-work-recovery SCRATCH
+```
+
+คำสั่งนี้ใช้ศูนย์ model turns ไม่ต้องใส่ `--run-live` จะสร้าง metadata copy
+จำลองว่า binding ของ turn ที่สองหาย แล้วอ่าน metadata/resume thread เดิม
+ห้าม start/interrupt/delete หรือส่งคำตอบ approval สำเร็จแล้วลบเฉพาะ copy;
+หากไม่สำเร็จจะเก็บ copy ไว้และแสดง path ทาง stderr ต้นฉบับไม่ถูกเขียนทับ
+เก็บเฉพาะ version, hashes และผลห้าข้อใน JSON เมื่อต้องส่งหลักฐาน
+
+scratch เก่าที่ไม่มี marker จะผ่านไม่ได้ หากต้องสร้าง source ใหม่ ให้ใช้คำสั่ง
+opt-in `--run-live --probe-workflow-resume MODEL` ตามด้านล่าง ซึ่งใช้สูงสุดสอง
+subscription turns แยกจาก recovery check นี้ ผลบน copy ไม่ใช่หลักฐาน live
+ของการตัดการเชื่อมต่อจริง, active STOP หรือ current test results
+
 ผลตรวจที่ restore มาเป็น stale ตรวจผลปัจจุบันก่อนยืนยัน เช่น:
 
 ```text
@@ -593,6 +795,21 @@ step IDs/attempts/correction budget เดิมยังอยู่ ถ้า 
 สำหรับแผนที่มี test/lint แทนที่จะให้มือยืนยัน exit code ข้าม gate
 Native recovery ที่ active turn จบแล้วอาจเปิดเป็น CHECKING/PAUSED; terminal status
 ไม่เท่ากับ tests ผ่าน หาก cached/native state ขัดกันจะไม่ทำงานต่อ
+
+รุ่นทดลอง `--experimental-rechecks` ร่วมกับ `--check-commands` และ
+`--execute-workflow` รองรับการเข้า resume แม้ cached test/lint result หายหรือ
+unknown ได้ แต่ backend ต้องยืนยัน native turn ที่จบแล้วและ binding ตรงก่อน
+ถ้า UI แสดง pause token ให้ `/continue TOKEN` เพื่อกลับสู่ CHECKING แล้ว `/check`
+จะบันทึกผลที่ตรวจไม่ได้เป็น UNVERIFIED โดยไม่รันคำสั่งเดิมซ้ำ
+
+unknown เดิมอยู่ใน ledger และไม่ใช้เป็น pass หรือเปลี่ยนเป็น pass ด้วยการยืนยัน
+ส่วน pass/fail ที่ stale ยังต้อง revalidate ตามเดิม คำสั่งเก่าอาจรันไปแล้วแม้ไม่มี
+ผลตรวจ จึงต้องตรวจไฟล์/ผลข้างเคียงก่อนเลือกทำ attempt ใหม่อย่างชัดเจน
+ถ้าต้องแก้งานต่อ จาก UNVERIFIED ใช้ `/cancel` เพื่อพัก แล้ว `/continue TOKEN`
+และ `/next` เพื่อขอ correction ใหม่ตาม budget เดิม การเริ่ม turn ใหม่ใช้ quota
+และผ่าน model/tool gates ตามปกติ; ไม่ได้ย้อน side effects หรือรีเซ็ตจำนวน attempts
+native work ที่ยัง active, identity ไม่ตรง หรือ recheck outcome ค้างยังถูกปฏิเสธ
+เส้นทาง missing/unknown นี้มี offline evidence เท่านั้น
 
 ตรวจ happy path แบบ opt-in ด้วยคำสั่งเดียว (สูงสุด 2 turns, ไม่มี retry):
 
@@ -692,6 +909,8 @@ python3 modelmate.py --inspect-work-turn SESSION_ID
 `last` ที่ Codex ส่งมา โดยเฉพาะ turn ที่เรียกเครื่องมืออาจมีหลาย model responses
 จึงไม่ใช่ token รวมทั้ง turn หากไม่มีเหตุการณ์ที่ตรงกัน ค่าจะเป็น null
 ผลสรุปยังเก็บ `tokenUsage.total` ของ thread ตามที่ Codex ส่งมาแยกต่างหาก
+event ที่มาช้าหลังเริ่ม attempt ถัดไปยังอัปเดตรายการของ turn เดิมได้ หากเป็น
+turn ที่ส่งใน CLI session นี้; event ของ thread อื่นหรือ turn ที่ไม่รู้จักจะถูกละไว้
 
 เพิ่ม `--metrics-jsonl FILE` คู่กับ `--execute-workflow` เพื่อบันทึกสรุปหนึ่ง
 บรรทัดเมื่อจบ CLI session ที่เริ่มแล้ว ใช้ไฟล์เดิมหลายรอบเพื่อสะสมข้อมูลได้
@@ -747,6 +966,32 @@ SearXNG อาจส่งคำค้นต่อให้เครื่อง
 ModelMate อ่านเฉพาะคำค้นที่คุณป้อนในคำสั่งนี้ และจะไม่เปิดลิงก์ผลลัพธ์เอง
 เมื่อ JSON ถูกปิดหรือเซิร์ฟเวอร์เปลี่ยนปลายทาง การค้นจะหยุดและแจ้งข้อผิดพลาด
 [เอกสาร Search API](https://docs.searxng.org/dev/search_api.html)
+
+### นำผลค้นเข้าแผนใหม่
+
+ใช้ `--search-json` ร่วมกับโหมดค้นเพื่อส่งออก JSON หลังยืนยันคำค้นเท่านั้น
+คำถามและ token ยืนยันจะแสดงทาง stderr ส่วน stdout มีเฉพาะ packet ผลค้น:
+
+```bash
+python3 modelmate.py --search-wikipedia th --search-json > sources.json
+python3 -m json.tool sources.json
+python3 modelmate.py --workflow plan.json --role-model standard=MODEL \
+  --source-result sources.json:1
+```
+
+ใช้ `--search-web HTTPS_ORIGIN --search-json` ได้เช่นกัน ถ้ายกเลิกจะไม่มี JSON
+ส่งออก `FILE:NUMBER` เลือกผลตามลำดับเริ่มที่ 1 และใช้ซ้ำได้สูงสุดห้ารายการ
+ตัวอย่าง workflow เป็น preview offline; เพิ่ม `--execute-workflow` เมื่อต้องการ
+เข้า START และ approval ตามเดิม การนำเข้าไม่ส่งคำค้นใหม่หรือเปิดลิงก์ใด ๆ
+
+query, ชื่อ, snippet และ URL ที่เลือกจะอยู่ใน goal ที่แสดงก่อน START และเก็บใน
+local checkpoint โดยไม่แก้ไฟล์แผนต้นฉบับ ผลรวมยังต้องอยู่ในเพดาน goal 4096
+อักขระ; ข้อมูลที่เกินเพดานจะถูกปฏิเสธ ไม่ตัดทิ้งเงียบ ๆ ใช้กับแผนใหม่เท่านั้น
+ไม่เขียนแผนที่ resume แล้วทับ Packet เป็นข้อมูลที่ไม่น่าเชื่อถือ ไม่รับรองผู้ส่ง
+ความถูกต้องของ claim หรือสิทธิ์เครื่องมือ ใช้ `/verify-source` แยกเมื่อได้ตรวจจริง
+
+นี่เป็นการส่งผลค้นแยกกลับเข้า workflow ด้วยการเลือกของผู้ใช้ การสร้างคำค้นจาก
+private context และ automatic search ยังไม่เปิด และไม่ถือว่า G3 ผ่านครบ
 
 `firstPassSteps` จะแสดงจำนวนขั้นที่ผ่าน ไม่ผ่าน หรือยังสรุปไม่ได้จาก
 attempt แรกของแต่ละขั้นที่เริ่มแล้ว `firstPassRate` คิดจากขั้นที่รู้ผลผ่าน

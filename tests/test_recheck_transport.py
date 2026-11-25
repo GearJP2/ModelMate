@@ -200,7 +200,7 @@ time.sleep(30)
         def running(pid):
             try:
                 return Path('/proc/' + str(pid) + '/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 return False
 
         def cleanup_worker():

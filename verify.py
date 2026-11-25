@@ -652,6 +652,17 @@ class ApprovalVerificationConnection(NativeWorkflowConnection):
         self.armed = None
         self.decisions = []
         self.blocked_accepts = 0
+        self.patch_completions = []
+
+    def _observe_tool_preview(self, message):
+        params = message.get('params', {})
+        item = params.get('item', {})
+        if (message.get('method') == 'item/completed' and isinstance(item, dict)
+                and item.get('type') == 'fileChange' and self.host._binding is not None
+                and params.get('threadId') == self.host._binding['thread_id']
+                and params.get('turnId') == self.host._binding['turn_id']):
+            self.patch_completions.append(item)
+        super()._observe_tool_preview(message)
 
     def send(self, message):
         decision = message.get('result', {}).get('decision')
@@ -695,8 +706,19 @@ def check_approval_files(project, nonce, *, allow_marker):
         raise ProbeError('Synthetic approval effect did not match the approved action.')
 
 
-def probe_workflow_approvals(model, timeout):
-    """At most two turns; accept only the registered synthetic marker command, then decline it."""
+def approval_patch_matches(changes, project, nonce):
+    """Recognize only one literal marker addition, never a general patch program."""
+    if not isinstance(changes, list) or len(changes) != 1 or not isinstance(changes[0], dict):
+        return False
+    change = changes[0]
+    path = change.get('path')
+    return (set(change) == {'path', 'kind', 'diff'} and change['kind'] == {'type': 'add'}
+            and path in ('approval-marker.txt', str(project / 'approval-marker.txt'))
+            and change['diff'] in (nonce + '\n', '+' + nonce + '\n'))
+
+
+def probe_workflow_approvals(model, timeout, *, patch=False):
+    """At most two turns; accept only one registered marker action, then decline it."""
     directory = Path(tempfile.mkdtemp(prefix='modelmate-workflow-approvals-'))
     connection = store = None
     cases = []
@@ -704,8 +726,9 @@ def probe_workflow_approvals(model, timeout):
     result.update(requested={'model': model, 'effort': 'low'}, reportedModels=None, scratchRetained=True,
         runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
         verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        scope='At most two synthetic command-approval turns. One bounded marker write may be accepted. '
-              'Not patch approval, a no-tools boundary, all permission paths, interactive Terminal timing or remote cleanup.')
+        scope='At most two synthetic ' + ('patch' if patch else 'command') + '-approval turns. '
+              'One bounded marker write may be accepted. Not other tool kinds, a no-tools boundary, '
+              'all permission paths, interactive Terminal timing or remote cleanup.')
     command = ['codex', 'app-server', '--stdio', '-c', 'forced_login_method="chatgpt"',
                '-c', 'model_provider="openai"', '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"']
     catalog = [{'model': model, 'defaultReasoningEffort': 'low',
@@ -717,35 +740,47 @@ def probe_workflow_approvals(model, timeout):
             (project / 'sentinel.txt').write_text('synthetic sentinel\n')
             nonce = 'MM-' + secrets.token_hex(16)
             spec = "printf '%s\\n' '" + nonce + "' > approval-marker.txt"
+            objective = ('Use apply_patch exactly once to add approval-marker.txt containing exactly '
+                         + nonce + ' followed by one newline. Request approval if required. Do not use '
+                         'commands, change any other file, use network or retry. If denied or unavailable, stop.'
+                         if patch else 'Use the native command tool to run exactly once: ' + spec
+                         + '. Request approval if required. Do not run any other command, change any other file, '
+                         'use network, use a patch tool or retry. If denied or unavailable, stop.')
             case = {'choice': choice, 'requestObserved': 'unverified', 'effect': 'unverified'}
             cases.append(case);result['phase'] = choice
-            raw = json.dumps({'version': 1, 'goal': 'Synthetic native command approval verification',
+            raw = json.dumps({'version': 1, 'goal': 'Synthetic native tool approval verification',
                 'clarifications': [], 'success_criteria': ['Harness checks the authorized marker outcome'],
-                'steps': [{'kind': 'implement', 'objective': 'Use the native command tool to run exactly once: ' + spec
-                    + '. Request approval if required. Do not run any other command, change any other file, '
-                      'use network, use a patch tool or retry. If denied or unavailable, stop.',
+                'steps': [{'kind': 'implement', 'objective': objective,
                     'role': 'standard', 'effort': 'low', 'risk': 'normal', 'reason': 'Explicit synthetic probe',
-                    'checks': [{'kind': 'test', 'criterion': 'Observe the registered marker command exit code'}]}]})
+                    'checks': [{'kind': 'manual' if patch else 'test',
+                                'criterion': 'Observe the registered marker outcome'}]}]})
             store = SessionStore(project, directory / ('state-' + choice))
             controller = WorkflowController(raw, catalog, policy)
             connection = ApprovalVerificationConnection(command, timeout)
             connection.experimental_tool_approvals = True
             host = connection.connect(controller, project, policy, store=store);host.timeout = timeout
-            host.configure_check(0, command=spec, cwd=str(project))
+            if not patch:host.configure_check(0, command=spec, cwd=str(project))
             shell = ChatShell(io.StringIO(), workflow=controller, workflow_action=host)
             shell.line('/next')
             if wait_approval_phase(connection, timeout, pending=True) != 'pending':
                 result['failureReason'] = 'approval_not_observed';return result
             request = controller.snapshot()['tool_request']
             native = connection._native_tool
-            if (native is None or request['binding']['kind'] != 'command'
-                    or native['cwd'] != str(project) or not observed_command_matches(native['command'], spec)
+            matches = False
+            if native is not None:
+                if patch:
+                    matches = (request['binding']['kind'] == 'file_change'
+                               and approval_patch_matches(json.loads(native['preview']), project, nonce))
+                else:
+                    matches = (request['binding']['kind'] == 'command' and native['cwd'] == str(project)
+                               and observed_command_matches(native['command'], spec))
+            if (not matches
                     or host.tool_preview() not in shell.output.getvalue()):
                 result['failureReason'] = 'unexpected_or_undisplayed_action';return result
             case['requestObserved'] = 'passed'
             try:
-                if host._observations:
-                    raise ProbeError('Registered command completion preceded consent.')
+                if host._observations or connection.patch_completions:
+                    raise ProbeError('Tool completion preceded consent.')
                 check_approval_files(project, nonce, allow_marker=False)
             except (ProbeError, OSError):
                 case['beforeConsent'] = result['noEffectBeforeApproval'] = 'failed'
@@ -768,9 +803,18 @@ def probe_workflow_approvals(model, timeout):
             check_approval_files(project, nonce, allow_marker=choice == 'approve')
             if choice == 'approve' and not (project / 'approval-marker.txt').exists():return result
             observed = host._observations.get(0, {})
-            if choice == 'approve' and (observed.get('exit_code') != 0
-                    or observed.get('item_id') != request['binding']['item_id']):
-                result['failureReason'] = 'approved_command_evidence_missing';return result
+            if choice == 'approve':
+                if patch:
+                    matching = [item for item in connection.patch_completions
+                                if item.get('id') == request['binding']['item_id']]
+                    evidence = (len(matching) == 1 and matching[0].get('status') == 'completed'
+                                and approval_patch_matches(matching[0].get('changes'), project, nonce))
+                else:
+                    evidence = (observed.get('exit_code') == 0
+                                and observed.get('item_id') == request['binding']['item_id'])
+                if not evidence:
+                    result['failureReason'] = 'approved_patch_evidence_missing' if patch else 'approved_command_evidence_missing'
+                    return result
             case['effect'] = 'passed'
             saved = store.read(connection.session_id)['workflow']
             case['durableDecision'] = 'passed' if (saved == controller.export_checkpoint()
@@ -960,6 +1004,7 @@ SERVER_LOSS_KEYS = RECHECK_PROBE_KEYS[:4] + ('activeRecheckObserved', 'ownedServ
 def wait_for_recheck_owner(child, project, timeout, result):
     deadline = time.monotonic() + min(timeout, 2)
     owner_timeout = child.timeout
+    result['stopObservationReason'] = 'owner_active_not_observed'
     try:
         while (remaining := deadline - time.monotonic()) > 0:
             child.timeout = min(owner_timeout, remaining)
@@ -968,11 +1013,11 @@ def wait_for_recheck_owner(child, project, timeout, result):
             result.setdefault('ownerInitialStatus', owner_status)
             result['ownerStatusBeforeInspection'] = owner_status
             if owner_status == 'active':
+                result.pop('stopObservationReason')
                 return True
             time.sleep(min(.05, max(0, deadline - time.monotonic())))
     finally:
         child.timeout = owner_timeout
-    result['stopObservationReason'] = 'owner_active_not_observed'
     return False
 
 
@@ -1309,6 +1354,122 @@ def probe_rechecks(model, timeout, *, stop=False, lost_binding=False, command=No
 
 
 RECOVERY_PROBE_KEYS = ('nativeTerminalObserved', 'metadataReconciled', 'historicalResultOnly', 'sourceUnchanged')
+
+
+WORK_RECOVERY_KEYS = ('nativeBindingRecovered', 'attemptPreserved', 'noFreshEvidenceOrGrants',
+                      'noReplay', 'sourceUnchanged')
+
+
+class WorkRecoveryVerificationConnection(NativeWorkflowConnection):
+    """Exercise native resume while preventing starts, interrupts and approval replies."""
+    allowed_methods = {'initialize', 'account/read', 'account/rateLimits/read', 'model/list',
+                       'thread/read', 'thread/turns/list', 'thread/resume'}
+
+    def __init__(self, command, timeout):
+        super().__init__(command, timeout)
+        self.blocked_messages = 0
+
+    def send(self, message):
+        if (message.get('method') not in self.allowed_methods | {'initialized'}
+                or 'result' in message or 'error' in message):
+            self.blocked_messages += 1
+            raise ProbeError('Work recovery verifier blocked a non-recovery message.')
+        super().send(message)
+
+
+def probe_work_recovery(scratch, timeout):
+    """Stage a missing binding on a copy of a successful two-turn workflow probe."""
+    source = target = connection = directory = original = source_id = None
+    result = dict.fromkeys(WORK_RECOVERY_KEYS, 'unverified')
+    result.update(modelTurnsRequested=0, nativeThreadsDeleted=False, copyRetained=False,
+        runtimeSha256=hashlib.sha256(Path(sys.modules[Connection.__module__].__file__).read_bytes()).hexdigest(),
+        verifierSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        scope='Resume-only missing-work-binding recovery on a copy of a completed synthetic workflow probe. '
+              'No new turns, interrupts, approval replies or deletion. Not actual reply/process loss, active recovery or fresh test evidence.')
+    try:
+        result['phase'] = 'source_validation'
+        root = Path(scratch).resolve(strict=True)
+        project = root / 'project'
+        source = SessionStore(project, root / 'state', read_only=True)
+        records = source.list_sessions()
+        if len(records) != 1:
+            raise ProbeError('Expected one retained synthetic workflow session.')
+        original = records[0];source_id = original['id']
+        flow = original.get('workflow')
+        if (not isinstance(flow, dict) or original['goal'] != 'Synthetic durable workflow verification'
+                or flow['state'] != 'DONE' or original['deletion_state'] != 'none'
+                or len(flow['steps']) != 2 or flow['active_attempt'] is not None
+                or any(step['state'] != 'DONE' or step['attempts'] != 1 or step['cycle'] != 0 for step in flow['steps'])
+                or flow.get('rechecks') or flow.get('tool_request')):
+            raise ProbeError('Source is not a completed two-turn synthetic workflow probe.')
+        plan = json.loads(flow['plan'])
+        if any(step['checks'] != [{'kind': 'manual', 'criterion': 'Harness compares displayed answer'}]
+               for step in plan['steps']):
+            raise ProbeError('Source has unsupported workflow checks.')
+        last = flow['history'][-1]
+        if (last.get('kind') is not None or last['status'] != 'completed'
+                or last['step_id'] != flow['steps'][-1]['id'] or not original['turn_id'] or not original['thread_id']):
+            raise ProbeError('Source lacks its final completed work binding.')
+        check_session_sentinel(project, project / 'sentinel.txt')
+
+        directory = Path(tempfile.mkdtemp(prefix='modelmate-work-recovery-copy-'))
+        result['copyRetained'] = True
+        target = SessionStore(project, directory / 'state')
+        created = target.create(original['goal'], account_hash=original['account_hash'])
+        staged = copy.deepcopy(original);staged['id'] = created['id']
+        checkpoint = staged['workflow']
+        active = copy.deepcopy(last);active.update(status='running', checks=[])
+        checkpoint['history'].pop()
+        checkpoint['steps'][-1].update(state='RUNNING', evidence=[])
+        checkpoint.update(state='PAUSED', reason='connection_lost', step_index=1,
+                          active_attempt=active, criterion_evidence={})
+        staged.update(turn_id=None, state='PAUSED', pause_reason='connection_lost', correction_count=0,
+                      step_id=active['step_id'], summary='Isolated synthetic work binding recovery copy.')
+        with target._lock(created['id']):target.save(staged)
+        result['phase'] = 'native_resume'
+        connection = WorkRecoveryVerificationConnection(['codex', 'app-server', '--stdio',
+            '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
+            '-c', 'web_search="disabled"', '-c', 'approvals_reviewer="user"'], timeout)
+        model = flow['baseline']['model']
+        host = connection.resume(target, created['id'], project, {role: model for role in ('economy', 'standard', 'strong')}, flow['plan'])
+        after = target.read(created['id'])
+        state = host.controller.snapshot()
+        if (after['turn_id'] != original['turn_id'] or after['thread_id'] != original['thread_id']
+                or state['active_attempt'] is None or state['active_attempt']['status'] != 'completed'):
+            return result
+        result['nativeBindingRecovered'] = 'passed'
+        unchanged = all(state['active_attempt'][key] == active[key]
+                        for key in ('id', 'step_id', 'cycle', 'number', 'selection'))
+        if (unchanged and state['task_id'] == flow['task_id'] and state['steps'] == checkpoint['steps']
+                and after['workflow']['history'] == checkpoint['history'] and after['workflow']['baseline'] == flow['baseline']):
+            result['attemptPreserved'] = 'passed'
+        if (state['state'] == 'CHECKING' and not state['active_attempt']['checks']
+                and not state['criterion_evidence'] and not host.controller._approvals._grants
+                and state['model_request'] is None and state['tool_request'] is None
+                and set(state['stale_evidence']) == {item['id'] for item in flow['steps'][0]['evidence']}):
+            result['noFreshEvidenceOrGrants'] = 'passed'
+        if not connection._sent_attempts and connection.blocked_messages == 0:
+            result['noReplay'] = 'passed'
+        result['phase'] = 'finished'
+        return result
+    except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result['diagnostic'] = diagnostic_code(exc)
+        return result
+    finally:
+        if connection is not None:connection.close()
+        if target is not None:target.close()
+        if source is not None:
+            try:
+                check_session_sentinel(Path(source.project), Path(source.project) / 'sentinel.txt')
+                result['sourceUnchanged'] = 'passed' if source_id is not None and source.read(source_id) == original else 'failed'
+            except (ProbeError, OSError, ValueError, TypeError):result['sourceUnchanged'] = 'failed'
+            finally:source.close()
+        if directory is not None:
+            if all(result.get(key) == 'passed' for key in WORK_RECOVERY_KEYS):
+                try:shutil.rmtree(directory);result['copyRetained'] = False
+                except OSError:pass
+            if result['copyRetained']:
+                print('Work recovery copy retained (original untouched): ' + str(directory), file=sys.stderr)
 
 
 def probe_recheck_recovery(scratch, timeout, *, lost_binding=False):
@@ -1667,6 +1828,8 @@ def main():
                         help='up to four synthetic native workflow turns: answers, denial and cancel; local disconnect guard')
     parser.add_argument('--probe-workflow-approvals', metavar='MODEL',
                         help='at most two synthetic command turns; accept only one registered marker write, then decline; scratch retained')
+    parser.add_argument('--probe-workflow-patches', metavar='MODEL',
+                        help='at most two synthetic patch turns; accept only one literal marker addition, then decline; scratch retained')
     parser.add_argument('--probe-workflow-resume', metavar='MODEL',
                         help='two synthetic durable workflow turns across reconnect; scratch/thread retained')
     parser.add_argument('--probe-rechecks', metavar='MODEL',
@@ -1691,6 +1854,8 @@ def main():
                         help='after --probe-rechecks, exercise terminal recovery on a copy without the turn ID')
     parser.add_argument('--probe-recheck-recovery', metavar='SCRATCH',
                         help='metadata-only recovery on an isolated copy of a completed --probe-rechecks scratch; no inference')
+    parser.add_argument('--probe-work-recovery', metavar='SCRATCH',
+                        help='resume-only recovery of a missing work turn ID on a completed workflow probe copy; no new turns')
     parser.add_argument('--timeout', type=float, default=120, help='RPC/turn timeout in seconds')
     args = parser.parse_args()
     if args.terminate_recheck_server and not (args.run_live and args.probe_rechecks
@@ -1711,17 +1876,20 @@ def main():
     if args.simulate_lost_recheck_binding and not (
             args.run_live and args.probe_rechecks and not args.stop_retained_recheck):
         parser.error('--simulate-lost-recheck-binding requires --run-live and --probe-rechecks without STOP')
-    if args.probe_recheck_recovery:
-        if args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
+    if args.probe_recheck_recovery or args.probe_work_recovery:
+        if (args.probe_recheck_recovery and args.probe_work_recovery) or args.run_live or any((args.models, args.probe_read_approval, args.probe_sessions,
                                 args.probe_workflow, args.probe_workflow_resume, args.probe_rechecks,
-                                args.probe_turn_correlation, args.probe_shared_approval, args.probe_workflow_approvals)):
-            parser.error('--probe-recheck-recovery is metadata-only; select it alone without --run-live')
+                                args.probe_turn_correlation, args.probe_shared_approval, args.probe_workflow_approvals,
+                                args.probe_workflow_patches)):
+            parser.error('Recovery probes use no inference; select one alone without --run-live')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             parser.error('--timeout must be finite and positive')
         try:
-            result = probe_recheck_recovery(args.probe_recheck_recovery, args.timeout)
+            result = (probe_work_recovery(args.probe_work_recovery, args.timeout) if args.probe_work_recovery
+                      else probe_recheck_recovery(args.probe_recheck_recovery, args.timeout))
             print(json.dumps(result, indent=2))
-            return 0 if all(result.get(key) == 'passed' for key in RECOVERY_PROBE_KEYS) else 1
+            keys = WORK_RECOVERY_KEYS if args.probe_work_recovery else RECOVERY_PROBE_KEYS
+            return 0 if all(result.get(key) == 'passed' for key in keys) else 1
         except KeyboardInterrupt:
             return 130
     if not args.run_live:
@@ -1729,14 +1897,16 @@ def main():
         return 0
     if sum(bool(value) for value in (args.models, args.probe_read_approval, args.probe_sessions, args.probe_workflow,
                                     args.probe_workflow_resume, args.probe_rechecks, args.probe_turn_correlation,
-                                    args.probe_shared_approval, args.probe_workflow_approvals)) != 1:
+                                    args.probe_shared_approval, args.probe_workflow_approvals, args.probe_workflow_patches)) != 1:
         parser.error('choose exactly one live verification mode')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be finite and positive')
     connection = None
     try:
-        if args.probe_workflow_approvals:
-            result = probe_workflow_approvals(args.probe_workflow_approvals, args.timeout)
+        if args.probe_workflow_approvals or args.probe_workflow_patches:
+            model = args.probe_workflow_approvals or args.probe_workflow_patches
+            result = (probe_workflow_approvals(model, args.timeout, patch=True) if args.probe_workflow_patches
+                      else probe_workflow_approvals(model, args.timeout))
             print(json.dumps(result, indent=2))
             return 0 if all(result.get(key) == 'passed' for key in WORKFLOW_APPROVAL_KEYS) else 1
         if args.probe_shared_approval:

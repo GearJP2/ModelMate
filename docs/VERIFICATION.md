@@ -3299,3 +3299,1220 @@ user-run P09/G2 result remains pending. Next gate remains the scoped live comman
 approval verifier, with CLI version and source hashes recorded from that run.
 The full offline suite passed all 608 tests with socket permissions enabled and
 no skips. No inference evidence is inferred from the schema comparison or suite.
+
+### P14 delayed work-turn metrics — MOCK_VERIFIED
+
+Previously the metrics observer accepted only the most recently dispatched turn.
+A delayed usage event for an earlier attempt was discarded after the next start.
+It now keeps process-local measurement bindings for all work turns dispatched in
+the current CLI session, routing usage, reroute and terminal observations to the
+matching attempt. This does not alter controller evidence or permission grants.
+Native IDs remain internal and are absent from measurement output.
+
+The focused metrics suite passed eight tests, including a regression with two
+bound turns: delayed usage and failed terminal update the earlier attempt,
+duplicate terminal events count once, unknown/foreign bindings are ignored, and
+the later attempt stays unknown. Compile checks passed. No live inference or
+external network request was run. Elapsed time remains client-observed through
+receipt of terminal status, not isolated model compute time. P14 remains open
+for the missing telemetry and live evidence listed in RELEASE_CHECKLIST.md.
+The complete offline suite passed all 609 tests with test-owned sockets enabled
+and no skips. `git diff --check` passed.
+
+### P09 scoped native patch-approval verifier — MOCK_VERIFIED
+
+Prepared a separate opt-in mode using the existing durable approval harness:
+
+```sh
+codex --version
+python3 verify.py --run-live --probe-workflow-patches MODEL
+```
+
+This command has not been run live. It requests at most two synthetic turns in
+separate retained scratch projects. The first may accept one native file-change
+request adding only approval-marker.txt with one random synthetic line and a
+newline; the second declines its corresponding request. Commands are not
+registered or requested by this patch probe. Sandbox-permitted activity is not
+intercepted by this harness, so this is not a no-tools or general isolation test.
+
+Before arming the existing accept tripwire, the verifier requires the complete
+displayed preview to contain exactly one add change at the marker's relative or
+exact absolute path, with no extra fields. Its diff must be exactly the new
+content or that one line prefixed with plus. Other encodings, additional lines,
+paths, changes, update/delete kinds or rename metadata cannot be accepted. These
+are deliberately narrow recognized encodings, not a general patch parser or a
+claim about all live Codex diff formats. Unexpected/unsupported previews stop
+without retries or permission expansion.
+
+File scope and sentinel checks precede consent. An already observed native file
+completion also fails the pre-consent check even if no marker exists. Acceptance
+must be followed by one completed native file item with the approved item ID and
+matching changes, exact marker contents and a completed turn. File existence or
+a model's claim alone cannot pass. Decline requires a terminal turn, absent marker
+and no passing controller check. Both cases retain one-use token, durable decision
+and no-automatic-DONE checks from the command probe. Reports omit the nonce,
+paths and native IDs, retaining only source hashes and sanitized outcomes.
+
+All 15 focused approval-probe tests passed against synthetic subprocesses.
+Patch cases cover accept/decline, early file effects and native completion,
+unexpected content, failed native completion despite a correct marker, matcher
+boundaries, and CLI opt-in/mutual exclusion. Existing command-probe cases still
+pass. Entry-point compile checks passed; no inference or external web request
+was run. Next eligible evidence remains user-run command approval, followed by
+this separate patch probe with the exact CLI version/runtime/verifier hashes.
+Neither prepared probe satisfies the full live G2 matrix.
+
+The first full offline run completed 616 tests with one recheck-probe error:
+the owner-active observation reason was absent. Inspection found that a bounded
+metadata RPC error could exit before the polling loop recorded that reason;
+the exact underlying error from the first run was not captured. The helper now records the
+unobserved reason before polling and removes it only on an observed active
+owner. RPC errors still propagate, the original timeout is restored, and no
+observer query or STOP success is implied. A deterministic exception regression
+checks this behavior; all 30 focused recheck-probe tests passed after the fix.
+The final full offline suite passed all 617 tests with test-owned sockets enabled
+and no skips. Compile checks and `git diff --check` passed.
+
+### P08/P10 explicit pre-start clarification answers — MOCK_VERIFIED
+
+New workflow previews number their pending questions. Repeatable
+`--clarification NUMBER=ANSWER` arguments can answer those questions before
+controller creation. Every question needs exactly one nonempty bounded answer;
+unknown or duplicate numbers, incomplete answers and an oversized resulting
+goal fail before backend access. Answers may contain equals signs and Unicode.
+Question/answer pairs are placed in question order in the effective goal and
+the complete plan is revalidated. The original plan file is not rewritten.
+
+This uses the existing plan schema and durable checkpoint. It does not revise
+steps or success criteria, change the mode, grant tool/model permissions, or
+generate a plan. Resume rejects the option before reading saved state. Answers
+appear in the normal goal preview before START, reach subsequent work-turn goal
+input and are retained as part of the effective plan in local metadata.
+Unanswered plans remain CLARIFYING and cannot execute. Complete answers still
+require START and the usual `/next` and approval gates.
+
+All 26 focused workflow-entry tests passed. New cases cover numbered offline
+preview, out-of-order answers, Thai text and embedded equals, invalid/partial
+and oversized input, cancellation/EOF, resume rejection and CLI forwarding.
+A synthetic native server receives the resolved goal and its checkpoint; an
+answer requesting blanket approval produces no grants or tool-policy change.
+The original source plan remains identical. Compile checks passed. No installed
+Codex inference or external network request was run. Live clarification entry
+and broader automated workflow behavior remain unverified.
+The full offline suite passed all 622 tests with test-owned sockets enabled and
+no skips. Compile checks and `git diff --check` passed.
+
+### P13 confirmed search-result handoff — MOCK_VERIFIED
+
+Standalone Wikipedia/SearXNG commands accept `--search-json`. Exact query
+confirmation is still required; prompts and the token use stderr and stdout
+receives one versioned JSON packet only after a successful search. The packet
+contains the approved query, destination/provider and passive title/excerpt/URL
+results. It includes no confirmation token or trailing input/history. Cancellation
+emits no packet and performs no search. Export does not start a model turn.
+
+A new workflow can import selected `--source-result FILE:NUMBER` candidates
+before preview/START. JSON input is bounded to 32 KiB, rejects duplicate keys,
+unknown fields/versions, malformed text/hosts and non-HTTP(S) or credential-bearing
+URLs. Up to five results may be selected, numbered from one. Candidates become
+explicitly labeled untrusted goal data in the effective plan, subject to the
+existing 4096-character goal and complete-plan limits. Oversized context fails;
+it is not silently truncated. Source plans, steps and criteria are unchanged.
+Resume rejects the option rather than rewriting an existing plan.
+
+Import neither searches nor follows any URL. Packets are not authenticated
+provenance, source verification, evidence or permission grants. They may contain
+injection text, which remains input data under the existing controller/permission
+rules. Explicit source verdicts still require separate human `/verify-source`
+checks. Hosted search remains disabled in work threads; this manual return path
+does not enable automatic/private-context query generation or satisfy full G3.
+
+All 13 web-policy and 30 workflow-entry tests passed. New cases check JSON-only
+stdout, separate confirmation, cancellation, packet validation, selected-result
+preview, malformed/oversized imports, EOF/START and resume/CLI restrictions.
+The synthetic native entry test receives the chosen URL and injection text in
+the work goal and durable checkpoint, with no grants, changed criteria or tool
+policy. It excludes the unselected URL and forbids HTTP during import/dispatch.
+Compile checks passed. No installed Codex inference, public HTTP lookup or live
+G3 evidence was produced. Next P13 evidence is live export/import of a public
+candidate and SearXNG validation; automatic isolation remains separate work.
+The full offline suite passed all 630 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.
+
+### P12 terminal work-turn correlation after missing start binding — MOCK_VERIFIED
+
+Default native work dispatch now sends its controller-reserved attempt ID as
+clientUserMessageId. For durable workflows, that ID is persisted before turn/start.
+Explicit recheck markers retain their existing override. The marker supports
+metadata correlation, not remote idempotency or a license to replay a request.
+
+Explicit native resume may recover a missing turn ID on a known work thread.
+It requires complete full history of at most 100 turns, a latest terminal turn
+with exactly one matching user item, no duplicate turn IDs or matching markers
+in older history, and terminal/full metadata for all returned turns. Any cursor,
+missing marker, malformed/ambiguous history or active turn remains unresolved.
+The correlated ID/status must match the separately observed latest summary.
+After thread resume and permission validation, another summary must still match
+before the binding is saved. History is not printed or copied into local state.
+
+The original attempt/counters are preserved. Native completion creates no fresh
+test/source/manual pass or restored grant; normal evidence checks are still
+needed. This does not discover a missing thread ID or widen the CLI's existing
+manual/rubric/source versus experimental tool-check resume requirements.
+
+All 16 focused native-resume tests passed. A fake server persists a turn and then
+actually exits before sending the start reply. A new process recovers that same
+attempt from the original checkpoint, with one total turn/start, no interrupt,
+no check evidence and no additional attempt. A second-step malformed start reply
+and failed native-binding write also recover the new turn, never the old one.
+Unmatched markers leave disk unchanged; changed latest history after resume is
+rejected before saving a binding. Helper tests reject incomplete, duplicated,
+misordered, nonterminal and malformed metadata.
+
+Two old rejection assertions were replaced with positive exact-binding and
+counter/evidence assertions now that matching correlation is implemented; the
+unmatched-marker rejection remains explicit. Compile checks passed. These are
+synthetic process tests, not live inference evidence. The earlier scoped live
+client-ID/recheck records do not prove this multi-turn work-resume path or current
+CLI compatibility. Next eligible evidence is a separately scoped live lost-work
+binding check; active/missing-thread and broader server-loss recovery stay open.
+The full offline suite passed all 634 tests with test-owned sockets enabled and
+no skips. Compile checks and `git diff --check` passed.
+
+### P12 resume-only work-recovery verifier — MOCK_VERIFIED
+
+Prepared an explicitly invoked, zero-new-turn diagnostic:
+
+```sh
+codex --version
+python3 verify.py --probe-work-recovery SCRATCH
+```
+
+SCRATCH must be a successful two-turn `--probe-workflow-resume` result with the
+new work-attempt markers (runtime `e46a1d2` or later). This command itself takes
+no `--run-live`, and refuses combinations with live modes or another recovery
+probe. Creating a fresh source remains a separate explicit two-subscription-turn
+command: `python3 verify.py --run-live --probe-workflow-resume MODEL`.
+
+The source must be a completed synthetic two-step manual-check workflow, one
+attempt per step with no recheck/tool-approval ledger. The verifier reads it
+without writing, validates the sentinel, and creates a private metadata copy.
+Only on that copy, it moves the final attempt back to its reserved running
+state, removes its native turn binding/check evidence and criterion coverage,
+and retains all IDs, selections, counters and earlier history. The ordinary
+native resume path must correlate the existing final turn and reach CHECKING.
+This is a staged missing checkpoint field after completion, not actual live
+reply loss. Fresh account/quota/catalog/permissions remain required.
+
+A dedicated send allowlist permits metadata requests and thread/resume only;
+turn/thread start, interrupt, delete and any server-request approval/error reply
+are rejected before transport. Passing requires all five WORK_RECOVERY_KEYS:
+nativeBindingRecovered, attemptPreserved, noFreshEvidenceOrGrants, noReplay and
+sourceUnchanged. Earlier evidence must remain stale and the recovered attempt
+must have no checks/grants/criterion coverage. Reports contain source hashes and
+sanitized outcomes, not prompts, markers, account/native IDs or source paths.
+Successful verification removes only the owned copy. Failure retains it and
+prints its local path on stderr; original metadata and project remain untouched.
+
+All 14 focused workflow-resume probe tests and seven existing recheck-recovery
+probe tests passed. New tests exercise successful two-turn-copy recovery with
+zero additional turn/start RPCs, unchanged source bytes, marker absence,
+invented evidence detection, incomplete-source rejection, pre-transport mutation
+tripwires and CLI exclusivity/partial-result exit status. The staging fixture
+was corrected to use RUNNING step state under an active reservation and compare
+canonical exported history rather than its internal check dictionaries; runtime
+checkpoint validation was retained. Compile checks passed. No installed Codex
+inference or connected account lookup was run. Live work recovery, actual process
+loss, active interruption and missing-thread discovery remain unverified.
+The full offline suite passed all 640 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.
+
+### P08 current-step revision command — MOCK_VERIFIED
+
+The workflow UI now exposes the existing controller revision API as
+`/revise-step FILE`. Its UTF-8 JSON file is bounded to 64 KiB, must be a nonempty
+object, and accepts only objective/role/effort/reason fields. Duplicate keys,
+unknown fields, invalid values, oversized input and unreadable files fail without
+changing the controller. The UI copies the effective current plan and changes
+only that step before the controller revalidates the complete proposal. Thus
+prior clarification/source context in the goal is retained without requiring
+users to recreate the full effective plan file.
+
+The command dispatches nothing and grants no permissions. It invalidates old
+model/plan approvals, retains baseline/criteria/structure/step IDs/counters, and
+persists through the existing session attachment. Existing role bindings and a
+fresh supported catalog selection remain required at `/next`. Any active attempt,
+including a completed turn still awaiting check evaluation, prevents revision.
+Finished tasks cannot be revised. Budget exhaustion still requires its explicit
+extension choice; renaming or changing approach cannot create a fourth attempt.
+
+All 24 focused UI tests passed. New cases exercise downgrade after a pending
+model request with stale-token rejection, approved-plan invalidation, three failed
+attempts followed by revision without a hidden retry, malformed/unknown/oversized
+input, active-attempt rejection before file reading, and durable revision/restore
+with the effective goal and identities unchanged. Paths with spaces and Thai
+text work. A displayed model text containing the command does not execute it.
+Compile checks passed. No installed Codex inference or external network request
+was run. This exposes existing explicit-plan control; automatic workflow and live
+revision evidence remain separate unfinished work.
+The full offline suite passed all 645 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.
+
+### P07/P08 explicit current-step model selection — MOCK_VERIFIED
+
+Workflow `/model` now displays the proposed current selection, existing role
+bindings and last-known catalog. `/model ID [EFFORT]` selects an available bound
+model for the current step only; omitted effort uses the catalog default. It
+retains the current role if it already binds that ID, otherwise requires one
+unambiguous role. Unbound IDs and ambiguous alternative roles require explicit
+bindings/role revision instead of inferring quality from model names.
+
+The controller validates the catalog, baseline and complete revised plan before
+using its existing revision/persistence and manual step-grant mechanisms. Goal,
+criteria, structure, baseline, IDs, counters and future step proposals remain
+unchanged. It cannot remove required strong review or modify an active/finished
+attempt. Selection does not dispatch work, buy quota, authorize tools or approve
+the entire plan. Approve plan still requests its plan grant; the next strong step
+still requests its own authorization. Native `/next` retains fresh admission.
+
+The checkpoint stores the revised role/effort/reason proposal, not the ephemeral
+grant or role-binding configuration. Restore resolves user-supplied bindings and
+requires model approval anew. A reason string or displayed model command cannot
+create consent. Old pending tokens expire when the proposal changes.
+
+All 27 controller and 27 UI tests passed. New cases cover step-only consent across
+two strong steps, unchanged baseline, independent plan approval, removed catalog
+entries before dispatch, invalid/unbound/ambiguous selections, preserving a known
+role when IDs alias, required strong-review enforcement, non-dispatch UI choice,
+active-attempt rejection, stale-token expiry, selected effort and durable restore
+without grants. Compile checks passed. No installed Codex inference or network
+request was run; live manual selection and broader automation remain open.
+The full offline suite passed all 652 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.
+
+### P16 C2 CLI authoring fixture and frozen acceptance — MOCK_VERIFIED
+
+`examples/routing-pilot.py prepare --case cli` now creates two identical CLI
+projects with an incomplete rows.py and public UTF-8 input containing a blank
+row. C2 requires implementing --limit N while preserving default output, input
+encoding, help description and error exits. The routed arm uses the existing
+test-check suggestion (economy/low); the baseline binds strong/low. Standard
+baseline and economy/strong bindings remain explicit and distinct. There is one
+implementation step, not a supplied repair choice or a mandatory strong review.
+
+The prepared native command binds the trusted checker hash. It reads a bounded
+byte snapshot, checks that hash and executes that same snapshot; changing the
+checker cannot replace acceptance with a model's report. The checker uses
+isolated Python candidate invocations, two-second deadlines and bounded private
+temporary stdout/stderr files. Child file-size caps never raise an existing
+stricter host limit. Timeout stops without another candidate invocation. Fixed
+checks cover default/zero/before-path/blank-row/over-limit output, negative and
+noninteger limits, help, unknown options, missing files and unchanged input.
+Reports contain booleans or sanitized error reasons, not candidate output.
+This is not a hostile-code sandbox or proof of the full G2 permission boundary.
+
+Preview is offline. CLI authoring execution requires both --execute and explicit
+--experimental-tool-approvals, followed by the runtime's START/model/tool gates;
+the helper never enables acceptance silently. The registered checker runs within
+that approved native workflow, not a host-side scorer of model-authored code.
+Before launching any pilot runtime, the helper compares its copy with the
+current checkout. C2 also compares the checker, original candidate/input, plan
+and commands with trusted regenerated fixtures, and rejects an arm that already
+has state. It does not overwrite changed artifacts or restart a prior attempt.
+Old prepared runtimes need their original matching checkout or a fresh pair.
+
+Seven C2 tests and six existing routing-pilot tests passed. Tests use only
+developer-written initial/reference/mutant programs: initial code fails the new
+option, the audited reference passes all eleven booleans, and an off-by-one
+mutant/input mutation fails. Checker replacement is blocked before executing its
+marker write. Other cases verify identical arm inputs/commands, offline previews
+in paths with spaces, explicit approval forwarding, stricter resource limits,
+timeout non-replay, and artifact/state rejection before subprocess launch.
+The first complete offline run passed 658 tests before the additional preflight
+artifact guards were added; focused checks then passed with those guards and
+bounded reads. Compile checks and `git diff --check` passed.
+
+No model-authored C2 repair, live pair, inference or external request was run.
+There is no C2 quality/quota result and no new trained routing rule. The real-task
+calibration/held-out deliverable, live approval gates and broader G5 remain open.
+The final full offline suite passed all 659 tests with test-owned sockets enabled
+and no skips. Runtime/diagnostic/example compile checks and `git diff --check` passed.
+
+### P12 terminal resume with missing/unknown check results — MOCK_VERIFIED
+
+The experimental tool-check CLI previously rejected a cached active attempt unless
+it was already completed with known test/lint results, preventing native terminal
+reconciliation from handling missing check observations. That early rejection is
+removed only behind the existing experimental recheck opt-in. Native resume still
+requires fresh account/quota/catalog, the same project/thread, a matching terminal
+turn or its validated correlation, and read-only/on-request permissions. Active
+native work and unresolved recheck operations remain blocked. Default tool-check
+resume is unchanged and still disabled.
+
+Unknown evidence can now be retired through normal check evaluation as UNVERIFIED
+history after restore. A stale known pass/fail still blocks evaluation until its
+trusted matching revalidation. Unknown cannot be revalidated to pass, accepted as
+criterion evidence, or advance the step. Evidence/attempt IDs, history and counters
+are retained. A fresh explicitly started correction can later supply independent
+trusted tool evidence under the same budget; it does not replace the old unknown.
+The UI states that missing observations do not mean the command never ran and
+asks the user to inspect effects before authorizing another attempt. Resume and
+retirement themselves start no verification/model turn or replayed command.
+
+All 28 persistence, 24 recheck-UI and 17 native-resume tests passed. Coverage includes
+unknown verdict preservation, rejection of unknown-to-pass promotion, stale-known
+gate retention, budget-preserving fresh evidence, cached unknown/missing checks,
+cached running work confirmed terminal, and refusal of an actually active native
+thread. A fake process exits after accepting a turn but before replying; the CLI
+correlates that original work attempt, records no inferred check pass and retires
+it UNVERIFIED, with one total turn/start and no interrupt. Model claims and manual
+verification cannot turn a test check into a pass. The ledger-preservation test
+selects the attempt by its ID because explicit continue choices precede it in
+history; no controller validation was weakened to accommodate ledger ordering.
+
+Compile checks and `git diff --check` passed. No live inference or connected
+account call was made. Live missing-result recovery, real process/network loss
+and broader G2/G4 gates remain unverified. New rechecks of unknown evidence and
+changing a saved known verdict via revalidation remain unsupported.
+The full offline suite passed all 663 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.
+
+
+### P13 local namespace capability probe (2026-11-25)
+
+`python3 search_isolation_probe.py` completed with `capability_verified` on
+Python 3.12.0 and bubblewrap 0.8.0. Exact probe SHA-256:
+`af049813e126fead836cae96ac059c23be781d13a5db006896328d62914d1d01`.
+All eleven boolean checks passed; `g3Passed` remained false. This used only
+owned synthetic temporary files, no model/account calls and no HTTP requests.
+
+The fixed worker receives only a public query via stdin and a read-only mount,
+plus synthetic probe paths/FD number used to challenge the boundary. A sterile
+environment is applied before launching bubblewrap, then reset inside it. The
+private fixture FD is deliberately inheritable in the parent but closed at exec.
+Private absolute/old-cwd paths and `/home` were unavailable, environment matched
+explicit PATH/LC_CTYPE/PWD values, the public mount resisted writes, and a worker
+write at the same absolute temporary path did not create a host file. The parent
+independently checked marker absence and unchanged private/public input bytes.
+No fixture bytes, paths, environment dumps or worker stderr enter the report.
+
+`python3 -m unittest discover -s tests -p test_search_isolation_probe.py -v`
+passed six tests, including the real local probe, missing utility, malformed or
+wrong-type worker reports, timeout/launch failures and sterile launch settings.
+On unsupported hosts the capability test accepts an explicitly unavailable
+result; that result cannot pass the diagnostic or G3. There is no automatic
+install, privilege fallback or retry. The fixed trusted worker uses bounded known
+output; this script is not a runner for arbitrary code or web page instructions.
+
+Scope limits: `/usr`, `/lib` and `/lib64` are broad read-only capability mounts,
+not a reviewed minimal Python/TLS runtime allowlist. Network is deliberately
+shared for eventual public search feasibility, but this probe sends no request
+and does not establish egress restrictions. It does not test a hostile child,
+credentialless TLS lookup, injection handling, process-loss cleanup, a second
+host, or automatic query approval/integration. Runtime and hosted search policy
+remain unchanged; G3 remains open. A minimal runtime mount/worker design and
+independent denial/injection checks are the next eligible P13 work.
+
+
+### P13 explicit runtime mount profile (2026-11-25)
+
+The broad mounts used by the preceding capability spike have been removed from
+`search_isolation_probe.py`. The current fixed profile mounts CPython 3.11,
+its stdlib directory, the x86-64 dynamic loader, libc/libm/zlib/expat,
+OpenSSL 3 libraries and a single system CA bundle at `/public-ca.pem` read-only.
+Source symlinks are resolved before binding; destination paths remain fixed.
+Missing profile files return `unsupported_runtime_profile`, without launching a
+worker or falling back to broader mounts. No runtime dependency was added.
+
+`python3 search_isolation_probe.py` passed thirteen checks with bubblewrap 0.8.0,
+parent Python 3.12.0 and worker Python 3.11.2. Probe SHA-256:
+`341466fb38cc3bc7eb7fa5f24354b4720f2e49de7e04c73513545d4ecb83c99b`.
+The worker additionally imports HTTP/TLS stdlib modules, loads CA certificates
+with hostname/certificate verification enabled, and verifies `/usr/bin/sh`,
+`/usr/bin/env`, `/usr/local`, `/etc` and `/run` are absent. It makes no TLS
+connection, DNS lookup, HTTP request, model call or account request.
+
+All seven `test_search_isolation_probe.py` tests passed, including refusal of a
+missing profile and launch-argument checks against broad mount fallback. Compile
+and diff checks passed. Runtime/shared CLI behavior was untouched, so the full
+suite was not rerun for this diagnostic-only increment.
+
+This profile is deliberately specific to the tested host layout, not a portable
+production mount detector. The stdlib directory remains a directory mount and
+has not been reduced to a dependency closure. Certificate presence does not prove
+successful HTTPS or working DNS; no resolver configuration is mounted. Shared
+network is not an egress policy. Fixed trusted code checking selected hidden
+paths does not prove resistance to arbitrary hostile code or prompt injection.
+G3 remains open. Next: prepare and independently test the actual bounded search
+worker and data-only result handling under reviewed mounts; keep automated
+private-context search disabled until its required evidence exists.
+
+
+### P13 consistent candidate URL validation (2026-11-25)
+
+A regression test reproduced SearXNG accepting `:0`, `:99999` and nonnumeric ports
+as candidates even though later JSON packet validation rejected them. A single
+shared URL predicate now applies the packet constraints before selecting the
+first five SearXNG candidates. Invalid entries are skipped; later valid entries
+remain available for human display and packet export. Credentials, non-HTTP(S)
+schemes, whitespace/control text and overlong URLs remain rejected. Valid explicit
+ports remain supported. No candidate URL is fetched or treated as an instruction.
+
+All 14 web-policy and 30 workflow-entry tests passed. Existing workflow tests
+confirm injected source text reaches the goal as untrusted data without changing
+steps/criteria, model grants or the default tool policy. This is offline evidence;
+it does not establish arbitrary prompt-injection resistance, live SearXNG support
+or G3 completion. No search worker or automatic search path was enabled.
+
+The full offline suite passed all 671 tests in 135.547 seconds with no skips.
+Runtime/diagnostic compile checks and `git diff --check` passed.
+
+
+### P13 actual search runtime inside the local namespace (2026-11-25)
+
+The probe mounts an owned byte snapshot of `modelmate.py` read-only at
+`/modelmate.py` and loads it under a non-main name, without running its CLI.
+It calls the actual Wikipedia search function, HTTPS transport/parser and packet
+validator. Only the HTTPS peer is replaced by a fixed synthetic response; no
+model, account, DNS, HTTP or TLS connection is made. The peer verifies bounded
+response reads and records the single expected query-only request. The parent
+checks the runtime snapshot remains unchanged and reports its SHA-256.
+
+`python3 search_isolation_probe.py` passed seventeen boolean checks on the same
+bubblewrap 0.8.0 / worker Python 3.11.2 profile. Tested runtime SHA-256:
+`339f762d478763edc3b47b6181148d68708ac772ab05e59d846caa71823f42c1`;
+probe SHA-256:
+`8dd0af48a53d1396e14de272e336d178178daf8779911dd5412b52dc254694c6`.
+An excerpt containing a synthetic Python write instruction remained exact
+source text; its marker did not appear. An extra packet approval field was
+rejected. Diagnostic audit instrumentation records and raises on socket creation,
+process launch, system/exec and posix_spawn events during these parser calls.
+This audit is intentionally test-only and is not claimed as a production security
+boundary or exhaustive syscall policy. A deliberately modified worker attempting
+`os.system` fails the probe, rather than returning capability-verified.
+
+All nine probe tests passed, including a false check that cannot be promoted to
+pass and the deliberate side-effect attempt. Existing unsupported-host paths
+remain explicitly unverified. Compile and diff checks passed; the full suite was
+not repeated because only diagnostic/tests/docs changed (last shared-runtime
+suite: 671 tests passed). Runtime search behavior was unchanged.
+
+This proves the existing search code can import and process this synthetic
+response under the constrained filesystem profile. It does not prove a production
+worker, real HTTPS/DNS, arbitrary hostile input resistance, process-loss cleanup,
+or the whole G3 gate. Shared network and a stdlib directory mount remain scope
+limits. Automated/private-context search stays disabled. The next P13 increment
+must connect a bounded data-only worker protocol and independently verify its
+input/output and failure handling before enabling any new search path.
+
+
+### P13 bounded internal search worker protocol (2026-11-25)
+
+`run_search_worker` in the one-file runtime reads at most 8193 bytes from a binary
+input stream and rejects requests above 8192 bytes. The exact request fields are
+`version`, `source`, `host`, `query`; existing strict packet validation with an
+empty result list checks their values before dispatch. Duplicate keys, nonfinite
+constants, invalid UTF-8/JSON, unknown fields and unsupported source/host values
+cannot dispatch. The worker calls the existing Wikipedia or SearXNG function
+with only the validated query/host. It validates the full resulting packet and
+encodes at most 32768 bytes before writing any output. Search/validation failures
+propagate without a partial result packet; caller owns process/error handling.
+
+The namespace probe now calls this actual binary protocol with its synthetic
+HTTPS peer, rather than calling the search function directly. All seventeen
+capability checks passed. Tested runtime SHA-256:
+`1051a4827f23318a0950b06b7d90a8ea8d865e3de6d8ba9e57383dfa729cd6c4`;
+probe SHA-256:
+`194bbd4f8f1c04d2c03c15466e452dd7008064312a64873bcb3d25e804a711cc`.
+Six new protocol tests and nine probe tests passed, including query-only dispatch
+for both sources, injection remaining text, rejection before dispatch, invalid
+transport results and an otherwise valid oversized output emitting no bytes.
+
+This internal function is currently called by diagnostics/tests only. It does
+not itself grant consent or isolation, and no CLI bypass or automatic workflow
+search has been added. The production parent must enforce query provenance and
+required approval, restricted process launch, deadlines, output collection,
+fresh request/response binding and sanitized failures. The present 8 KiB/32 KiB
+limits bound message data, not remote latency or a hostile process's output.
+Real DNS/TLS and full G3 isolation/injection/lifecycle gates remain open. No model,
+account or network request was made by this increment's verification.
+
+The full offline suite passed all 679 tests in 117.570 seconds, with no skips.
+Runtime/probe compile checks and `git diff --check` passed.
+
+
+### P13 parent-side response binding (2026-11-25)
+
+`validate_search_worker_response` validates a caller-owned public request and a
+binary worker packet of at most 32768 bytes. It rejects malformed/duplicate-key/
+nonfinite/deep JSON, invalid UTF-8 and unsupported packet fields, using existing
+strict source metadata validation. Version, source, host and query must all match
+the caller's request exactly. A valid result for a different query/host/source
+cannot be accepted for this request. The validator grants no permission/evidence
+and makes no network/model call.
+
+The namespace probe now transfers the actual result as a response string alongside
+its boolean diagnostic checks. The parent separately applies response validation
+against its own fixture request before accepting any successful capability report.
+It rejects malformed/duplicate/oversized diagnostic envelopes (64 KiB ceiling),
+wrong-type booleans and unexpected envelope fields. Returned response text is not
+printed in the sanitized report. A test supplies all-true child booleans but a
+mismatched query; the parent still returns unverified/invalid_worker_response.
+
+The real namespace run passed eighteen checks with the unchanged host profile.
+Runtime SHA-256:
+`84c61762934745f43af30ee4a47f75e9e02198a258bca3e5f75a4043043c2a72`;
+probe SHA-256:
+`76c2c3f9b4e6d1b9062dae3ea09bfd9555446e6195e195992a70cea9e4071f51`.
+Nine worker-protocol tests and ten isolation-probe tests passed. Compile/diff
+checks passed. No HTTP/DNS/model/account call was made.
+
+The exact field comparison binds request content, not freshness across two
+identical requests. A production launcher must use one owned process per request,
+accept results only from that process's successful completion, enforce collection
+limits/deadlines and never replay unknown outcomes. This increment does not yet
+implement that launcher or CLI activation. Diagnostic capture_output still trusts
+the fixed test child to keep stdout bounded before the envelope length check;
+it is not a hostile-worker streaming output limit. G3 remains open.
+
+Full offline verification passed all 683 tests in 119.191 seconds with no skips.
+The expanded ten-test diagnostic boundary set also passed separately.
+
+
+### P13 bounded process collection and timeout cleanup (2026-11-25)
+
+The namespace probe now uses runtime `run_search_process` instead of unbounded
+`subprocess.run(capture_output=True)`. The collector validates input/limits before
+launch, supplies at most 8 KiB public input from an anonymous temporary file,
+clears the inherited environment except PATH, closes unrelated FDs and starts
+one owned process session. A selector reads at most the output limit plus one
+byte (32 KiB default, 64 KiB for this diagnostic envelope); overflow fails without
+returning partial results. stderr goes directly to DEVNULL and is never captured.
+A monotonic deadline covers stdout collection and waiting for exit, including a
+process that closes stdout but continues running. There is no retry. On overflow,
+timeout or interruption the collector sends SIGKILL to its owned process group
+and waits for the leader. It returns an explicit exit code for the caller to
+check before accepting any response; the probe rejects all nonzero codes.
+
+Seven real local-process tests passed: bounded success/exact boundary/nonzero
+exit, stderr flood without memory accumulation, stdout overflow, timeout with
+stdout open or closed, a descendant holding stdout open, sterile environment and
+private FD closure, and invalid limits not launching a process. The descendant
+check polls only its test-owned child for up to two seconds because SIGKILL
+handling is asynchronous; it observes disappearance or zombie state, not a
+running process. Ten probe tests passed including timeout/launch/overflow failure
+redaction. The actual namespace probe still passes eighteen capability checks.
+
+Tested runtime SHA-256:
+`63efaefea7c405e2cde2e84b3827a1a30eeecf7f667a7d8e473ab20af8ba6ad6`;
+probe SHA-256:
+`dd3e9e9570b6b4f748cf3d193ad52e4b3b135a098df7cb6ffd35c79c08a3d765`.
+Compile and diff checks passed. No model, account or network call was made.
+
+This helper accepts only a trusted caller-constructed launcher command and is not
+a sandbox or approval gate. Process creation itself is not interruptible by the
+selector deadline. A process group is not containment for hostile children that
+create new sessions; successful children that close inherited pipes are not
+independently inspected by this collector. The actual namespace/PID lifecycle
+and approved parent-launch design still need evidence. The fixed bubblewrap
+probe remains the only caller; no automatic/private-context search was enabled,
+and G3 remains open. These limits supersede the preceding capture_output note.
+
+Full offline verification passed all 690 tests in 105.281 seconds, with no skips.
+Runtime/probe compile checks and `git diff --check` passed.
+
+
+### P13 normal namespace exit with a detached descendant (2026-11-25)
+
+The probe now runs a separate fixed lifecycle challenge after all parser/privacy
+checks pass, using the same bubblewrap namespaces/mounts and bounded collector.
+Inside the namespace the initial worker starts a Python descendant with
+`start_new_session=True`. That descendant writes a readiness file only inside the
+private tmpfs, retains inherited stdout and sleeps for five seconds. The initial
+worker waits up to one second for readiness, verifies its child's session differs
+from its own, emits an exact public readiness marker and exits without waiting
+for or terminating that child. No host-writable mount or network call is used.
+
+The parent requires zero exit status, that exact marker and EOF within at most
+two seconds. Because the fixed sleeping descendant never closes stdout, EOF
+before its five-second sleep expires demonstrates that it did not remain alive
+holding the pipe after initial-worker exit. Its detached process session prevents
+normal parent process-group cleanup from being mistaken for this normal-exit
+namespace result; the collector never enters failure cleanup on a passing run.
+This is a scoped observed behavior, not a claim about arbitrary hostile programs.
+
+`python3 search_isolation_probe.py` passed all nineteen checks on bubblewrap
+0.8.0 / worker Python 3.11.2. Probe SHA-256:
+`66a59f6f802af87d9e303ed607161360001e284dd9258c3adfdd6327a4267e7e`.
+Runtime SHA-256 remains:
+`63efaefea7c405e2cde2e84b3827a1a30eeecf7f667a7d8e473ab20af8ba6ad6`.
+All twelve probe tests passed, including refusing lifecycle timeout/launch/output
+failures, missing readiness and nonzero exit even when earlier parser checks
+were all true. Each challenge runs at most once; no failed launch is replayed.
+The initial read-only exploratory run also returned promptly, before committing
+this challenge to the diagnostic. No account/model/DNS/HTTP call was made.
+
+Limitations: this adds normal-exit evidence for one detached child, not proof of
+cleanup after parent/server/host death, arbitrary namespace escapes, hostile
+resource exhaustion or clean installation on another host. If containment fails,
+the fixed challenge child naturally exits after five seconds; no long-lived
+fixture is intentionally left behind. A production approval-bound launcher and
+real DNS/TLS evidence remain absent. G3 remains open and automated/private-context
+search stays disabled. Runtime was untouched; full suite was not rerun for this
+diagnostic-only change (last full suite: 690 tests passed).
+
+All seven real-process collector tests also passed; probe compile and diff checks passed.
+
+
+### P13 internal confirmation-bound parent launcher (2026-11-25)
+
+`run_isolated_confirmed_search` wraps the existing exact SEARCH-token query UI.
+EOF, cancellation, stale tokens and incomplete confirmation lines never call the
+launcher or create its snapshots. Once confirmed, `run_isolated_search` validates
+source/host/query and launches exactly one fixed `/usr/bin/bwrap` command; it
+accepts no model-supplied command, mount, environment or approval fields.
+Unsupported utility/runtime layouts fail without installation or fallback.
+
+The parent creates an owned temporary runtime snapshot and a generated resolver
+file, then mounts only those plus the fixed Python/TLS profile read-only. Host
+cwd, project tree, credentials and session metadata are not mounted. Runtime and
+probe now share SEARCH_MOUNTS. The CA bundle is also mounted at the worker's
+default Python/OpenSSL certificate path, so default HTTPS certificate validation
+loads trust without environment overrides. The parent reads at most 16 KiB of
+resolver configuration and emits at most three unique numeric nameserver entries;
+search domains, arbitrary options and comments are not copied. Unsupported or
+malformed resolver configurations fail explicitly. Host configuration is unchanged.
+
+The collector uses a fresh session, sterile environment/closed FDs, a 12-second
+collection deadline, 32 KiB response ceiling and discarded stderr. Nonzero exit,
+timeout, setup failure or invalid response cannot return results. No retry occurs;
+a timed-out public query might already have been sent. On success the parent
+requires the response's exact version/source/host/query binding and returns only
+passive candidate records. Owned snapshots are removed after the process exits.
+The internal callable assumes its caller has confirmed the query; only the wrapper
+implements that consent UI. Neither callable is exposed as a CLI switch or used
+by automatic workflow search yet.
+
+Seven launcher tests passed, covering refusal before setup, exact confirmed query
+forwarding without subsequent history, owned mount/snapshot construction and
+cleanup, invalid/missing capabilities, failure/no-retry behavior, resolver data
+minimization and the actual namespace launch. That real launch uses synthetic
+resolver data and a fixed fake HTTPS peer; an audit hook prevents network socket
+creation. It verifies hidden home/shell, private cwd, absence of a synthetic
+credential environment value, only resolv.conf under /etc, unchanged public query,
+loaded default TLS trust and injection text remaining source data. No real
+resolver, model, account or network call is used by the tests. The standalone
+capability probe still passes nineteen checks and all twelve probe tests pass.
+
+Tested runtime SHA-256:
+`b1f51f67baafbb91e5e22ea3df33d4ed1c639ce0dce89989200c8557825d741e`;
+probe SHA-256:
+`365b6502c8b54ebf5ff3149615009096be97368d6735f2c57e04c878aef02672`.
+Runtime/probe compile and diff checks passed.
+
+Remaining limits: explicit Debian-style x86-64 CPython 3.11/OpenSSL 3 layout,
+shared network without egress enforcement, stdlib directory mount, no real
+DNS/TLS/SearXNG verification, and incomplete parent/server-loss lifecycle evidence.
+The fixed fake peer validates this path offline, not G3 as a whole. Automatic
+private-context search and hosted web remain disabled. Next: review this concrete
+launcher boundary and obtain the required scoped real-network/lifecycle evidence
+before any user-facing activation; unsupported systems must continue to fail
+closed rather than widening mounts or permissions.
+
+Full offline verification passed all 699 tests in 104.128 seconds with no skips.
+The strengthened seven-test launcher set also passed separately; compile and diff checks passed.
+
+
+### P13 scoped live DNS/TLS verifier prepared, not executed (2026-11-25)
+
+Explicit commands, to be run only when requested/authorized:
+
+```sh
+bwrap --version
+python3 search_isolation_probe.py --live-wikipedia en
+```
+
+`th` selects the Thai endpoint instead. This is not a Codex/inference command and
+requests zero model turns/account calls. The mode previews one fixed public query
+(`Python programming language` for en, `ภาษาไพทอน` for th), host and fresh SEARCH
+token on stderr. Exact interactive confirmation is required before setup/lookup;
+EOF, cancellation, stale or incomplete tokens launch nothing. One confirmed
+launcher call is allowed, without retry. Normal invocation without the flag still
+runs only the offline namespace probe. Help is offline.
+
+The live mode reuses the internal namespace launcher, its fixed mounts, fresh
+process, bounded response and exact request binding. A successful scoped report
+requires at least one result with canonical endpoint source URLs. It records
+runtime/probe SHA-256, zero requested model turns, launch count and boolean checks,
+but no query text, returned source title/snippet/URL, credentials or stderr trace.
+Failures are unverified with a sanitized reason; interruption is explicitly
+outcome-unknown and never triggers replay. `g3Passed` remains false even on scoped
+success: this command cannot certify all isolation/injection/lifecycle evidence.
+The bwrap version above should accompany a real report for version scope.
+
+All seventeen diagnostic tests passed, including default/live routing, confirmed
+query forwarding without following history, refusal before launch, sanitized
+failure/invalid/empty results and one-launch/no-retry behavior. Tests use actual
+file descriptors for the existing confirmation reader and mocked lookup results;
+a mocked scoped success is NOT live evidence. The default real offline probe
+still passed nineteen checks. Compile/diff checks passed. No live Wikipedia,
+DNS/TLS, model or account request was made for this increment. Full suite was not
+rerun for diagnostic-only changes; last full suite remains 699 tests passed.
+Probe SHA-256: `6197c966b06a1d15c4ea74f13672fb8e8b44084af205093c3e9667aed2f6daad`.
+
+Next eligible work: review the concrete launcher boundary and run the scoped
+command only with explicit live authorization; continue parent/server-loss and
+injection validation independently. SearXNG, automatic workflow search and full
+G3/release gates remain open. The runtime CLI has not been activated by adding
+this separate diagnostic entry point.
+
+
+### P13 abrupt collector-parent death and negative control (2026-11-25)
+
+The offline probe adds a fixed Python supervisor that calls the actual runtime
+collector with the same bubblewrap namespace/mount policy. Its worker starts a
+detached-session descendant, waits for child readiness, emits the known marker
+and then sleeps for five seconds; that child also holds stdout and sleeps five
+seconds. The supervisor's bounded read instrumentation announces readiness only
+once the collector has received the worker marker. No process ID, FD number or
+raw subprocess output is retained in the sanitized final report.
+
+Before killing the supervisor, the outer harness opens the worker pipe's read
+end through /proc on its still-owned supervisor process and verifies it is a FIFO.
+It then SIGKILLs only the supervisor and requires its -SIGKILL exit plus EOF on
+that independently held worker pipe within two seconds. It does NOT use EOF of
+the supervisor's own stdout as evidence: that would close on supervisor death
+even if its worker were still alive. The supervisor cannot run its Python finally
+cleanup after SIGKILL; a passing observation therefore exercises the configured
+parent-death/PID namespace behavior. No group-wide fallback kill is used to turn
+a failed check into success.
+
+The actual configured namespace passed this challenge, bringing the default
+probe to twenty checks. A real negative control removes --die-with-parent from
+only the challenged command; the worker pipe stays open beyond the deadline and
+the report is unverified. This shows the harness distinguishes a surviving worker
+from cleanup. A unit test also prevents false parent-death checks from being
+promoted to a successful overall report. The fixed sleeping fixtures naturally
+exit within five seconds if containment is absent; no long-lived fixture is
+intentionally left behind. On hosts blocking access to the owned /proc FD, the
+challenge stays unverified rather than requesting wider permissions.
+
+All nineteen diagnostic tests passed in 4.033 seconds, including this real
+negative control, the positive namespace run and the mocked live-mode refusal/
+sanitization cases. Probe SHA-256:
+`74586fec2f28abd03e38ce1b4bf9a11d5c7a13975c8f80c45c4439ab5735feca`.
+Runtime remains at SHA-256:
+`b1f51f67baafbb91e5e22ea3df33d4ed1c639ce0dce89989200c8557825d741e`.
+Compile/diff checks passed. Runtime was untouched, so the full suite was not
+repeated (last full suite: 699 tests passed). No live Wikipedia/DNS/TLS, account
+or model call was made; the prepared explicit live command remains unexecuted.
+
+This adds scoped evidence for abrupt parent-process loss with one ready worker
+and detached descendant. It does not establish arbitrary namespace escape
+resistance, host shutdown behavior, HTTP server loss behavior, broader native
+workflow recovery, another host or complete G3. The separate prepared live
+verifier, boundary review and remaining injection/activation requirements still
+apply. Runtime CLI/automatic private-context search remain disabled.
+
+
+### P13 proc filesystem boundary and deliberate leak control (2026-11-25)
+
+The fixed diagnostic worker now challenges the owned private fixture through its
+absolute path, `/proc/1/root` plus that path and `/proc/1/cwd/secret`. It also
+checks that the host diagnostic parent's numeric PID is not present under the
+worker's proc mount. The parent PID and synthetic paths are challenge metadata
+only and are not copied into the sanitized report. These are targeted checks of
+the tested PID/filesystem namespace, not proof about every possible proc entry.
+
+All twenty-three default capability checks passed. A real negative control adds
+a read-only bind of only the owned synthetic secret into the challenged namespace.
+That control is unverified with direct private-file and proc-root checks both
+false, showing that readable secrets cannot silently produce a passing report.
+It changes no runtime mount policy and never prints the fixture bytes. Later
+lifecycle challenges are skipped when the privacy checks have already failed.
+
+The actual internal launcher test now creates a separate owned private fixture
+outside the mounted runtime/resolver snapshots and actively attempts all three
+file routes from its fixed fake-HTTPS worker. The reads fail under the launcher's
+actual mounts as well. The injected test code knows this synthetic fixture path
+only to challenge the boundary; normal worker input remains the query-only
+protocol, with no private project path/history supplied. No real secret, prompt,
+credential, account or network request is used.
+
+All twenty diagnostic tests passed in 3.871 seconds, and all seven launcher tests
+passed in 0.293 seconds. Probe SHA-256:
+`85335a4c726e6da149f94e934ac5b606fa6adaa40886c1da8df869002409f05d`.
+Runtime remains unchanged at:
+`b1f51f67baafbb91e5e22ea3df33d4ed1c639ce0dce89989200c8557825d741e`.
+Compile and diff checks passed; full suite was not repeated for diagnostic/test/
+documentation-only changes (last full suite: 699 tests passed).
+
+Boundary review at this revision:
+
+| Boundary | Concrete enforcement/evidence | Remaining limitation |
+| --- | --- | --- |
+| Request | Exact UI confirmation before launcher setup; strict source/host/query-only schema | Automatic query provenance/entry is not enabled |
+| Files/processes | Fixed read-only runtime/profile/resolver snapshots; fresh PID namespace; closed FDs; direct/proc leak control; scoped normal/parent-death challenges | Host-specific profile, stdlib directory mount and broader adversarial/host failure coverage remain |
+| Result | Bounded collection, strict schema, exact parent-owned request binding; no result URL fetch or grant/evidence creation | No real DNS/TLS/SearXNG result yet; imported sources are not fact verification |
+
+The review supports continuing scoped verification of this internal prototype;
+it does not authorize activation or certify G3. Hosted web and automatic
+private-context search remain disabled. Next eligible P13 evidence is the
+prepared explicitly authorized live DNS/TLS command and the remaining adversarial
+input/HTTP-failure checks; unrelated native lifecycle/release gates remain open.
+
+
+### P13 adversarial HTTP response and connection failures (2026-11-25)
+
+A regression test reproduced the shared HTTP JSON reader accepting duplicate
+root/nested keys and nonfinite NaN/Infinity constants from remote responses.
+`read_search_json` now reuses the existing strict duplicate-key/constant hooks
+before returning a source payload. Hook failures become a generic source-specific
+invalid-response error with no raw response/plan-parser text or exception chain.
+Both Wikipedia and SearXNG use this reader; there is no alternate permissive path.
+
+All seventeen web-policy tests passed. New cases include duplicate keys at root
+and in a source result, NaN/Infinity in otherwise unused remote metadata,
+request/getresponse/body-read failures, invalid encoding, deep/array JSON, a body
+above 256 KiB and a valid body exactly at that limit. Disconnect/partial-response
+errors produce sanitized class diagnostics, invoke the request only once and
+close the connection. The existing 262145-byte bounded read and refusal to follow
+redirects remain in place. Existing seven actual-launcher tests with a fake peer
+also passed. Runtime/diagnostic compile and diff checks passed.
+
+Tested runtime SHA-256:
+`5b4408297ef5d4539ffbc92a5da098631a981e7411370c2f8b9d8ae9460533f1`.
+These are offline parser/transport failure checks; no HTTP/DNS/account/model call
+was made. The real-network command remains opt-in and unexecuted. They do not
+establish all hostile-input or private-context search guarantees. G3, automatic
+workflow activation and the broader release gates remain open.
+
+Full offline verification passed all 710 tests in 113.991 seconds with no skips.
+Runtime/diagnostic compile checks and `git diff --check` passed.
+
+
+### P08/P10 experimental Auto advancement for new explicit plans (2026-11-25)
+
+New explicit Auto workflows can opt into `--experimental-auto-advance`. The flag
+is routed through workflow entry and the attached selector shell, not stored in
+a checkpoint. Preview is offline; execution still requires --execute-workflow
+and exact START. Resume and other modes are rejected; programmatic resume is
+rejected before metadata access. The shell requires the matching bound host.
+Default behavior remains manual /next and no extra classifier/model call exists.
+
+A shell tick dispatches only when its current controller is READY with no active
+attempt, while the shell is open/not stopping and mode remains Auto. The existing
+host performs fresh account/quota/catalog/model gates and durable reservation;
+no alternate dispatch or tool-grant path was added. Controller transitions stop
+repeated ticks from starting another attempt. Checks still need explicit /check
+and trusted evidence. Known failed checks may start a correction within the same
+initial-plus-two budget. Unknown evidence, pending model/tool approval, pause,
+unfinished native work and final criterion mapping cannot dispatch. The shell
+does not call finish_task or infer a pass from model text.
+
+Dispatch/preflight exceptions disable automatic advancement without retry; any
+existing controller PAUSED reason is retained. An unknown quota snapshot pauses
+without polling; explicit continue must pass a fresh admission before dispatch.
+EOF/cancel/exit and switching away from Auto stop new automatic work. Neither
+approval tokens nor tool policy are changed. Changing native permissions or
+accepting a tool action still uses its independent existing gate.
+
+All eleven new tests passed: default-off, once-only READY dispatch, two-step
+progress after explicit trusted checks, initial-plus-two correction limit,
+unknown evidence stopping, unknown quota retaining its reason/no poll retry,
+explicit continue fresh admission, no replay after ambiguous dispatch, no opt-in
+checkpoint persistence, closed/paused/other-mode states, CLI validation and
+preview/missing START refusal before native process creation. The real selector
+integration uses a fake native subprocess and user input pipe: it completes two
+steps with exactly two turn/start calls, on-request native policy and accepted
+command evidence; model text alone never advances it. Final task criteria are
+still pending explicit mapping. No connected account/model/quota was used.
+
+Final-source full offline verification passed all 721 tests in 134.749 seconds,
+with no skips. Runtime entry-point compile and diff checks passed. Tested runtime
+SHA-256: `162015800a77b1a4670629447a0c22770b1fda734834a747157151ae3b479802`.
+Broader live mode/tool/cancellation/recovery gates, plain-prompt planning, automatic
+check orchestration, comparative routing and complete release readiness remain
+open. No connected account, live model or quota was used for these checks.
+
+
+### P10 automatic evaluation of terminal test/lint attempts (2026-11-25)
+
+The existing experimental Auto advancement flag now also selects the trusted
+host check action when the controller is CHECKING, its active attempt is confirmed
+completed and every declared check is test/lint. Each shell tick performs at most
+one action. The host retains ownership of exact native command/cwd observations,
+missing-result evidence and evaluation. The shell does not run a check command,
+replay it, generate a verdict, accept model text or call finish_task. After known
+pass/fail, a later tick may dispatch the next step/correction through the existing
+fresh admission and unchanged budget. Missing observations retire UNVERIFIED and
+cannot authorize a new attempt automatically.
+
+Any manual/rubric/source check keeps explicit human verification and /check.
+Failed/interrupted turns, pending model/tool approval, paused/closed/stopping
+shells and final task criterion mapping remain ineligible. The flag is still
+new-plan/Auto-only, explicit START opt-in, not restored and disabled by default.
+Tool approvals and read-only/on-request native policy remain separate. No extra
+model/verification turn or automatic command retry is introduced by evaluation.
+
+All thirteen targeted Auto tests passed. The selector integration now drives two
+steps to accepted tool evidence using a fake native subprocess without /next or
+/check input, with exactly two turn/start calls. Additional cases cover mixed
+human check kinds and failed/interrupted native completion. A model message
+claiming every test passed and requesting DONE still yields UNVERIFIED when no
+matching command observation exists. Initial plus two known-failure corrections
+remain enforced, unknown quota still pauses and explicit continue still requires
+fresh admission. Task criterion mapping remains explicit and no DONE is inferred
+from step completion alone. No connected account/model/quota was used.
+
+This supersedes the preceding milestone's explicit /check requirement only for
+terminal all-tool-check steps. It is offline evidence, not proof that native
+workflow acceptance or broader live automation/release gates passed. Plain-prompt
+plan creation, human-check orchestration and scoped live mode/failure evidence
+remain open. Runtime compile and diff checks pass.
+
+Full offline verification passed all 723 tests in 136.620 seconds with no skips.
+The final thirteen-test Auto set also passed separately. Runtime compile and diff
+checks passed. Tested runtime SHA-256:
+`18696966e103bfa014fc0d7e8a38dc2bbbaf3469f89fb02bae85100be805b45c`.
+
+
+### P06 selected-model prompt-to-draft proposal entry (2026-11-25)
+
+`--draft-plan NEW_FILE --model MODEL "prompt"` adds an explicit one-turn planning
+entry, with optional --effort. No classifier or model-selection inference is
+introduced: the caller chooses the planning model/effort. The original goal is
+separate from fixed proposal/schema instructions and must be preserved exactly.
+A minimal plan-step controller reuses native fresh account/quota/catalog/model
+admission, read-only/on-request thread validation, hosted web disabling and
+bounded native completion/interrupt behavior. START is required before backend
+construction. Server-requested tool escalation is declined by the existing
+default path. This does not claim all native sandbox-permitted tools are disabled;
+the prompt's request to avoid tools is not permission enforcement.
+
+The collector accepts exactly one bounded completed assistant item from the
+matching native turn (not deltas, foreign items or duplicate completed items).
+Terminal controller state and active completed attempt must agree before parsing.
+The returned text must be an exact JSON plan accepted by validate_plan; no markdown
+repair, retry or accepting a claimed success exists. Extra permission/command/
+counter/status fields and changed goals cannot publish a draft. Clarifications
+remain unresolved data. Future role/effort bindings are validated again when the
+user separately enters the workflow; this draft grants none of them.
+
+Validated output is limited to 64 KiB and published through an owned temporary
+0600 snapshot, fsync and exclusive hard link into the requested new filename.
+Existing files, symlinks and concurrent destination creation are not overwritten;
+owned temporary directories are removed on publication failure. This is atomic
+exclusive publication, not a claim of directory-fsync crash durability. No local
+session, automatic handoff/task execution or resume is created by drafting. The
+native planning thread is ephemeral; timeout/disconnect never causes replay.
+
+All ten targeted tests passed using a real fake-native subprocess, never Codex
+or a live model. Cases include one selected planning turn and exact valid file,
+foreign/delta/duplicate-item filtering, invalid JSON/markdown/extra authority/empty
+steps/changed goal, preserved clarifications, max-length goal, oversized output,
+CANCEL/EOF/incomplete START before backend access, existing destination refusal,
+unknown quota/API-key login/widened permissions blocking dispatch, a competing
+publisher and connection loss with no second turn. Successful draft files have
+0600 mode, and temporary snapshots are cleaned after publication failure. No
+private real prompt, account, credential or trace is included in repository data.
+
+Runtime entry-point compile and diff checks pass. This is implemented/offline
+verified proposal capture only: plain-prompt automatic routing, clarification
+interaction/handoff into a workflow, real output compatibility and broader live
+planning/permission/quota/release gates remain open. No live inference was run.
+
+Full offline verification passed all 733 tests in 146.391 seconds, with no skips.
+Compile and diff checks passed. Tested runtime SHA-256:
+`f97d26a2cbfbe7736bebd1334f3ff5312d67d8952e780d1de4ce634c2cf415a7`.
+
+
+### P08/P10 interactive clarification before START (2026-11-25)
+
+Executing a new explicit plan with unanswered clarifications and no supplied
+--clarification arguments now collects answers interactively before constructing
+any backend. It reads each UTF-8 line directly from the input FD without buffered
+prefetch, with a 16 KiB encoded line bound and existing 4096-character answer /
+effective-goal limits. EOF, incomplete lines or CANCEL stop without connecting.
+Invalid UTF-8, empty/oversized answers and an oversized combined goal fail before
+model access. There is no reprompt/retry/model-generated answer or inference.
+Preview reads no input. Explicit answer flags still require every question once;
+partial/duplicate/unknown flags remain errors. Resume behavior is unchanged.
+
+Collected numbered answers enter the same existing validated effective-goal path
+as argument answers. Steps, success criteria, role bindings, model/tool grants,
+controller counters and original plan file remain unchanged. The answered plan
+is previewed before a separate exact START confirmation. START used as an answer
+cannot also authorize execution; cancellation at that later confirmation still
+stops before backend construction. Questions/file contents and answer text remain
+data, not authority to grant tools or accept evidence.
+
+All five new tests passed using real input FDs: Thai multi-question answers,
+no consumption of later confirmation/commands, EOF/incomplete-line/CANCEL paths,
+invalid UTF-8/empty/oversized/combined-overflow answers, untouched offline preview,
+and a fake-native execution receiving the answered effective goal with one total
+turn/start. A malicious-looking answer requesting all tools creates no model
+grant and changes no steps/criteria. Source plan bytes remain unchanged.
+All thirty existing workflow-entry tests passed, including unanswered EOF stopping
+and an answer of START still requiring a distinct execution confirmation. The
+backend-forbidden guard in that test remains intact.
+
+Runtime/diagnostic compile and diff checks pass. No live
+account/model/quota or real prompt/credential was used. Interactive handling of
+unknown terminal environments and broader live gates remain unverified. Draft
+creation and this explicit workflow entry are still separate commands; automatic
+plain-prompt handoff, routing/evaluation and complete release readiness remain open.
+
+Final full offline verification passed all 738 tests in 135.119 seconds with no
+skips. Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`1134b4b997282d1b2ad68d42fd851c0248bf820365d9c6bc056f593a8a29dd8e`.
+
+
+### P06/P08 two-phase planned workflow handoff (2026-11-25)
+
+`--plan-workflow NEW_FILE --model PLANNER --role-model standard=WORK_MODEL "prompt"`
+connects the existing draft and new-workflow paths. START first authorizes one
+selected planning turn. Only a validated, exclusively published draft advances
+to workflow preview. Without --execute-workflow no work backend is constructed.
+With it, clarification is collected through the existing bounded input path and
+execution requires a separate START after the effective plan/model/check preview.
+The first confirmation does not grant the second phase. Cancelled/invalid drafting
+never enters handoff; later cancellation/configuration failure preserves the draft
+so the user can continue with --workflow without another planning turn.
+
+Role binding parsing is shared with the existing workflow path. A valid explicit
+standard work binding is required before planning, not inferred from the planning
+model. Work gets a new controller, counters, baseline and grants; default Ask to
+escalate and native read-only/on-request policy are unchanged. Other required roles,
+checks/commands, model/effort/catalog and quota gates still validate before work
+dispatch. A caller-owned expected goal must match the loaded draft before any
+clarification/work backend. Preview and second START authorize the actual reviewed
+steps/criteria; local file contents never grant permission or evidence.
+
+The metadata-only --check-catalog contract remains restricted to explicit existing
+--workflow files and cannot accidentally request a planning inference. Standalone
+--draft-plan keeps its behavior. Future workflow metrics/quota observations cover
+the workflow phase only, not the earlier planning turn; no total savings claim is
+made. Source-result context, clarification flags and opt-in tool/Auto settings
+continue through their existing new-workflow validators.
+
+All seven handoff tests passed using real fake-native subprocesses: independently
+selected strong planner and standard work model, question/answer handoff, empty
+work grants and zero initial work attempts, exactly one planning plus one explicitly
+started work turn, separate second START, cancelled/invalid drafting, preview-only
+input preservation, work-binding rejection before planning, goal tampering and
+catalog-only rejection. Ten draft, thirty workflow-entry and seventeen CLI tests
+also passed. Runtime/diagnostic compile and diff checks passed. No connected account,
+live model or quota was used.
+
+This is an explicit experimental prompt-to-workflow flow, not default plain-prompt
+automation or proof of the broader live planning/permission/recovery/evaluation
+release gates. A draft may request roles/checks not supplied at invocation; that
+configuration failure preserves the file instead of rerunning planning or inventing
+bindings/commands. Native planning remains ephemeral without its own resume. Full
+release readiness remains unproven.
+
+Full offline verification passed all 745 tests in 142.340 seconds with no skips.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`8810870f3bb33525ffe5e57c251e809f56005597d073eb42f83be4d120902467`.
+
+
+### P10 user-approved criterion mapping for automatic completion (2026-11-25)
+
+--criterion-map MAP_JSON is opt-in with experimental Auto advancement on a new
+Auto workflow. Its 32 KiB version-1 JSON contains only version and criteria;
+criteria must cover every declared success criterion exactly once, with nonempty
+lists of unique canonical STEP.CHECK references. The loader rejects duplicate or
+nonfinite JSON, invalid encoding, unknown fields/criteria, undeclared checks,
+non-string refs and caller-supplied evidence IDs. No command, grant, verdict or
+counter can be supplied. File errors stop before work backend construction.
+
+The mapping is shown alongside the existing criterion/check preview before START
+and frozen as immutable reference strings for the shell. This is the user's
+assertion about which check covers each criterion, not model-inferred semantic
+coverage. Later mutation of the caller's list or config file does not revise the
+loaded mapping. Once all steps are accepted with no active attempt, an eligible
+Auto tick disables further advancement and applies the existing /finish handler
+once. That handler resolves current accepted check evidence IDs, and unchanged
+controller.finish_task validates completeness, pass verdicts, staleness and
+unresolved rechecks. The model creates no verdict or accepted evidence through
+this mapping. Rejection cannot start a model/tool turn, replay work or loop retry.
+Default/no-map behavior still waits for explicit /finish.
+
+Mapping does not make human checks automatic, change permission/model grants or
+extend correction budgets. It is not a checkpoint field or restored opt-in; normal
+accepted criterion_evidence is persisted through the existing controller path.
+Resume still cannot enable experimental Auto. The same option works for planned
+workflow handoff only after draft validation and the separate execution preview/
+START. Unknown/failed/missing/stale observations cannot satisfy the map.
+
+Fifteen targeted Auto tests passed, including real selector/fake-native completion
+of two steps with exactly two turns and no /next, /check or /finish input, once-only
+mapping, immutable caller refs, missing evidence and forced restored/stale evidence
+rejection. Seven criterion-map tests passed: strict schema/completeness/canonical
+refs/JSON bounds, preview before backend access, option gating, forwarding through
+actual workflow entry and invalid-map refusal before input/backend. All thirty
+workflow-entry tests also passed. Runtime/diagnostic compile and diff checks pass.
+No connected account, live model or quota was used.
+
+This adds controller-validated automatic acceptance of an explicitly approved
+criterion mapping. It does not establish that the chosen checks semantically
+prove a real task, replace human source/rubric judgments, demonstrate live Auto
+permission/recovery behavior or pass G5 evaluation. Broader live gates, default
+plain-prompt automation and release readiness remain unproven.
+
+
+The first full run exposed an existing cleanup-test race: reading an owned
+exiting descendant's /proc stat can raise ESRCH (ProcessLookupError), not only
+ENOENT (FileNotFoundError). That nested test helper now treats both genuine
+absence errors as not running. Permission/parse failures remain failures, and
+assertions requiring the child alive before cleanup and stopped afterwards are
+unchanged. Runtime process cleanup was not modified. All fifteen real local
+socket transport tests passed separately after this correction; the restricted
+sandbox run that skipped them is not counted as verification.
+
+Final-source full offline verification passed all 754 tests in 145.259 seconds,
+with no skips. Seven map/preview tests also passed against the final wording.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`8f157b77d23ca36bea8ac1f5c42e8444293853161aea43060ae7e4b2c9877646`.
+
+
+### P14 observed total wall time for planned commands (2026-11-25)
+
+The combined --plan-workflow command previously emitted only workflow-phase
+timing, omitting its earlier planning phase from the user-visible time summary.
+It now emits one additional timing report scoped to the current planned command:
+planningWallSeconds, workflowWallSeconds and totalWallSeconds, with
+includesUserWait true. Trusted monotonic markers bracket the planning call and
+subsequent workflow entry/cleanup, covering both START confirmations, questions,
+previews, native waiting and file/transport cleanup. The report contains no prompt,
+path, native/account ID, token total or inferred actual model.
+
+If planning is cancelled, fails or is interrupted before handoff, the observed
+planning duration is still reported and workflowWallSeconds is null. If handoff
+occurs but work is cancelled/fails/preview-only, its elapsed preview/wait/setup
+phase is measured without claiming that a model ran. Values are finite, ordered
+and rounded to milliseconds; invalid clocks fail rather than fabricating zero.
+Output write/flush errors do not override the operation's return value or change
+controller state. No model/metadata call is added for reporting.
+
+Workflow native turn/usage measurements and --metrics-jsonl stay phase-scoped and
+unchanged. This new combined wall report is Terminal output only, not a new JSONL
+schema or combined planning token/dispatch estimate. Neither wall time nor a quota
+change is interpreted as cost or savings. Existing observed/unknown telemetry
+boundaries remain intact.
+
+All twelve metrics tests and seven planned-workflow tests passed. New cases cover
+known split/total durations, unfinished planning, invalid/nonfinite/reversed clocks,
+report write failure and exactly one final command report for successful, cancelled
+and invalid-draft paths. The fake-native two-phase flow checks that the two measured
+phase durations sum to total within millisecond rounding tolerance. Compile and
+diff checks pass. No connected account/model/quota was used.
+
+Actual dispatch telemetry, combined planning usage, attribution to account quota,
+comparative evaluation and broader live/release gates remain unverified. This is
+implemented/offline-tested local clock reporting, not new live evidence.
+
+Full offline verification passed all 758 tests in 143.964 seconds, with no skips.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`3300379db176436587e0f163c95e05abdc5fcc747b1372d3af85a2d8dc9407a8`.

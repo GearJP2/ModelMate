@@ -49,6 +49,53 @@ class WorkflowPersistenceTests(unittest.TestCase):
         state = c.snapshot()
         return c.answer_pause(state['pause_token'], 'continue')
 
+    def test_restored_unknown_can_be_retired_unverified_but_never_revalidated_as_pass(self):
+        with self.attached(self.new()) as c:
+            aid = self.begin(c)['dispatch']['attempt_id']
+            c.finish_attempt(aid, 'completed')
+            unknown = c.record_check(aid, 0, origin='tool', exit_code=None,
+                reference='Missing native result', finding='No exit status observed')
+            original = c.export_checkpoint()['active_attempt']
+        with self.attached() as restored:
+            self.continue_paused(restored)
+            self.assertIn(unknown['id'], restored.snapshot()['stale_evidence'])
+            with self.assertRaises(ProbeError):
+                restored.revalidate_check(unknown['id'], origin='tool', exit_code=0,
+                    reference='Not a matching old verdict', finding='Cannot promote unknown')
+            state = restored.evaluate_attempt(aid)
+            self.assertEqual(state['state'], 'UNVERIFIED')
+            self.assertEqual(state['steps'][0]['evidence'], [])
+            self.assertEqual(restored.export_checkpoint()['history'][-1], original)
+            with self.assertRaises(ProbeError):restored.finish_task({0: [unknown['id']]})
+            restored.pause();self.continue_paused(restored)
+            state, fresh = self.check(restored)
+            self.assertEqual(state['steps'][0]['attempts'], 2)
+            self.assertNotEqual(fresh['attempt_id'], aid)
+            self.assertNotEqual(fresh['id'], unknown['id'])
+            restored.finish_task({0: [fresh['id']]})
+            self.assertEqual(restored.state, 'DONE')
+            self.assertEqual(next(event for event in restored.export_checkpoint()['history']
+                                  if event.get('id') == aid), original)
+
+    def test_unknown_does_not_bypass_known_stale_check_revalidation(self):
+        plan = copy.deepcopy(PLAN)
+        plan['steps'][0]['checks'].append({'kind': 'lint', 'criterion': 'Lint succeeds'})
+        with self.attached(self.new(plan)) as c:
+            aid = self.begin(c)['dispatch']['attempt_id']
+            c.finish_attempt(aid, 'completed')
+            known = c.record_check(aid, 0, origin='tool', exit_code=0, reference='Known exit', finding='Observed pass')
+            c.record_check(aid, 1, origin='tool', exit_code=None, reference='Missing exit', finding='Unknown')
+        with self.attached() as restored:
+            self.continue_paused(restored)
+            with self.assertRaisesRegex(ProbeError, 'revalidation'):restored.evaluate_attempt(aid)
+            with self.assertRaises(ProbeError):
+                restored.revalidate_check(known['id'], origin='tool', exit_code=1,
+                    reference='Changed result', finding='Cannot replace the old verdict')
+            restored.revalidate_check(known['id'], origin='tool', exit_code=0,
+                reference='Fresh matching result', finding='Trusted current pass')
+            self.assertEqual(restored.evaluate_attempt(aid)['state'], 'UNVERIFIED')
+            self.assertEqual(restored.snapshot()['steps'][0]['evidence'], [])
+
     def test_every_transition_is_saved_and_corrections_resume_without_reset(self):
         c = self.new()
         with self.attached(c):

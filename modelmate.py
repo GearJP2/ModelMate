@@ -1264,6 +1264,39 @@ class WorkflowController:
             return self._pause(self.reason)
         return self._updated()
 
+    def select_step_model(self, model_id, effort, catalog, role_policy=None):
+        """An explicit user choice authorizes this step's model, never tools or the whole plan."""
+        if self._active is not None or self._index >= len(self._steps) or self.state in ('DONE', 'FAILED'):
+            raise ProbeError('Cannot select a model for an active or finished step.')
+        selection = select_model(catalog, model_id, effort)
+        policy = MODEL_ROLE_POLICY if role_policy is None else role_policy
+        if (not isinstance(policy, dict) or any(role not in ROLE_ORDER or not isinstance(model, str)
+                                               or not model for role, model in policy.items())):
+            raise ProbeError('Invalid role binding.')
+        roles = [role for role, model in policy.items() if model == model_id]
+        current = self._plan['steps'][self._index]['role']
+        if current in roles:
+            role = current
+        elif len(roles) == 1:
+            role = roles[0]
+        else:
+            raise ProbeError('Model needs an unambiguous existing role binding; choose the role with /revise-step first.')
+        candidate = copy.deepcopy(self._plan)
+        candidate['steps'][self._index].update(role=role, effort=selection['effort'],
+            reason='Explicit user model selection for this step.')
+        raw = json.dumps(candidate, ensure_ascii=False)
+        route = routing_decision(raw, catalog, policy)
+        if route['state'] != 'ready_for_approval':
+            raise ProbeError('Cannot resolve the revised plan and its model selections.')
+        select_model(catalog, self._approvals.baseline['model'], self._approvals.baseline['effort'])
+        self.revise_step(raw)
+        grant = self._approvals.manual_select(raw, catalog, policy,
+            step_id=self._steps[self._index]['id'], step_index=self._index)
+        if grant['state'] != 'allow_model':
+            self._approvals._invalidate()
+            raise ProbeError('Manual step selection could not be approved; nothing dispatched.')
+        return self.snapshot()
+
     def _attempt(self, attempt_id):
         if self._active is None or not isinstance(attempt_id, str) or attempt_id != self._active['id']:
             raise ProbeError('Invalid or stale workflow attempt.')
@@ -1339,7 +1372,8 @@ class WorkflowController:
         attempt = self._attempt(attempt_id)
         if self.state != 'CHECKING' or attempt['status'] != 'completed':
             raise ProbeError('Attempt is not ready for evaluation.')
-        if any(e['id'] in self._stale_evidence for e in attempt['checks'].values()):
+        # Unknown evidence can only retire as UNVERIFIED, never authorize completion.
+        if any(e['id'] in self._stale_evidence and e['result'] != 'unknown' for e in attempt['checks'].values()):
             raise ProbeError('Saved checks require explicit host revalidation before evaluation.')
         step = self._steps[self._index]
         expected = len(self._plan['steps'][self._index]['checks'])
@@ -2124,7 +2158,12 @@ def terminal_text(value):
 class ChatShell:
     """Single-owner Terminal state; an optional trusted controller receives actions."""
 
-    def __init__(self, output, send=None, catalog=None, role_policy=None, *, workflow=None, workflow_action=None):
+    def __init__(self, output, send=None, catalog=None, role_policy=None, *, workflow=None, workflow_action=None, automatic_workflow=False, finish_references=None):
+        if finish_references is not None and not automatic_workflow:
+            raise ProbeError('Automatic criterion mapping requires explicit Auto advancement.')
+        if automatic_workflow and (not isinstance(workflow_action, WorkflowHost)
+                or not isinstance(workflow, WorkflowController) or workflow.mode != 'auto'):
+            raise ProbeError('Automatic advancement requires a bound Auto workflow host.')
         if workflow is not None and (not isinstance(workflow, WorkflowController) or send is not None):
             raise ProbeError('Workflow UI requires a controller and cannot share a manual executor.')
         if workflow_action is not None and (workflow is None or not callable(workflow_action)):
@@ -2147,6 +2186,8 @@ class ChatShell:
         self.exit_code = 0
         self.workflow = workflow
         self.workflow_action = workflow_action
+        self.automatic_workflow = automatic_workflow
+        self.finish_references = None if finish_references is None else tuple(finish_references)
         self.started_at = time.monotonic()
         self._workflow_check_attempt = None
         self._workflow_tool_shown = None
@@ -2235,6 +2276,33 @@ class ChatShell:
             self.write('ยืนยันการหยุดไม่ได้ ผลงานยังไม่ทราบ — ตรวจ backend ก่อนเริ่มใหม่')
             self.exit_code = 130
             self.closed = True
+        if (self.automatic_workflow and not (self.closed or self.stopping or self.exiting)
+                and self.workflow.mode == 'auto'):
+            state = self.workflow.snapshot()
+            action = None
+            if state['state'] == 'READY' and state['active_attempt'] is None:
+                action = 'next'
+            elif (state['state'] == 'CHECKING' and state['active_attempt'] is not None
+                    and state['active_attempt']['status'] == 'completed'
+                    and all(check['kind'] in ('test', 'lint') for check in
+                            state['plan']['steps'][state['step_index']]['checks'])):
+                action = 'check'
+            elif (state['state'] == 'CHECKING' and state['active_attempt'] is None
+                    and state['step_index'] == len(state['steps']) and self.finish_references is not None):
+                self.automatic_workflow = False
+                self.write('Experimental Auto · resolve user-approved criterion mapping · no automatic retry')
+                self.workflow_command('/finish', list(self.finish_references))
+                return
+            if action is not None:
+                self.write('Experimental Auto · ' + action + ' · ใช้ fresh preflight / trusted host evidence')
+                try:
+                    self.workflow_action({'action': action, 'task_id': self.workflow.task_id})
+                except (ProbeError, OSError, ValueError):
+                    self.automatic_workflow = False
+                    if self.workflow.state not in ('PAUSED', 'FAILED', 'DONE'):
+                        self.workflow.pause('connection_lost')
+                    self.write('พัก automatic advancement · ผลยังไม่ทราบ · ไม่ retry อัตโนมัติ')
+                self.show_workflow()
 
     def show_workflow(self, render=True):
         state = self.workflow.snapshot()
@@ -2339,9 +2407,12 @@ class ChatShell:
         elif self.pending is not None:
             token = self.pending['token']
             self.write('/continue ' + token + ' · /revise ' + token + ' · /pause ' + token)
+        if active is None and state['state'] in ('READY', 'PAUSED', 'AWAITING_MODEL_APPROVAL'):
+            self.write('/revise-step FILE เพื่อแก้ objective/role/effort/reason ของขั้นปัจจุบัน โดยคง ID และ budget')
         if state['state'] == 'CLARIFYING':
-            for question in state['clarifications']:
-                self.write('ต้องชี้แจง: ' + question)
+            for number, question in enumerate(state['clarifications'], 1):
+                self.write('ต้องชี้แจง ' + str(number) + ': ' + question)
+            self.write('สำหรับแผนใหม่ ใช้ --clarification NUMBER=ANSWER หรือ --execute-workflow เพื่อตอบก่อน START')
         if self.active and state['state'] == 'PAUSED':
             self.write('ผลขั้นงานยังไม่ทราบ ต้องรอ host ยืนยัน terminal event ก่อนทำต่อ')
         return state
@@ -2575,6 +2646,43 @@ class ChatShell:
                             reference = matches[0]['id']
                         coverage[index].append(reference)
                 self.workflow.finish_task(coverage)
+            elif cmd == '/model':
+                if not values:
+                    selection = None
+                    if state['step_index'] < len(state['plan']['steps']):
+                        step = state['plan']['steps'][state['step_index']]
+                        try:selection = select_role(self.catalog, step['role'], self.role_policy, step['effort'])
+                        except ProbeError:pass
+                    self.write(json.dumps({'requested': selection, 'roleBindings':
+                        MODEL_ROLE_POLICY if self.role_policy is None else self.role_policy,
+                        'catalog': self.catalog}, ensure_ascii=True))
+                elif len(values) in (1, 2):
+                    self.workflow.select_step_model(values[0], values[1] if len(values) == 2 else None,
+                                                    self.catalog, self.role_policy)
+                    self.write('เลือกโมเดลเฉพาะขั้นนี้แล้ว; /next จะตรวจ quota/catalog ใหม่ · tools ต้องอนุมัติแยก')
+                else:
+                    raise ProbeError('Use /model ID [EFFORT].')
+            elif cmd == '/revise-step':
+                if len(values) != 1:
+                    raise ProbeError('Use /revise-step FILE with a JSON object of objective/role/effort/reason changes.')
+                if state['active_attempt'] is not None or state['state'] in ('DONE', 'FAILED'):
+                    raise ProbeError('Cannot revise an active or finished step.')
+                try:
+                    with open(values[0], 'rb') as source:
+                        content = source.read(65537)
+                    if len(content) > 65536:
+                        raise ProbeError('Revision exceeds 64 KiB.')
+                    changes = json.loads(content.decode('utf-8'), object_pairs_hook=_unique_json_object,
+                                         parse_constant=_invalid_plan_constant)
+                except (OSError, UnicodeError, ValueError, RecursionError):
+                    raise ProbeError('Cannot read revision as a UTF-8 JSON object.') from None
+                if (not isinstance(changes, dict) or not changes
+                        or set(changes) - {'objective', 'role', 'effort', 'reason'}):
+                    raise ProbeError('Revision accepts only objective, role, effort and reason fields.')
+                if state['step_index'] >= len(state['plan']['steps']):
+                    raise ProbeError('No unfinished step to revise.')
+                state['plan']['steps'][state['step_index']].update(changes)
+                self.workflow.revise_step(json.dumps(state['plan'], ensure_ascii=False))
             elif cmd == '/mode':
                 if len(values) > 1:
                     raise ProbeError('Use /mode [auto|ask_to_escalate|approve_plan].')
@@ -2624,12 +2732,12 @@ class ChatShell:
                 return
             cmd, *values = args
             if self.workflow is not None and cmd in ('/workflow', '/next', '/check', '/verify', '/verify-source',
-                                                      '/revalidate', '/revalidate-source', '/finish', '/status', '/mode',
+                                                      '/revalidate', '/revalidate-source', '/finish', '/status', '/mode', '/model',
                                                       '/recheck', '/confirm-recheck', '/recheck-budget',
                                                       '/recover-recheck', '/stop-recheck',
-                                                      '/approve', '/decline', '/pause', '/continue', '/revise'):
+                                                      '/approve', '/decline', '/pause', '/continue', '/revise', '/revise-step'):
                 self.workflow_command(cmd, values)
-            elif self.workflow is not None and cmd in ('/model', '/sessions', '/delete', '/confirm-delete', '/acknowledge'):
+            elif self.workflow is not None and cmd in ('/sessions', '/delete', '/confirm-delete', '/acknowledge'):
                 self.write('คำสั่งนี้ยังไม่เชื่อม workflow host; ใช้ /workflow เพื่อดูแผนและสถานะ')
             elif cmd == '/help':
                 self.write('/status /mode [auto|ask_to_escalate|approve_plan] /model [ID EFFORT]\n'
@@ -2639,6 +2747,7 @@ class ChatShell:
                 if self.workflow is not None:
                     self.write('/workflow /next /approve TOKEN --next /verify CHECK_NUMBER pass|fail|unknown /check /finish CRITERION_NUMBER=STEP.CHECK /revalidate STEP.CHECK pass|fail|unknown /continue TOKEN /revise TOKEN · /approve TOKEN อย่างเดียวจะรอ /next')
                     self.write('/verify-source CHECK_NUMBER pass|fail|unknown URL "checked claim and finding" · /revalidate-source STEP.CHECK pass|fail|unknown URL "checked claim and finding"')
+                    self.write('/revise-step FILE · JSON changes to objective/role/effort/reason; no budget reset or approval grant')
                     if self.recheck_backend is not None:
                         self.write('/recheck STEP.CHECK /confirm-recheck TOKEN /recheck-budget STEP.CHECK continue|revise_scope|pause')
                         if self.recheck_backend.shared_rechecks:
@@ -2805,7 +2914,7 @@ class ChatShell:
 
 def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
              role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None, executor_stream=None,
-             recheck_commands=None):
+             recheck_commands=None, automatic_workflow=False, finish_references=None):
     """Multiplex Linux input and controller events in one owning thread."""
     native_workflow = isinstance(backend, NativeWorkflowConnection)
     if workflow is not None and backend is not None:
@@ -2818,7 +2927,8 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
         raise ProbeError('Executor observations require an explicitly bound workflow host.')
     if backend is not None and not native_workflow:
         send, catalog = backend.action, backend.catalog
-    shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action)
+    shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action,
+                      automatic_workflow=automatic_workflow, finish_references=finish_references)
     if recheck_commands is not None:
         if not native_workflow or backend.store is None or workflow is None:
             raise ProbeError('Recheck UI requires an attached durable native workflow.')
@@ -3732,6 +3842,7 @@ class NativeWorkflowConnection(Connection):
         self.measure_quota = False
         self._quota_first = self._quota_ready = None
         self._measured_turn = self._latest_usage = None
+        self._measured_turns = {}
         self._work_turn_measurements = []
 
     def workflow_measurements(self):
@@ -3839,8 +3950,16 @@ class NativeWorkflowConnection(Connection):
             raise ProbeError('Cannot reconcile native workflow history.')
         latest = history[0] if history else None
         active = controller.snapshot()['active_attempt']
+        recovered_turn = None
+        if record['turn_id'] is None and active is not None and active['status'] == 'running':
+            full_history = self.request('thread/turns/list', {'threadId': tid, 'limit': 100,
+                'sortDirection': 'desc', 'itemsView': 'full'})
+            recovered_turn = correlated_work_turn_id(full_history, active['id'])
+            if (recovered_turn is None or not isinstance(latest, dict) or recovered_turn != latest.get('id')
+                    or full_history['data'][0]['status'] != latest.get('status')):
+                raise ProbeError('Native work correlation is unconfirmed; no replay.')
         if latest is not None:
-            if (not isinstance(latest, dict) or latest.get('id') != record['turn_id']
+            if (not isinstance(latest, dict) or latest.get('id') != (recovered_turn or record['turn_id'])
                     or latest.get('status') not in ('completed', 'failed', 'interrupted')):
                 raise ProbeError('Native turn is active or does not match checkpoint; no replay.')
         elif record['turn_id'] is not None or active is not None:
@@ -3850,6 +3969,14 @@ class NativeWorkflowConnection(Connection):
         LiveChatConnection._check_thread(self, result.get('thread'), tid)
         if not native_permissions_confirmed(result):
             raise ProbeError('Resumed workflow permissions were not confirmed.')
+        if recovered_turn is not None:
+            observed = self.request('thread/turns/list', {'threadId': tid, 'limit': 1,
+                'sortDirection': 'desc', 'itemsView': 'summary'}).get('data')
+            if (not isinstance(observed, list) or len(observed) != 1 or not isinstance(observed[0], dict)
+                    or any(observed[0].get(key) != latest.get(key) for key in ('id', 'status'))):
+                raise ProbeError('Native work history changed during correlation; no replay.')
+            record['turn_id'] = recovered_turn
+            store.save(record)
         host = WorkflowHost(controller, self.preflight, self.dispatch, self.interrupt,
             tool_response=self._respond_tool if self.experimental_tool_approvals else None)
         if latest is not None:
@@ -4000,8 +4127,7 @@ class NativeWorkflowConnection(Connection):
                 'goal': self.host.controller.snapshot()['plan']['goal'], 'step': descriptor['step'],
                 'verification_commands': verification,
                 'verification_instructions': 'After completing the step, use the native command tool to run each verification command exactly once in its specified cwd. Do not retry commands within this attempt. If execution is unavailable, report that limitation; do not claim a check passed.'}, ensure_ascii=False)}]}
-        if client_message_id is not None:
-            params['clientUserMessageId'] = client_message_id
+        params['clientUserMessageId'] = active['id'] if client_message_id is None else client_message_id
         result = self.request('turn/start', params)
         turn = result.get('turn')
         if not isinstance(turn, dict) or not isinstance(turn.get('id'), str) or not turn['id']:
@@ -4013,16 +4139,20 @@ class NativeWorkflowConnection(Connection):
             record['turn_id'] = turn['id']
             self.store.save(record)
         self._measured_turn['id'] = turn['id']
+        self._measured_turns[turn['id']] = self._measured_turn
         return {'thread_id': self.thread_id, 'turn_id': turn['id']}
 
     def _observe_measurement(self, message):
-        current = self._measured_turn
         params = message.get('params')
-        if (current is None or current['id'] is None or not isinstance(params, dict)
-                or params.get('threadId') != self.thread_id):
+        if not isinstance(params, dict) or params.get('threadId') != self.thread_id:
+            return
+        method = message['method']
+        turn = params.get('turn')
+        turn_id = turn.get('id') if method == 'turn/completed' and isinstance(turn, dict) else params.get('turnId')
+        current = self._measured_turns.get(turn_id) if isinstance(turn_id, str) else None
+        if current is None:
             return
         observed = current['observation']
-        method = message['method']
         if method == 'thread/tokenUsage/updated' and params.get('turnId') == current['id']:
             snapshot = native_token_snapshot(params.get('tokenUsage'))
             if snapshot is not None:
@@ -4375,6 +4505,32 @@ def correlated_turn_id(history, client_message_id):
     if len(users) == 1 and users[0].get('clientId') == client_message_id:
         return turn['id']
     return None
+
+
+def correlated_work_turn_id(history, client_message_id):
+    """Bind only the latest terminal work turn in a complete bounded history."""
+    if not isinstance(history, dict):
+        return None
+    turns = history.get('data')
+    if (not isinstance(turns, list) or not 1 <= len(turns) <= 100
+            or history.get('nextCursor') is not None):
+        return None
+    match = correlated_turn_id({'data': turns[:1]}, client_message_id)
+    if match is None:
+        return None
+    identities = {match}
+    for turn in turns[1:]:
+        if (not isinstance(turn, dict) or turn.get('itemsView') != 'full'
+                or not isinstance(turn.get('id'), str) or not turn['id'] or turn['id'] in identities
+                or turn.get('status') not in ('completed', 'failed', 'interrupted')
+                or not isinstance(turn.get('items'), list)):
+            return None
+        identities.add(turn['id'])
+        for item in turn['items']:
+            if (not isinstance(item, dict) or item.get('type') == 'userMessage'
+                    and item.get('clientId') == client_message_id):
+                return None
+    return match
 
 
 def read_recovery_thread(connection, project, thread_id):
@@ -5020,6 +5176,24 @@ def workflow_statistics(controller, started_at, *, now=None):
             'reportedModels': None, 'tokenUsage': None}
 
 
+def report_planned_workflow_timing(output, started_at, planning_end, workflow_end=None):
+    ended_at = planning_end if workflow_end is None else workflow_end
+    if (any(type(value) not in (int, float) or not math.isfinite(value)
+            for value in (started_at, planning_end, ended_at))
+            or not started_at <= planning_end <= ended_at):
+        raise ProbeError('Invalid planned workflow statistics clock.')
+    report = {'scope': 'current_plan_workflow_command', 'includesUserWait': True,
+        'planningWallSeconds': round(planning_end - started_at, 3),
+        'workflowWallSeconds': None if workflow_end is None else round(ended_at - planning_end, 3),
+        'totalWallSeconds': round(ended_at - started_at, 3)}
+    try:
+        output.write('Plan-workflow timing: ' + json.dumps(report, allow_nan=False) + '\n')
+        output.flush()
+    except (OSError, ValueError):
+        pass  # Reporting failure must not replace the work result.
+    return report
+
+
 def append_workflow_metrics(path, stats):
     """Append a private, quota-free workflow summary without storing session data."""
     import fcntl
@@ -5182,11 +5356,171 @@ def check_workflow_account(plan, policy):
         connection.close()
 
 
+def read_workflow_clarifications(questions, input_stream, output):
+    """Read complete UTF-8 answer lines without prefetching START or workflow commands."""
+    answers = []
+    for number, question in enumerate(questions, 1):
+        output.write('Clarification ' + str(number) + ': ' + terminal_text(question) + '\n')
+        output.write('พิมพ์คำตอบหนึ่งบรรทัด หรือ CANCEL เพื่อพักก่อนเริ่ม backend\n');output.flush()
+        data = bytearray()
+        while len(data) <= 16384:
+            byte = os.read(input_stream.fileno(), 1)
+            if not byte:
+                output.write('พัก clarification แล้ว · ไม่เปิด backend\n')
+                return None
+            if byte == b'\n':
+                break
+            data.extend(byte)
+        else:
+            raise ProbeError('Clarification answer exceeds its line limit.')
+        try:
+            answer = data.decode('utf-8').removesuffix('\r')
+        except UnicodeError:
+            raise ProbeError('Clarification answer is not complete UTF-8; nothing started.') from None
+        if answer.strip() == 'CANCEL':
+            output.write('พัก clarification แล้ว · ไม่เปิด backend\n')
+            return None
+        _plan_text(answer)
+        answers.append(str(number) + '=' + answer)
+    return answers
+
+
+def run_plan_draft(prompt, model, effort, destination, input_stream, output):
+    """One explicitly selected planning turn; validated output grants no execution."""
+    _plan_text(prompt)
+    _plan_text(model)
+    destination = Path(destination)
+    if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
+        raise ProbeError('Choose a new plan file in an existing directory; nothing overwritten.')
+    example = {'version': 1, 'goal': prompt, 'clarifications': [],
+        'success_criteria': ['Observable success criterion'], 'steps': [{
+            'kind': 'implement', 'objective': 'One bounded step', 'role': 'standard',
+            'effort': effort, 'risk': 'normal', 'reason': 'Short selection reason',
+            'checks': [{'kind': 'test', 'criterion': 'Observable check'}]}]}
+    validate_plan(json.dumps(example))
+    objective = ('Propose a workflow, do not execute work or tools. Return exactly one JSON object, '
+        'without markdown or commentary. Keep goal exactly equal to the supplied goal. '
+        'Ask necessary questions in clarifications. Use only these fields and schema: '
+        + json.dumps(dict(example, goal='Copy supplied goal exactly'), ensure_ascii=False) + '. Allowed kind: plan/implement/review; '
+        'role: economy/standard/strong; risk: normal/high; check kind: test/lint/source/rubric/manual. '
+        'Effort: low/medium/high/xhigh (must be supported when bound). '
+        'At most 12 steps. High-risk work requires a later strong review step. '
+        'No command, permission, grant, counter or completion field. Give short reasons, not private reasoning.')
+    # Keep the original goal separate from the instruction/example text.
+    example['steps'][0].update(kind='plan', objective=objective,
+        checks=[{'kind': 'manual', 'criterion': 'Controller validates the proposed plan'}])
+    raw = json.dumps(example, ensure_ascii=False)
+    catalog = [{'model': model, 'defaultReasoningEffort': effort,
+                'supportedReasoningEfforts': [{'reasoningEffort': effort}]}]
+    controller = WorkflowController(raw, catalog, {'standard': model}, 'auto')
+    output.write('Draft only · one requested turn: ' + terminal_text(model + '/' + effort) + '\n')
+    output.write('Native read-only/on-request; tool escalation requests are declined. Draft does not start its workflow.\n')
+    output.write('Goal: ' + terminal_text(prompt) + '\nType START then Enter, or CANCEL.\n');output.flush()
+    if not read_workflow_confirmation(input_stream, lambda text: output.write(text + '\n')):
+        return 2
+    backend = NativeWorkflowConnection(['codex', 'app-server', '--stdio',
+        '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
+    answers = []
+    def capture(event):
+        if event.get('type') == 'text':
+            text = event['text']
+            if answers or len(text.encode('utf-8')) > 65536:
+                raise ProbeError('Plan draft requires one bounded completed JSON message; no retry.')
+            answers.append(text)
+    try:
+        host = backend.connect(controller, os.getcwd(), {'standard': model})
+        host.on_change = capture
+        host({'action': 'next', 'task_id': controller.task_id})
+        with selectors.DefaultSelector() as selector:
+            for stream in backend.read_streams():
+                selector.register(stream, selectors.EVENT_READ)
+            while controller.state == 'RUNNING':
+                backend.drain();backend.tick()
+                if controller.state != 'RUNNING':
+                    break
+                for key, _ in selector.select(.1):
+                    if not backend.read_ready(key.fileobj):
+                        selector.unregister(key.fileobj)
+            backend.drain()
+        state = controller.snapshot()
+        if (state['state'] != 'CHECKING' or state['active_attempt'] is None
+                or state['active_attempt']['status'] != 'completed' or len(answers) != 1):
+            raise ProbeError('Plan drafting did not finish with one confirmed proposal; nothing saved or replayed.')
+        plan = validate_plan(answers[0])
+        if plan['goal'] != prompt:
+            raise ProbeError('Draft changed the requested goal; nothing saved.')
+        encoded = (json.dumps(plan, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        if len(encoded) > 65536:
+            raise ProbeError('Draft plan file exceeds 64 KiB; nothing saved.')
+        with tempfile.TemporaryDirectory(prefix='.modelmate-draft-', dir=destination.parent) as directory:
+            snapshot = Path(directory) / 'plan.json'
+            fd = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'wb') as source:
+                source.write(encoded);source.flush();os.fsync(source.fileno())
+            os.link(snapshot, destination)
+        output.write('Validated draft saved · ' + str(len(plan['steps'])) + ' steps · '
+            + str(len(plan['clarifications'])) + ' clarifications · no execution or verification grant\n')
+        return 0
+    finally:
+        backend.close()
+
+
+def load_criterion_map(path, plan):
+    if path is None:
+        return None
+    with open(path, 'rb') as source:
+        content = source.read(32769)
+    try:
+        if len(content) > 32768:
+            raise ValueError
+        data = json.loads(content.decode('utf-8'), object_pairs_hook=_unique_json_object,
+                          parse_constant=_invalid_plan_constant)
+    except (ValueError, UnicodeError, RecursionError, ProbeError):
+        raise ProbeError('Invalid or oversized criterion map JSON.') from None
+    if (not isinstance(data, dict) or set(data) != {'version', 'criteria'}
+            or type(data['version']) is not int or data['version'] != 1
+            or not isinstance(data['criteria'], dict)
+            or set(data['criteria']) != {str(i + 1) for i in range(len(plan['success_criteria']))}):
+        raise ProbeError('Criterion map must cover every success criterion exactly once.')
+    declared = {str(i + 1) + '.' + str(j + 1) for i, step in enumerate(plan['steps'])
+                for j in range(len(step['checks']))}
+    result = []
+    for number in range(1, len(plan['success_criteria']) + 1):
+        refs = data['criteria'][str(number)]
+        if (not isinstance(refs, list) or not refs or len(refs) > 384
+                or any(not isinstance(ref, str) or ref not in declared for ref in refs)
+                or len(set(refs)) != len(refs)):
+            raise ProbeError('Criterion references must name unique declared STEP.CHECK entries.')
+        result.append(str(number) + '=' + ','.join(refs))
+    return result
+
+
+def workflow_role_bindings(bindings):
+    policy = {}
+    for binding in bindings:
+        if '=' not in binding:
+            raise ProbeError('Use --role-model ROLE=MODEL.')
+        role, model = binding.split('=', 1)
+        if role not in ROLE_ORDER or role in policy or not model.strip():
+            raise ProbeError('Use unique --role-model economy|standard|strong=MODEL bindings.')
+        policy[role] = model
+    return policy
+
+
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
                       experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
-                      check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False):
+                      check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False,
+                      clarifications=(), source_results=(), automatic_workflow=False, expected_goal=None, criterion_map=None):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
+    if criterion_map is not None and not automatic_workflow:
+        raise ProbeError('Criterion mapping requires experimental Auto advancement.')
+    if automatic_workflow and resume_id is not None:
+        raise ProbeError('Experimental automatic advancement requires a new Auto workflow.')
+    if clarifications and resume_id is not None:
+        raise ProbeError('Clarification answers require a new --workflow; saved plans cannot be rewritten.')
+    if source_results and resume_id is not None:
+        raise ProbeError('Source results require a new --workflow; saved plans cannot be rewritten.')
     if experimental_rechecks and resume_id is None:
         raise ProbeError('--experimental-rechecks requires --resume-workflow.')
     if shared_rechecks and not (experimental_rechecks and execute and resume_id is not None):
@@ -5208,19 +5542,63 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         with open(path, 'rb') as source:
             raw = source.read(65537).decode('utf-8')
     mode = mode or 'ask_to_escalate'
+    if automatic_workflow and mode != 'auto':
+        raise ProbeError('Experimental automatic advancement requires a new Auto workflow.')
     plan = validate_plan(raw)
+    if expected_goal is not None and plan['goal'] != expected_goal:
+        raise ProbeError('Workflow draft goal changed before handoff; no execution started.')
+    if execute and resume_id is None and plan['clarifications'] and not clarifications:
+        clarifications = read_workflow_clarifications(plan['clarifications'], input_stream, output)
+        if clarifications is None:
+            return 2
+    if clarifications:
+        questions = {str(i + 1): question for i, question in enumerate(plan['clarifications'])}
+        answers = {}
+        for value in clarifications:
+            number, separator, answer = value.partition('=')
+            if not separator or number not in questions or number in answers:
+                raise ProbeError('Use one --clarification NUMBER=ANSWER per listed question, starting at 1.')
+            _plan_text(answer)
+            answers[number] = answer
+        if answers.keys() != questions.keys():
+            raise ProbeError('Answer every clarification before starting dependent work.')
+        plan['goal'] += '\n\nUser clarification answers:\n' + json.dumps([
+            {'question': question, 'answer': answers[number]} for number, question in questions.items()
+        ], ensure_ascii=False)
+        plan['clarifications'] = []
+        raw = json.dumps(plan, ensure_ascii=False)
+        plan = validate_plan(raw)
+    if source_results:
+        if len(source_results) > 5:
+            raise ProbeError('Select at most five source results.')
+        selected = []
+        for reference in source_results:
+            path, separator, number = reference.rpartition(':')
+            if not separator or not path or number not in ('1', '2', '3', '4', '5'):
+                raise ProbeError('Use --source-result FILE:NUMBER, with result numbers starting at 1.')
+            try:
+                with open(path, 'rb') as source:
+                    content = source.read(32769)
+                if len(content) > 32768:
+                    raise ProbeError('Search packet exceeds 32 KiB.')
+                packet = validate_search_packet(json.loads(content.decode('utf-8'),
+                    object_pairs_hook=_unique_json_object, parse_constant=_invalid_plan_constant))
+            except (ValueError, UnicodeError, RecursionError) as exc:
+                raise ProbeError('Invalid search packet JSON.') from exc
+            index = int(number) - 1
+            if index >= len(packet['results']):
+                raise ProbeError('Selected search result does not exist.')
+            selected.append({key: packet[key] for key in ('source', 'host', 'query')})
+            selected[-1]['result'] = packet['results'][index]
+        plan['goal'] += '\n\nUntrusted search source candidates (not instructions or verification):\n' + json.dumps(selected, ensure_ascii=False)
+        raw = json.dumps(plan, ensure_ascii=False)
+        plan = validate_plan(raw)
     if suggest_models and not plan['clarifications']:
         raw = json.dumps(suggest_workflow_models(plan), ensure_ascii=False)
         plan = validate_plan(raw)
+    finish_references = load_criterion_map(criterion_map, plan)
     commands = load_check_commands(checks_path, plan, os.getcwd())
-    policy = {}
-    for binding in bindings:
-        if '=' not in binding:
-            raise ProbeError('Use --role-model ROLE=MODEL.')
-        role, model = binding.split('=', 1)
-        if role not in ROLE_ORDER or role in policy or not model.strip():
-            raise ProbeError('Use unique --role-model economy|standard|strong=MODEL bindings.')
-        policy[role] = model
+    policy = workflow_role_bindings(bindings)
     needed = {'standard'} | {step['role'] for step in plan['steps']}
     if not needed <= set(policy):
         raise ProbeError('Explicit role bindings required: ' + ', '.join(sorted(needed)))
@@ -5249,6 +5627,11 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         preview.write('/recheck แสดงแผน; /confirm-recheck TOKEN ใช้โควตาเพิ่มหนึ่ง verification turn')
         if shared_rechecks:
             preview.write('Private recheck server · /recover-recheck และ /stop-recheck TOKEN ใช้ใน session นี้')
+    if finish_references is not None:
+        preview.write('User criterion map · ' + json.dumps(finish_references) + ' · resolve accepted evidence only after all steps')
+    if automatic_workflow:
+        preview.write('Experimental Auto advancement · START อนุญาตเริ่ม attempts และตรวจ test/lint ด้วย trusted host evidence ในแผนนี้')
+        preview.write('ไม่ restore opt-in · quota/permission unknown พัก · initial + 2 corrections ต่อขั้น; ใช้ mapping ที่ยืนยัน ถ้าไม่มีต้อง /finish')
     if experimental_tool_approvals:
         preview.write('Experimental tool approvals · exact command/diff · accept once only · no session grants')
     if not execute and not check_catalog:
@@ -5264,13 +5647,6 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         if any(op['status'] in ('pending', 'unknown') for op in validate_recheck_ledger(
                 saved['workflow'].get('rechecks', []), workflow_saved_evidence(saved['workflow']))):
             raise ProbeError('Recheck outcome unresolved; use --show-workflow to inspect retained native IDs. No replay.')
-        active = saved['workflow']['active_attempt']
-        if active is not None:
-            known = {e['check_index']: e for e in active['checks']}
-            index = saved['workflow']['step_index']
-            if active['status'] != 'completed' or any(known.get(j, {}).get('result') not in ('pass', 'fail')
-                    for j, check in enumerate(plan['steps'][index]['checks']) if check['kind'] in ('test', 'lint')):
-                raise ProbeError('Experimental resume needs a completed work turn and known saved tool results; missing/unknown checks are unsupported.')
     if required != {(spec['step'], spec['check']) for spec in commands}:
         raise ProbeError('Every test/lint check needs an explicit --check-commands binding before execution.')
     if any(step['effort'] == 'ultra' for step in plan['steps']):
@@ -5309,9 +5685,20 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
                                      command=spec['command'], cwd=spec['cwd'])
         snapshot = backend.preflight()
         preview.write('Session: ' + backend.session_id + ' · durable checkpoint; ไม่ replay turn อัตโนมัติ')
+        if resume_id is not None and required:
+            state = controller.snapshot()
+            active = state['active_attempt']
+            if active is not None and active['status'] == 'completed':
+                missing = any(check['kind'] in ('test', 'lint')
+                    and active['checks'].get(i, {}).get('result', 'unknown') == 'unknown'
+                    for i, check in enumerate(state['plan']['steps'][state['step_index']]['checks']))
+                if missing:
+                    preview.write('Native turn จบแล้ว แต่ผลคำสั่งบางส่วนยัง unknown; คำสั่งอาจรันไปแล้ว')
+                    preview.write('/check เก็บผลที่ตรวจไม่ได้เป็น UNVERIFIED ไม่รันซ้ำ · ตรวจไฟล์/ผลข้างเคียงก่อนอนุมัติ attempt ใหม่')
         return run_chat(input_stream, output, backend=backend, workflow=controller,
                         workflow_action=host, catalog=snapshot['catalog'], role_policy=policy,
-                        recheck_commands=commands if experimental_rechecks else None)
+                        recheck_commands=commands if experimental_rechecks else None,
+                        automatic_workflow=automatic_workflow, finish_references=finish_references)
     finally:
         elapsed_end = time.monotonic()
         measurements = {}
@@ -5472,9 +5859,10 @@ def read_search_json(host, path, method, body=None, *, source):
         if len(data) > 262144:
             raise ProbeError(source + ' search response exceeded its size limit.')
         try:
-            payload = json.loads(data)
-        except (ValueError, RecursionError) as exc:
-            raise ProbeError('Invalid ' + source + ' search response.') from exc
+            payload = json.loads(data, object_pairs_hook=_unique_json_object,
+                                 parse_constant=_invalid_plan_constant)
+        except (ValueError, RecursionError, ProbeError):
+            raise ProbeError('Invalid ' + source + ' search response.') from None
         if not isinstance(payload, dict):
             raise ProbeError('Invalid ' + source + ' search response.')
         return payload
@@ -5529,7 +5917,7 @@ def searxng_host(origin):
 
 
 def search_searxng(query, host):
-    from urllib.parse import urlencode, urlsplit
+    from urllib.parse import urlencode
 
     body = urlencode({'q': query, 'format': 'json'}).encode('ascii')
     rows = read_search_json(host, '/search', 'POST', body, source='SearXNG').get('results')
@@ -5540,14 +5928,7 @@ def search_searxng(query, host):
         if not isinstance(row, dict):
             continue
         url, title, content = (row.get(key) for key in ('url', 'title', 'content'))
-        if (not isinstance(url, str) or len(url) > 4096 or not isinstance(title, str) or not title.strip()
-                or terminal_text(url) != url or any(c.isspace() for c in url)):
-            continue
-        try:
-            link = urlsplit(url)
-            if link.scheme not in ('http', 'https') or not link.hostname or link.username is not None:
-                continue
-        except ValueError:
+        if not isinstance(title, str) or not title.strip() or not valid_search_url(url):
             continue
         results.append({'title': search_text(title, 300),
                         'excerpt': search_text(content, 600) if isinstance(content, str) else '',
@@ -5557,13 +5938,220 @@ def search_searxng(query, host):
     return results
 
 
-def run_wikipedia_search(input_stream, output, language):
+def valid_search_url(value):
+    from urllib.parse import urlsplit
+
+    if (not isinstance(value, str) or not value or len(value) > 4096
+            or terminal_text(value) != value or any(c.isspace() for c in value)):
+        return False
+    try:
+        url = urlsplit(value)
+        return (url.scheme in ('http', 'https') and bool(url.hostname)
+                and url.username is None and url.password is None and url.port != 0)
+    except ValueError:
+        return False
+
+
+def validate_search_packet(packet):
+    if (not isinstance(packet, dict) or set(packet) != {'version', 'source', 'host', 'query', 'results'}
+            or type(packet['version']) is not int or packet['version'] != 1
+            or packet['source'] not in ('Wikipedia', 'SearXNG')
+            or not isinstance(packet['host'], str) or len(packet['host']) > 255):
+        raise ProbeError('Invalid search packet schema.')
+    if (searxng_host('https://' + packet['host']) != packet['host']
+            or packet['source'] == 'Wikipedia' and packet['host'] not in ('en.wikipedia.org', 'th.wikipedia.org')):
+        raise ProbeError('Invalid search packet host.')
+    query, results = packet['query'], packet['results']
+    if (not isinstance(query, str) or not query.strip() or len(query) > 1024
+            or terminal_text(query) != query or any(c in query for c in '\n\t\r')
+            or not isinstance(results, list) or len(results) > 5):
+        raise ProbeError('Invalid search packet query or results.')
+    for result in results:
+        if not isinstance(result, dict) or set(result) != {'title', 'excerpt', 'url'}:
+            raise ProbeError('Invalid search packet result.')
+        for field, limit in (('title', 300), ('excerpt', 600), ('url', 4096)):
+            value = result[field]
+            if (not isinstance(value, str) or len(value) > limit or terminal_text(value) != value
+                    or any(c in value for c in '\n\r\t') or field != 'excerpt' and not value.strip()):
+                raise ProbeError('Invalid search packet text.')
+        if not valid_search_url(result['url']):
+            raise ProbeError('Invalid search packet URL.')
+    return packet
+
+
+# Fixed tested host profile; unsupported layouts fail without broader mounts.
+SEARCH_MOUNTS = (
+    ('/usr/bin/python3.11', '/usr/bin/python3'),
+    ('/usr/lib/python3.11', '/usr/lib/python3.11'),
+    ('/lib64/ld-linux-x86-64.so.2', '/lib64/ld-linux-x86-64.so.2'),
+    *((f'/lib/x86_64-linux-gnu/{name}', f'/lib/x86_64-linux-gnu/{name}')
+      for name in ('libc.so.6', 'libm.so.6', 'libz.so.1', 'libexpat.so.1',
+                   'libssl.so.3', 'libcrypto.so.3')),
+    ('/etc/ssl/certs/ca-certificates.crt', '/public-ca.pem'),
+    ('/etc/ssl/certs/ca-certificates.crt', '/usr/lib/ssl/cert.pem'),
+)
+
+
+SEARCH_WORKER_CODE = "import runpy,sys; runtime=runpy.run_path('/modelmate.py',run_name='search_worker'); runtime['run_search_worker'](sys.stdin.buffer,sys.stdout.buffer)"
+
+
+def read_search_resolver():
+    import ipaddress
+
+    with open('/etc/resolv.conf', 'rb') as source:
+        content = source.read(16385)
+    if len(content) > 16384:
+        raise ProbeError('Unsupported search resolver configuration.')
+    addresses = []
+    for line in content.decode('ascii').splitlines():
+        fields = line.split('#', 1)[0].split()
+        if fields and fields[0] == 'nameserver':
+            if len(fields) != 2 or '%' in fields[1]:
+                raise ProbeError('Unsupported search resolver configuration.')
+            address = str(ipaddress.ip_address(fields[1]))
+            if address not in addresses:
+                addresses.append(address)
+    if not addresses or len(addresses) > 3:
+        raise ProbeError('Unsupported search resolver configuration.')
+    return ''.join('nameserver ' + address + '\n' for address in addresses).encode('ascii')
+
+
+def run_isolated_search(query, host, source):
+    """Internal launcher for an already-confirmed public query; not exposed by the CLI."""
+    request = dict(version=1, source=source, host=host, query=query)
+    validate_search_packet(dict(request, results=[]))
+    content = json.dumps(request, ensure_ascii=False).encode('utf-8')
+    if len(content) > 8192:
+        raise ProbeError('Search worker request exceeds 8 KiB.')
+    if (not Path('/usr/bin/bwrap').is_file()
+            or any(not Path(path).exists() for path, _ in SEARCH_MOUNTS)):
+        raise ProbeError('Isolated search is unsupported on this host.')
+    try:
+        resolver = read_search_resolver()
+        runtime = Path(__file__).read_bytes()
+        with tempfile.TemporaryDirectory(prefix='modelmate-search-') as directory:
+            root = Path(directory)
+            runtime_copy, resolver_copy = root / 'modelmate.py', root / 'resolv.conf'
+            runtime_copy.write_bytes(runtime)
+            resolver_copy.write_bytes(resolver)
+            command = ['/usr/bin/bwrap', '--unshare-all', '--share-net', '--die-with-parent',
+                       '--new-session', '--cap-drop', 'ALL']
+            for path, destination in SEARCH_MOUNTS:
+                command += ['--ro-bind', str(Path(path).resolve()), destination]
+            command += ['--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
+                '--ro-bind', str(runtime_copy), '/modelmate.py',
+                '--ro-bind', str(resolver_copy), '/etc/resolv.conf', '--chdir', '/tmp',
+                '--clearenv', '--setenv', 'PATH', '/usr/bin', '--setenv', 'LC_CTYPE', 'C.UTF-8',
+                '--', '/usr/bin/python3', '-I', '-S', '-c', SEARCH_WORKER_CODE]
+            result = run_search_process(command, content, cwd=root, timeout=12)
+            if result.returncode != 0:
+                raise ProbeError('Isolated search worker failed; no retry was attempted.')
+            return validate_search_worker_response(result.stdout, request)['results']
+    except subprocess.TimeoutExpired:
+        raise ProbeError('Isolated search timed out; no retry was attempted.') from None
+    except (OSError, ValueError, UnicodeError):
+        raise ProbeError('Isolated search setup failed; no retry was attempted.') from None
+
+
+def run_isolated_confirmed_search(input_stream, output, host, source, *, json_output=None):
+    validate_search_packet(dict(version=1, source=source, host=host, query='preview', results=[]))
+    return run_confirmed_search(input_stream, output, host, source,
+        lambda query: run_isolated_search(query, host, source), json_output=json_output)
+
+def run_search_process(command, content, *, cwd, timeout, output_limit=32768):
+    """Collect a trusted launcher command; caller supplies consent and sandbox policy."""
+    import signal
+
+    if (not isinstance(content, bytes) or len(content) > 8192
+            or not math.isfinite(timeout) or timeout <= 0
+            or type(output_limit) is not int or not 0 < output_limit <= 65536):
+        raise ProbeError('Invalid search process limits.')
+    deadline = time.monotonic() + timeout
+    with tempfile.TemporaryFile() as source:
+        source.write(content);source.seek(0)
+        process = subprocess.Popen(command, stdin=source, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, cwd=cwd, env={'PATH': os.defpath},
+            close_fds=True, start_new_session=True)
+        finished = False
+        try:
+            data = bytearray()
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    for key, _ in selector.select(remaining):
+                        chunk = os.read(key.fd, min(8192, output_limit + 1 - len(data)))
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        data.extend(chunk)
+                        if len(data) > output_limit:
+                            raise ProbeError('Search worker output exceeded its size limit.')
+            code = process.wait(timeout=max(0, deadline - time.monotonic()))
+            finished = True
+            return subprocess.CompletedProcess(command, code, bytes(data), b'')
+        finally:
+            if not finished:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=3)
+            process.stdout.close()
+
+
+def validate_search_worker_response(content, request):
+    """Bind one bounded worker response to the exact caller-owned public request."""
+    if not isinstance(request, dict) or set(request) != {'version', 'source', 'host', 'query'}:
+        raise ProbeError('Invalid expected search worker request.')
+    expected = validate_search_packet(dict(request, results=[]))
+    try:
+        if not isinstance(content, bytes) or len(content) > 32768:
+            raise ValueError
+        packet = validate_search_packet(json.loads(content.decode('utf-8'),
+            object_pairs_hook=_unique_json_object, parse_constant=_invalid_plan_constant))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ProbeError('Invalid search worker response.') from exc
+    if any(packet[key] != expected[key] for key in request):
+        raise ProbeError('Search worker response does not match the request.')
+    return packet
+
+
+def run_search_worker(input_stream, output):
+    """Internal binary protocol for an already-approved query; caller owns isolation/consent."""
+    content = input_stream.read(8193)
+    try:
+        if not isinstance(content, bytes) or len(content) > 8192:
+            raise ValueError
+        request = json.loads(content.decode('utf-8'), object_pairs_hook=_unique_json_object,
+                             parse_constant=_invalid_plan_constant)
+        if not isinstance(request, dict) or set(request) != {'version', 'source', 'host', 'query'}:
+            raise ValueError
+        packet = validate_search_packet(dict(request, results=[]))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ProbeError('Invalid search worker request.') from exc
+    if packet['source'] == 'Wikipedia':
+        results = search_wikipedia(packet['query'], packet['host'].split('.')[0])
+    else:
+        results = search_searxng(packet['query'], packet['host'])
+    packet['results'] = results
+    validate_search_packet(packet)
+    encoded = (json.dumps(packet, ensure_ascii=False) + '\n').encode('utf-8')
+    if len(encoded) > 32768:
+        raise ProbeError('Search worker packet exceeds 32 KiB.')
+    output.write(encoded)
+    output.flush()
+
+
+def run_wikipedia_search(input_stream, output, language, *, json_output=None):
     host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
     return run_confirmed_search(input_stream, output, host, 'Wikipedia',
-                                lambda query: search_wikipedia(query, language))
+                                lambda query: search_wikipedia(query, language), json_output=json_output)
 
 
-def run_confirmed_search(input_stream, output, host, source, search):
+def run_confirmed_search(input_stream, output, host, source, search, *, json_output=None):
     import secrets
     import unicodedata
 
@@ -5606,6 +6194,11 @@ def run_confirmed_search(input_stream, output, host, source, search):
         write('ยกเลิกการค้น')
         return 2
     results = search(query)
+    if json_output is not None:
+        packet = validate_search_packet(dict(version=1, source=source, host=host, query=query, results=results))
+        json_output.write(json.dumps(packet, ensure_ascii=True) + '\n')
+        json_output.flush()
+        return 0
     if not results:
         write('ไม่พบผลจาก ' + source)
     for index, result in enumerate(results, 1):
@@ -5630,13 +6223,25 @@ def main():
     modes.add_argument('--recover-recheck', metavar='SESSION_ID',
                        help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
+    modes.add_argument('--plan-workflow', metavar='NEW_FILE',
+                       help='draft with selected model, then review as a new workflow; execution needs a separate START')
+    modes.add_argument('--draft-plan', metavar='NEW_FILE',
+                       help='one selected planning turn after START; save a validated proposal without workflow execution')
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
     parser.add_argument('--check-catalog', action='store_true',
                         help='validate a new workflow against live catalog and quota without inference')
     parser.add_argument('--suggest-models', action='store_true',
                         help='recommend role/effort from explicit step risk and checks; requires a new --workflow')
     parser.add_argument('--role-model', action='append', default=[], metavar='ROLE=MODEL', help='explicit workflow role binding')
+    parser.add_argument('--clarification', action='append', default=[], metavar='NUMBER=ANSWER',
+                        help='answer each numbered question in a new workflow plan before START; repeat for multiple questions')
+    parser.add_argument('--source-result', action='append', default=[], metavar='FILE:NUMBER',
+                        help='attach selected untrusted search JSON results to a new workflow goal before START')
+    parser.add_argument('--search-json', action='store_true',
+                        help='with a search mode, write confirmed results as JSON to stdout and prompts to stderr')
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
+    parser.add_argument('--criterion-map', metavar='MAP_JSON',
+                        help='user-owned success-criterion to STEP.CHECK map; requires experimental Auto advancement')
     parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
     parser.add_argument('--measure-quota', action='store_true',
                         help='include matching quota window observations in the live workflow summary')
@@ -5647,6 +6252,8 @@ def main():
                         help='experimental tool-check resume; /confirm-recheck consumes an extra model turn; native threads retained')
     parser.add_argument('--experimental-shared-rechecks', action='store_true',
                         help='experimental private recheck server with recovery inside the attached workflow')
+    parser.add_argument('--experimental-auto-advance', action='store_true',
+                        help='new Auto workflow only: advance READY attempts after START; checks and tool gates remain separate')
     parser.add_argument('--experimental-tool-approvals', action='store_true',
                         help='experimental workflow accept-once command/diff UI; separate from model approvals')
     modes.add_argument('--sessions', action='store_true', help='list local sessions without connecting to Codex')
@@ -5657,22 +6264,59 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
+    new_workflow = args.workflow or args.plan_workflow
+    if args.clarification and not new_workflow:
+        parser.error('--clarification requires a new --workflow')
+    if args.source_result and not new_workflow:
+        parser.error('--source-result requires a new --workflow')
+    if args.search_json and not (args.search_wikipedia or args.search_web is not None):
+        parser.error('--search-json requires --search-wikipedia or --search-web')
     if args.check_catalog and (not args.workflow or args.execute_workflow):
         parser.error('--check-catalog requires --workflow without --execute-workflow')
-    if args.measure_quota and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
+    if args.measure_quota and (not args.execute_workflow or not (new_workflow or args.resume_workflow)):
         parser.error('--measure-quota requires an executing workflow')
-    if args.metrics_jsonl is not None and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
+    if args.metrics_jsonl is not None and (not args.execute_workflow or not (new_workflow or args.resume_workflow)):
         parser.error('--metrics-jsonl requires an executing workflow')
-    if args.suggest_models and not args.workflow:
+    if args.suggest_models and not new_workflow:
         parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
         parser.error('--experimental-rechecks requires --resume-workflow')
-    if args.experimental_tool_approvals and not (args.workflow or args.resume_workflow):
+    if args.criterion_map and not args.experimental_auto_advance:
+        parser.error('--criterion-map requires --experimental-auto-advance')
+    if args.experimental_auto_advance and (not new_workflow or args.workflow_mode != 'auto'):
+        parser.error('--experimental-auto-advance requires a new --workflow with --workflow-mode auto')
+    if args.experimental_tool_approvals and not (new_workflow or args.resume_workflow):
         parser.error('--experimental-tool-approvals requires --workflow or --resume-workflow')
     if args.experimental_shared_rechecks and not (args.experimental_rechecks and args.execute_workflow):
         parser.error('--experimental-shared-rechecks requires --experimental-rechecks and --execute-workflow')
-    if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
+    if not (new_workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
+    if args.draft_plan or args.plan_workflow:
+        if not args.prompt or not args.model or args.resume:
+            parser.error('Planning entry requires a prompt and --model; resume is not supported')
+        planned_started_at = planning_finished_at = None
+        handoff_ready = False
+        try:
+            if args.plan_workflow and 'standard' not in workflow_role_bindings(args.role_model):
+                raise ProbeError('--plan-workflow requires an explicit standard work-model binding.')
+            if args.plan_workflow:
+                planned_started_at = time.monotonic()
+            drafted = run_plan_draft(args.prompt, args.model, args.effort,
+                                     args.draft_plan or args.plan_workflow, sys.stdin, sys.stdout)
+            if drafted != 0 or not args.plan_workflow:
+                return drafted
+            handoff_ready = True
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, UnicodeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else 'Plan drafting failed; no automatic retry.'
+            print('ModelMate draft: ' + terminal_text(message), file=sys.stderr)
+            return 1
+        finally:
+            if planned_started_at is not None:
+                planning_finished_at = time.monotonic()
+                if not handoff_ready:
+                    report_planned_workflow_timing(sys.stdout, planned_started_at, planning_finished_at)
     if args.delete_session:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Session deletion does not accept prompt/model/effort overrides')
@@ -5688,11 +6332,13 @@ def main():
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Web search only accepts its own confirmed query')
         try:
+            search_output = sys.stderr if args.search_json else sys.stdout
+            json_output = sys.stdout if args.search_json else None
             if args.search_wikipedia:
-                return run_wikipedia_search(sys.stdin, sys.stdout, args.search_wikipedia)
+                return run_wikipedia_search(sys.stdin, search_output, args.search_wikipedia, json_output=json_output)
             host = searxng_host(args.search_web)
-            return run_confirmed_search(sys.stdin, sys.stdout, host, 'SearXNG',
-                                        lambda query: search_searxng(query, host))
+            return run_confirmed_search(sys.stdin, search_output, host, 'SearXNG',
+                                        lambda query: search_searxng(query, host), json_output=json_output)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, UnicodeError) as exc:
@@ -5721,22 +6367,29 @@ def main():
             message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
             print('ModelMate recovery: ' + terminal_text(message), file=sys.stderr)
             return 1
-    if args.workflow or args.resume_workflow:
-        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+    if new_workflow or args.resume_workflow:
+        if not args.plan_workflow and (args.prompt is not None or args.model or args.resume or args.effort != 'low'):
             parser.error('Workflow uses plan efforts and explicit role bindings; no prompt/model/resume overrides')
         try:
-            return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
+            return run_workflow_file(new_workflow, args.role_model, args.workflow_mode,
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
                                      experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
                                      measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl,
                                      check_catalog=args.check_catalog, shared_rechecks=args.experimental_shared_rechecks,
-                                     experimental_tool_approvals=args.experimental_tool_approvals)
+                                     experimental_tool_approvals=args.experimental_tool_approvals,
+                                     clarifications=args.clarification, source_results=args.source_result,
+                                     automatic_workflow=args.experimental_auto_advance,
+                                     expected_goal=args.prompt if args.plan_workflow else None, criterion_map=args.criterion_map)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             message = str(exc) if isinstance(exc, ProbeError) else 'Cannot load/start explicit workflow.'
             print('ModelMate workflow: ' + terminal_text(message), file=sys.stderr)
             return 1
+        finally:
+            if args.plan_workflow:
+                report_planned_workflow_timing(sys.stdout, planned_started_at,
+                                              planning_finished_at, time.monotonic())
     if args.sessions or args.show_workflow is not None:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Local inspection does not accept prompt, model, resume or effort overrides')
