@@ -4366,3 +4366,52 @@ plain-prompt handoff, routing/evaluation and complete release readiness remain o
 Final full offline verification passed all 738 tests in 135.119 seconds with no
 skips. Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
 `1134b4b997282d1b2ad68d42fd851c0248bf820365d9c6bc056f593a8a29dd8e`.
+
+
+### P06/P08 two-phase planned workflow handoff (2026-11-25)
+
+`--plan-workflow NEW_FILE --model PLANNER --role-model standard=WORK_MODEL "prompt"`
+connects the existing draft and new-workflow paths. START first authorizes one
+selected planning turn. Only a validated, exclusively published draft advances
+to workflow preview. Without --execute-workflow no work backend is constructed.
+With it, clarification is collected through the existing bounded input path and
+execution requires a separate START after the effective plan/model/check preview.
+The first confirmation does not grant the second phase. Cancelled/invalid drafting
+never enters handoff; later cancellation/configuration failure preserves the draft
+so the user can continue with --workflow without another planning turn.
+
+Role binding parsing is shared with the existing workflow path. A valid explicit
+standard work binding is required before planning, not inferred from the planning
+model. Work gets a new controller, counters, baseline and grants; default Ask to
+escalate and native read-only/on-request policy are unchanged. Other required roles,
+checks/commands, model/effort/catalog and quota gates still validate before work
+dispatch. A caller-owned expected goal must match the loaded draft before any
+clarification/work backend. Preview and second START authorize the actual reviewed
+steps/criteria; local file contents never grant permission or evidence.
+
+The metadata-only --check-catalog contract remains restricted to explicit existing
+--workflow files and cannot accidentally request a planning inference. Standalone
+--draft-plan keeps its behavior. Future workflow metrics/quota observations cover
+the workflow phase only, not the earlier planning turn; no total savings claim is
+made. Source-result context, clarification flags and opt-in tool/Auto settings
+continue through their existing new-workflow validators.
+
+All seven handoff tests passed using real fake-native subprocesses: independently
+selected strong planner and standard work model, question/answer handoff, empty
+work grants and zero initial work attempts, exactly one planning plus one explicitly
+started work turn, separate second START, cancelled/invalid drafting, preview-only
+input preservation, work-binding rejection before planning, goal tampering and
+catalog-only rejection. Ten draft, thirty workflow-entry and seventeen CLI tests
+also passed. Runtime/diagnostic compile and diff checks passed. No connected account,
+live model or quota was used.
+
+This is an explicit experimental prompt-to-workflow flow, not default plain-prompt
+automation or proof of the broader live planning/permission/recovery/evaluation
+release gates. A draft may request roles/checks not supplied at invocation; that
+configuration failure preserves the file instead of rerunning planning or inventing
+bindings/commands. Native planning remains ephemeral without its own resume. Full
+release readiness remains unproven.
+
+Full offline verification passed all 745 tests in 142.340 seconds with no skips.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`8810870f3bb33525ffe5e57c251e809f56005597d073eb42f83be4d120902467`.

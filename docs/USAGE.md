@@ -457,6 +457,33 @@ bindings ของทุก role ที่แผนใช้ หากมี cla
 ของ workflow อีกครั้ง คำสั่งนี้ยังไม่เชื่อม plain prompt ไปเป็น workflow อัตโนมัติ
 มีหลักฐาน fake-server/offline เท่านั้น ยังไม่ได้ทดสอบ live ด้วย quota จริง
 
+### จาก prompt ไป draft และ workflow ในคำสั่งเดียว
+
+```sh
+sr --plan-workflow new-plan.json --model PLANNER \
+  --role-model standard=WORK_MODEL "เพิ่มตัวกรองรายการในโปรเจกต์นี้"
+```
+
+START แรกอนุญาต planning turn เดียวด้วย PLANNER แล้วบันทึก draft ใหม่แบบเดียวกับ
+--draft-plan จากนั้นแสดง workflow preview ค่า default ยังไม่ execute work
+จึงมีค่าใช้ quota สำหรับ planning หลังยืนยัน แม้ไม่ได้ใส่ --execute-workflow
+ใช้ --check-catalog ร่วมกับโหมดนี้ไม่ได้ เพื่อคงสัญญาว่า catalog-only ไม่เรียก inference
+
+หากเพิ่ม --execute-workflow จะถาม clarification ที่ค้าง แล้วแสดง effective plan
+และขอ START แยกสำหรับ execution โมเดลของงานใช้ role bindings ที่ระบุ ไม่สืบทอด
+model/tool grants หรือ attempt budget จาก planning เลือก --workflow-mode ได้ตามเดิม
+รวม opt-in Auto advancement; default ยังเป็น Ask to escalate และ native tool gates เดิม
+
+ต้องระบุ standard work binding ก่อน planning และ bindings ของ role อื่นที่ draft ใช้
+หาก draft ต้องการ bindings/check commands ที่ยังไม่มี จะหยุดก่อนเริ่ม work backend
+ไฟล์ draft ยังอยู่ ให้ตรวจแล้วใช้ --workflow FILE ต่อได้โดยไม่ต้องสร้าง draft ซ้ำ
+คำสั่งตรวจต้องเป็น user-owned --check-commands; โมเดลสร้างสิทธิ์หรือคำสั่งจาก plan ไม่ได้
+
+ยกเลิก START แรกจะไม่มี draft ยกเลิกช่วง clarification หรือ START ที่สองจะไม่เริ่ม work
+แต่เก็บ draft ที่ผ่าน validator แล้วไว้ goal ที่เปลี่ยนระหว่าง handoff จะถูกปฏิเสธ
+ส่วน metrics ของ workflow วัดเฉพาะช่วง workflow ไม่รวม planning turn ก่อนหน้า
+ยังเป็น experimental/offline-tested flow และ plain prompt ปกติยังไม่ใช้โหมดนี้เอง
+
 ### Experimental Auto advancement
 
 สำหรับแผนใหม่เท่านั้น ใช้ `--workflow-mode auto --experimental-auto-advance`

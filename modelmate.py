@@ -5438,10 +5438,22 @@ def run_plan_draft(prompt, model, effort, destination, input_stream, output):
         backend.close()
 
 
+def workflow_role_bindings(bindings):
+    policy = {}
+    for binding in bindings:
+        if '=' not in binding:
+            raise ProbeError('Use --role-model ROLE=MODEL.')
+        role, model = binding.split('=', 1)
+        if role not in ROLE_ORDER or role in policy or not model.strip():
+            raise ProbeError('Use unique --role-model economy|standard|strong=MODEL bindings.')
+        policy[role] = model
+    return policy
+
+
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
                       experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
                       check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False,
-                      clarifications=(), source_results=(), automatic_workflow=False):
+                      clarifications=(), source_results=(), automatic_workflow=False, expected_goal=None):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
     if automatic_workflow and resume_id is not None:
@@ -5474,6 +5486,8 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     if automatic_workflow and mode != 'auto':
         raise ProbeError('Experimental automatic advancement requires a new Auto workflow.')
     plan = validate_plan(raw)
+    if expected_goal is not None and plan['goal'] != expected_goal:
+        raise ProbeError('Workflow draft goal changed before handoff; no execution started.')
     if execute and resume_id is None and plan['clarifications'] and not clarifications:
         clarifications = read_workflow_clarifications(plan['clarifications'], input_stream, output)
         if clarifications is None:
@@ -5524,14 +5538,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         raw = json.dumps(suggest_workflow_models(plan), ensure_ascii=False)
         plan = validate_plan(raw)
     commands = load_check_commands(checks_path, plan, os.getcwd())
-    policy = {}
-    for binding in bindings:
-        if '=' not in binding:
-            raise ProbeError('Use --role-model ROLE=MODEL.')
-        role, model = binding.split('=', 1)
-        if role not in ROLE_ORDER or role in policy or not model.strip():
-            raise ProbeError('Use unique --role-model economy|standard|strong=MODEL bindings.')
-        policy[role] = model
+    policy = workflow_role_bindings(bindings)
     needed = {'standard'} | {step['role'] for step in plan['steps']}
     if not needed <= set(policy):
         raise ProbeError('Explicit role bindings required: ' + ', '.join(sorted(needed)))
@@ -6154,6 +6161,8 @@ def main():
     modes.add_argument('--recover-recheck', metavar='SESSION_ID',
                        help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
+    modes.add_argument('--plan-workflow', metavar='NEW_FILE',
+                       help='draft with selected model, then review as a new workflow; execution needs a separate START')
     modes.add_argument('--draft-plan', metavar='NEW_FILE',
                        help='one selected planning turn after START; save a validated proposal without workflow execution')
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
@@ -6191,35 +6200,41 @@ def main():
     parser.add_argument('--resume', metavar='SESSION_ID', help='resume a local session with --live; never replay old work')
     modes.add_argument('--doctor', action='store_true', help='connect to real Codex and read account, models and quota; no inference')
     args = parser.parse_args()
-    if args.clarification and not args.workflow:
+    new_workflow = args.workflow or args.plan_workflow
+    if args.clarification and not new_workflow:
         parser.error('--clarification requires a new --workflow')
-    if args.source_result and not args.workflow:
+    if args.source_result and not new_workflow:
         parser.error('--source-result requires a new --workflow')
     if args.search_json and not (args.search_wikipedia or args.search_web is not None):
         parser.error('--search-json requires --search-wikipedia or --search-web')
     if args.check_catalog and (not args.workflow or args.execute_workflow):
         parser.error('--check-catalog requires --workflow without --execute-workflow')
-    if args.measure_quota and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
+    if args.measure_quota and (not args.execute_workflow or not (new_workflow or args.resume_workflow)):
         parser.error('--measure-quota requires an executing workflow')
-    if args.metrics_jsonl is not None and (not args.execute_workflow or not (args.workflow or args.resume_workflow)):
+    if args.metrics_jsonl is not None and (not args.execute_workflow or not (new_workflow or args.resume_workflow)):
         parser.error('--metrics-jsonl requires an executing workflow')
-    if args.suggest_models and not args.workflow:
+    if args.suggest_models and not new_workflow:
         parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
         parser.error('--experimental-rechecks requires --resume-workflow')
-    if args.experimental_auto_advance and (not args.workflow or args.workflow_mode != 'auto'):
+    if args.experimental_auto_advance and (not new_workflow or args.workflow_mode != 'auto'):
         parser.error('--experimental-auto-advance requires a new --workflow with --workflow-mode auto')
-    if args.experimental_tool_approvals and not (args.workflow or args.resume_workflow):
+    if args.experimental_tool_approvals and not (new_workflow or args.resume_workflow):
         parser.error('--experimental-tool-approvals requires --workflow or --resume-workflow')
     if args.experimental_shared_rechecks and not (args.experimental_rechecks and args.execute_workflow):
         parser.error('--experimental-shared-rechecks requires --experimental-rechecks and --execute-workflow')
-    if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
+    if not (new_workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
-    if args.draft_plan:
+    if args.draft_plan or args.plan_workflow:
         if not args.prompt or not args.model or args.resume:
-            parser.error('--draft-plan requires a prompt and --model; resume is not supported')
+            parser.error('Planning entry requires a prompt and --model; resume is not supported')
         try:
-            return run_plan_draft(args.prompt, args.model, args.effort, args.draft_plan, sys.stdin, sys.stdout)
+            if args.plan_workflow and 'standard' not in workflow_role_bindings(args.role_model):
+                raise ProbeError('--plan-workflow requires an explicit standard work-model binding.')
+            drafted = run_plan_draft(args.prompt, args.model, args.effort,
+                                     args.draft_plan or args.plan_workflow, sys.stdin, sys.stdout)
+            if drafted != 0 or not args.plan_workflow:
+                return drafted
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, UnicodeError) as exc:
@@ -6276,18 +6291,19 @@ def main():
             message = str(exc) if isinstance(exc, ProbeError) else diagnostic_code(exc)
             print('ModelMate recovery: ' + terminal_text(message), file=sys.stderr)
             return 1
-    if args.workflow or args.resume_workflow:
-        if args.prompt is not None or args.model or args.resume or args.effort != 'low':
+    if new_workflow or args.resume_workflow:
+        if not args.plan_workflow and (args.prompt is not None or args.model or args.resume or args.effort != 'low'):
             parser.error('Workflow uses plan efforts and explicit role bindings; no prompt/model/resume overrides')
         try:
-            return run_workflow_file(args.workflow, args.role_model, args.workflow_mode,
+            return run_workflow_file(new_workflow, args.role_model, args.workflow_mode,
                                      args.execute_workflow, sys.stdin, sys.stdout, args.check_commands, args.resume_workflow,
                                      experimental_rechecks=args.experimental_rechecks, suggest_models=args.suggest_models,
                                      measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl,
                                      check_catalog=args.check_catalog, shared_rechecks=args.experimental_shared_rechecks,
                                      experimental_tool_approvals=args.experimental_tool_approvals,
                                      clarifications=args.clarification, source_results=args.source_result,
-                                     automatic_workflow=args.experimental_auto_advance)
+                                     automatic_workflow=args.experimental_auto_advance,
+                                     expected_goal=args.prompt if args.plan_workflow else None)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

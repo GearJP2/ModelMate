@@ -208,7 +208,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P03 | พิสูจน์ permission boundary | P01 | IN_PROGRESS: user ยอมรับ native policy; live prototype tests | จำเป็น |
 | P04 | Quota policy และ pause | P02 | MOCK_VERIFIED | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
-| P06 | Plan schema / policy routing | P04, P05 | MOCK_VERIFIED: explicit plan validation and selected-model draft; automatic handoff/live draft remain open; no decision classifier | จำเป็น |
+| P06 | Plan schema / policy routing | P04, P05 | MOCK_VERIFIED: explicit plan validation and selected-model draft; default prompt entry/live draft remain open; no decision classifier | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: explicit-plan CLI/command-check happy path user LIVE_VERIFIED; broader routing/recovery pending | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
@@ -313,6 +313,19 @@ missing role, hidden model, catalog เปลี่ยนตอน resume แล
 
 ### P06 — Plan และ routing
 
+Two-phase planned workflow increment: `--plan-workflow NEW_FILE --model PLANNER
+--role-model standard=WORK_MODEL "prompt"` reuses the validated draft path and
+then enters the normal workflow preview. No classifier is added. Planning needs
+its own START; --execute-workflow additionally collects clarification and requires
+a second START after effective-plan preview. Role bindings are validated before
+planning and standard is mandatory; remaining declared roles/check command specs
+must pass normal validation before work backend construction. Planning grants,
+counters and model selection are not inherited. Expected goal is checked before
+handoff; draft remains available if later input/configuration is missing. Existing
+--workflow/--draft-plan behavior remains. Catalog-only cannot invoke this mode.
+Seven fake-native/CLI handoff tests pass; plain default prompt entry and live
+planning/automation gates remain open.
+
 Selected-model draft entry increment: `--draft-plan NEW_FILE --model MODEL
 "prompt"` requests one explicitly selected planning turn after START. This is
 workflow proposal generation, not a classifier/extra inference to select an
@@ -324,7 +337,7 @@ permission, counter or success verdict is executed/accepted. A private 0600 draf
 is published exclusively via an owned snapshot/hard link; existing or concurrently
 created files are never replaced. No automatic retry, local session or resume is
 added for this ephemeral planning turn. Ten fake-native/CLI/publication tests pass.
-Plain prompt auto entry, answer-to-workflow handoff and live evidence remain open.
+Plain default prompt auto entry and live draft evidence remain open; combined handoff is described above.
 
 ไฟล์: modelmate.py, tests/test_routing.py, synthetic plan fixtures
 อัปเดตตามผู้ใช้ 2026-11-18: ไม่ทำ decision model/classifier แยก
