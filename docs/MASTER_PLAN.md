@@ -576,7 +576,7 @@ Host capability increment: `python3 search_isolation_probe.py` runs a fixed,
 synthetic local worker in installed bubblewrap without Codex, inference or HTTP.
 On the tested host it demonstrated hidden private fixture/cwd/home, closed private
 FD, explicit public environment, read-only query input and contained temporary
-writes. Twelve diagnostic tests pass. The probe now uses an explicit Debian-style
+writes. Nineteen diagnostic tests pass. The probe now uses an explicit Debian-style
 x86-64 CPython 3.11 / OpenSSL 3 profile (interpreter, stdlib, selected shared
 libraries and one CA bundle), with no broad /usr, /lib or /etc mount. TLS trust
 loads without a network request. This remains a host-specific capability spike:
@@ -613,6 +613,12 @@ EOF/success within at most two seconds only; this passed on the tested host and
 shows that this child did not survive normal initial-worker exit. Timeout, failed
 exit or missing readiness cannot pass. This does not cover arbitrary namespace
 escape, server/host death or a production approved search launcher.
+A separate abrupt-parent-death challenge now SIGKILLs a ready Python supervisor
+using the actual collector, while its worker and detached child sleep. The outer
+harness duplicates the worker pipe through the owned supervisor's /proc FD before
+killing it; EOF must arrive within two seconds. This passes with die-with-parent
+and fails in a real negative control without that flag. This is scoped parent
+process-loss evidence only, not host failure or full G3 completion.
 
 Internal parent launcher increment: `run_isolated_confirmed_search` uses the
 existing exact SEARCH-token UI before calling `run_isolated_search`. The latter

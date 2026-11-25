@@ -4065,3 +4065,51 @@ command only with explicit live authorization; continue parent/server-loss and
 injection validation independently. SearXNG, automatic workflow search and full
 G3/release gates remain open. The runtime CLI has not been activated by adding
 this separate diagnostic entry point.
+
+
+### P13 abrupt collector-parent death and negative control (2026-11-25)
+
+The offline probe adds a fixed Python supervisor that calls the actual runtime
+collector with the same bubblewrap namespace/mount policy. Its worker starts a
+detached-session descendant, waits for child readiness, emits the known marker
+and then sleeps for five seconds; that child also holds stdout and sleeps five
+seconds. The supervisor's bounded read instrumentation announces readiness only
+once the collector has received the worker marker. No process ID, FD number or
+raw subprocess output is retained in the sanitized final report.
+
+Before killing the supervisor, the outer harness opens the worker pipe's read
+end through /proc on its still-owned supervisor process and verifies it is a FIFO.
+It then SIGKILLs only the supervisor and requires its -SIGKILL exit plus EOF on
+that independently held worker pipe within two seconds. It does NOT use EOF of
+the supervisor's own stdout as evidence: that would close on supervisor death
+even if its worker were still alive. The supervisor cannot run its Python finally
+cleanup after SIGKILL; a passing observation therefore exercises the configured
+parent-death/PID namespace behavior. No group-wide fallback kill is used to turn
+a failed check into success.
+
+The actual configured namespace passed this challenge, bringing the default
+probe to twenty checks. A real negative control removes --die-with-parent from
+only the challenged command; the worker pipe stays open beyond the deadline and
+the report is unverified. This shows the harness distinguishes a surviving worker
+from cleanup. A unit test also prevents false parent-death checks from being
+promoted to a successful overall report. The fixed sleeping fixtures naturally
+exit within five seconds if containment is absent; no long-lived fixture is
+intentionally left behind. On hosts blocking access to the owned /proc FD, the
+challenge stays unverified rather than requesting wider permissions.
+
+All nineteen diagnostic tests passed in 4.033 seconds, including this real
+negative control, the positive namespace run and the mocked live-mode refusal/
+sanitization cases. Probe SHA-256:
+`74586fec2f28abd03e38ce1b4bf9a11d5c7a13975c8f80c45c4439ab5735feca`.
+Runtime remains at SHA-256:
+`b1f51f67baafbb91e5e22ea3df33d4ed1c639ce0dce89989200c8557825d741e`.
+Compile/diff checks passed. Runtime was untouched, so the full suite was not
+repeated (last full suite: 699 tests passed). No live Wikipedia/DNS/TLS, account
+or model call was made; the prepared explicit live command remains unexecuted.
+
+This adds scoped evidence for abrupt parent-process loss with one ready worker
+and detached descendant. It does not establish arbitrary namespace escape
+resistance, host shutdown behavior, HTTP server loss behavior, broader native
+workflow recovery, another host or complete G3. The separate prepared live
+verifier, boundary review and remaining injection/activation requirements still
+apply. Runtime CLI/automatic private-context search remain disabled.

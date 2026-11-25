@@ -113,6 +113,25 @@ class IsolationProbeTests(unittest.TestCase):
                 self.assertEqual(report['status'], 'unverified')
                 self.assertFalse(report['checks']['namespaceExitStopsDetachedChild'])
 
+    def test_parent_death_failure_cannot_pass_otherwise_successful_checks(self):
+        response = dict(version=1, source='Wikipedia', host='en.wikipedia.org', query='synthetic public query', results=[])
+        first = subprocess.CompletedProcess([],0,json.dumps(dict(checks=dict.fromkeys(isolation.KEYS,True),response=json.dumps(response))).encode(),b'')
+        second = subprocess.CompletedProcess([],0,b'namespace-descendant-ready\n',b'')
+        with patch.object(isolation.shutil,'which',return_value='/usr/bin/bwrap'),patch.object(isolation,'run_search_process',side_effect=[first,second]),patch.object(isolation,'probe_parent_death',return_value=False):
+            report=isolation.probe()
+        self.assertEqual(report['status'],'unverified')
+        self.assertFalse(report['checks']['namespaceParentDeathStopsDetachedChild'])
+
+    def test_without_parent_death_flag_control_does_not_pass(self):
+        original=isolation.probe_parent_death
+        def no_parent_policy(command,runtime_copy,root):
+            return original([value for value in command if value!='--die-with-parent'],runtime_copy,root)
+        with patch.object(isolation,'probe_parent_death',side_effect=no_parent_policy):
+            report=isolation.probe()
+        self.assertEqual(report['status'],'unverified')
+        if 'checks' in report:
+            self.assertFalse(report['checks']['namespaceParentDeathStopsDetachedChild'])
+
 
 class LiveWikipediaProbeTests(unittest.TestCase):
     def input_file(self, text):

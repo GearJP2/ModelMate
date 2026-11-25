@@ -6,10 +6,13 @@ import math
 import os
 from pathlib import Path
 import secrets
+import stat
+import selectors
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 from modelmate import ProbeError, SEARCH_MOUNTS, _unique_json_object, read_workflow_confirmation, run_isolated_search, run_search_process, validate_search_packet, validate_search_worker_response
 
@@ -115,6 +118,68 @@ if not ready.exists() or os.getsid(child.pid) == os.getsid(0):
 print('namespace-descendant-ready', flush=True)
 """
 
+
+PARENT_DEATH_SUPERVISOR = r"""
+import json, os, runpy, sys
+runtime = runpy.run_path(sys.argv[1], run_name='parent_death_supervisor')
+original_read = os.read
+observed = bytearray()
+announced = False
+def watch(fd, count):
+    global announced
+    data = original_read(fd, count)
+    if not announced:
+        observed.extend(data[:64 - len(observed)])
+        if b'namespace-descendant-ready\n' in observed:
+            os.write(1, (json.dumps({'readerFd': fd}) + '\n').encode())
+            announced = True
+    return data
+os.read = watch
+runtime['run_search_process'](json.loads(sys.argv[2]), b'', cwd=sys.argv[3], timeout=7, output_limit=64)
+"""
+
+
+def probe_parent_death(command, runtime_copy, root):
+    """Kill only the ready supervisor; require EOF from its known sleeping descendants."""
+    child_command = command.copy()
+    child_command[child_command.index(CHILD)] = LIFECYCLE_CHILD + '\ntime.sleep(5)\n'
+    with subprocess.Popen([sys.executable, '-I', '-S', '-c', PARENT_DEATH_SUPERVISOR,
+            str(runtime_copy), json.dumps(child_command), str(root)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            close_fds=True, start_new_session=True, cwd=root, env={'PATH': os.defpath}) as supervisor:
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(supervisor.stdout, selectors.EVENT_READ)
+                if not selector.select(2):
+                    return False
+                ready = json.loads(os.read(supervisor.stdout.fileno(), 64))
+                if (not isinstance(ready, dict) or set(ready) != {'readerFd'}
+                        or type(ready['readerFd']) is not int or ready['readerFd'] < 3):
+                    return False
+                # Keep the worker's pipe alive independently of the dying supervisor.
+                descriptor = os.open(f"/proc/{supervisor.pid}/fd/{ready['readerFd']}", os.O_RDONLY | os.O_NONBLOCK)
+                with os.fdopen(descriptor, 'rb', buffering=0) as worker_pipe:
+                    if not stat.S_ISFIFO(os.fstat(worker_pipe.fileno()).st_mode):
+                        return False
+                    selector.unregister(supervisor.stdout)
+                    selector.register(worker_pipe, selectors.EVENT_READ)
+                    supervisor.kill()
+                    if supervisor.wait(timeout=2) != -9:
+                        return False
+                    deadline = time.monotonic() + 2
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not selector.select(remaining):
+                            return False
+                        if not os.read(worker_pipe.fileno(), 64):
+                            return True
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return False
+        finally:
+            if supervisor.poll() is None:
+                supervisor.kill()
+            supervisor.wait(timeout=3)
+
 KEYS = {'runtimeSearchParsed', 'runtimeQueryOnly', 'injectionRemainsData', 'packetAuthorityRejected', 'tlsTrustLoaded', 'unmountedToolsHidden', 'queryOnly', 'privateFileHidden', 'oldCwdHidden', 'homeHidden',
         'cwdIsolated', 'environmentCleared', 'privateFdClosed',
         'publicReadOnly', 'workerWriteSucceeded'}
@@ -198,6 +263,11 @@ def probe(timeout=10):
                 return {'status': 'unverified', 'reason': 'namespace_lifecycle_unverified'}
             checks['namespaceExitStopsDetachedChild'] = (lifecycle.returncode == 0
                 and lifecycle.stdout == b'namespace-descendant-ready\n')
+        if all(checks.values()):
+            try:
+                checks['namespaceParentDeathStopsDetachedChild'] = probe_parent_death(command, runtime_copy, root)
+            except OSError:
+                checks['namespaceParentDeathStopsDetachedChild'] = False
         return {'status': 'capability_verified' if all(checks.values()) else 'unverified',
                 'checks': checks, 'scope': 'synthetic_local_probe_only', 'g3Passed': False,
                 'runtimeSha256': hashlib.sha256(runtime_bytes).hexdigest()}
