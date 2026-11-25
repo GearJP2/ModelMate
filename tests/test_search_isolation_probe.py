@@ -13,6 +13,8 @@ class IsolationProbeTests(unittest.TestCase):
         if 'checks' in report:
             self.assertTrue(all(report['checks'].values()), report)
             self.assertFalse(report['g3Passed'])
+            self.assertEqual(report['runtimeSha256'], isolation.hashlib.sha256(
+                isolation.Path(isolation.__file__).with_name('modelmate.py').read_bytes()).hexdigest())
         else:
             self.assertIn(report['reason'], ('missing_host_utility', 'unsupported_runtime_profile', 'namespace_or_worker_failed', 'launch_failed'))
 
@@ -56,3 +58,22 @@ class IsolationProbeTests(unittest.TestCase):
         with patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation, 'MOUNTS', (('/nonexistent-modelmate-profile', '/runtime'),)), patch.object(isolation.subprocess, 'run') as run:
             self.assertEqual(isolation.probe()['reason'], 'unsupported_runtime_profile')
             run.assert_not_called()
+
+    def test_worker_side_effect_attempt_cannot_pass(self):
+        # Audit instrumentation observes a deliberate effect in the trusted test worker.
+        child = isolation.CHILD.replace("results = runtime['search_wikipedia']", "os.system('synthetic-forbidden-command'); results = runtime['search_wikipedia']")
+        with patch.object(isolation, 'CHILD', child):
+            report = isolation.probe()
+        self.assertEqual(report['status'], 'unverified')
+        self.assertIn(report['reason'], ('missing_host_utility', 'unsupported_runtime_profile',
+            'namespace_or_worker_failed', 'launch_failed'))
+
+    def test_false_worker_check_is_not_promoted_to_capability_verified(self):
+        checks = dict.fromkeys(isolation.KEYS, True)
+        checks['injectionRemainsData'] = False
+        result = subprocess.CompletedProcess([], 0, json.dumps(checks).encode(), b'')
+        with patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation.subprocess, 'run', return_value=result):
+            report = isolation.probe()
+        self.assertEqual(report['status'], 'unverified')
+        self.assertFalse(report['checks']['injectionRemainsData'])
+        self.assertFalse(report['g3Passed'])

@@ -3766,3 +3766,41 @@ or G3 completion. No search worker or automatic search path was enabled.
 
 The full offline suite passed all 671 tests in 135.547 seconds with no skips.
 Runtime/diagnostic compile checks and `git diff --check` passed.
+
+
+### P13 actual search runtime inside the local namespace (2026-11-25)
+
+The probe mounts an owned byte snapshot of `modelmate.py` read-only at
+`/modelmate.py` and loads it under a non-main name, without running its CLI.
+It calls the actual Wikipedia search function, HTTPS transport/parser and packet
+validator. Only the HTTPS peer is replaced by a fixed synthetic response; no
+model, account, DNS, HTTP or TLS connection is made. The peer verifies bounded
+response reads and records the single expected query-only request. The parent
+checks the runtime snapshot remains unchanged and reports its SHA-256.
+
+`python3 search_isolation_probe.py` passed seventeen boolean checks on the same
+bubblewrap 0.8.0 / worker Python 3.11.2 profile. Tested runtime SHA-256:
+`339f762d478763edc3b47b6181148d68708ac772ab05e59d846caa71823f42c1`;
+probe SHA-256:
+`8dd0af48a53d1396e14de272e336d178178daf8779911dd5412b52dc254694c6`.
+An excerpt containing a synthetic Python write instruction remained exact
+source text; its marker did not appear. An extra packet approval field was
+rejected. Diagnostic audit instrumentation records and raises on socket creation,
+process launch, system/exec and posix_spawn events during these parser calls.
+This audit is intentionally test-only and is not claimed as a production security
+boundary or exhaustive syscall policy. A deliberately modified worker attempting
+`os.system` fails the probe, rather than returning capability-verified.
+
+All nine probe tests passed, including a false check that cannot be promoted to
+pass and the deliberate side-effect attempt. Existing unsupported-host paths
+remain explicitly unverified. Compile and diff checks passed; the full suite was
+not repeated because only diagnostic/tests/docs changed (last shared-runtime
+suite: 671 tests passed). Runtime search behavior was unchanged.
+
+This proves the existing search code can import and process this synthetic
+response under the constrained filesystem profile. It does not prove a production
+worker, real HTTPS/DNS, arbitrary hostile input resistance, process-loss cleanup,
+or the whole G3 gate. Shared network and a stdlib directory mount remain scope
+limits. Automated/private-context search stays disabled. The next P13 increment
+must connect a bounded data-only worker protocol and independently verify its
+input/output and failure handling before enabling any new search path.
