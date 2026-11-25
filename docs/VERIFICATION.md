@@ -4160,3 +4160,32 @@ it does not authorize activation or certify G3. Hosted web and automatic
 private-context search remain disabled. Next eligible P13 evidence is the
 prepared explicitly authorized live DNS/TLS command and the remaining adversarial
 input/HTTP-failure checks; unrelated native lifecycle/release gates remain open.
+
+
+### P13 adversarial HTTP response and connection failures (2026-11-25)
+
+A regression test reproduced the shared HTTP JSON reader accepting duplicate
+root/nested keys and nonfinite NaN/Infinity constants from remote responses.
+`read_search_json` now reuses the existing strict duplicate-key/constant hooks
+before returning a source payload. Hook failures become a generic source-specific
+invalid-response error with no raw response/plan-parser text or exception chain.
+Both Wikipedia and SearXNG use this reader; there is no alternate permissive path.
+
+All seventeen web-policy tests passed. New cases include duplicate keys at root
+and in a source result, NaN/Infinity in otherwise unused remote metadata,
+request/getresponse/body-read failures, invalid encoding, deep/array JSON, a body
+above 256 KiB and a valid body exactly at that limit. Disconnect/partial-response
+errors produce sanitized class diagnostics, invoke the request only once and
+close the connection. The existing 262145-byte bounded read and refusal to follow
+redirects remain in place. Existing seven actual-launcher tests with a fake peer
+also passed. Runtime/diagnostic compile and diff checks passed.
+
+Tested runtime SHA-256:
+`5b4408297ef5d4539ffbc92a5da098631a981e7411370c2f8b9d8ae9460533f1`.
+These are offline parser/transport failure checks; no HTTP/DNS/account/model call
+was made. The real-network command remains opt-in and unexecuted. They do not
+establish all hostile-input or private-context search guarantees. G3, automatic
+workflow activation and the broader release gates remain open.
+
+Full offline verification passed all 710 tests in 113.991 seconds with no skips.
+Runtime/diagnostic compile checks and `git diff --check` passed.

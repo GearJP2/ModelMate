@@ -645,6 +645,14 @@ account access. The report omits query/results/traces and retains source hashes.
 Seventeen diagnostic tests pass; the live mode has NOT been run and does not
 satisfy its own gate from these mocked tests. Default command stays offline.
 
+HTTP response boundary increment: the shared JSON reader now rejects duplicate
+keys at every nesting level and nonfinite constants using existing strict hooks.
+Hook failures are normalized to a source-specific error without response text.
+Seventeen web-policy tests pass, covering disconnect/no-retry/closure, malformed
+and deep JSON, oversize rejection and a valid body at the exact 256 KiB limit.
+Seven actual-launcher fake-peer tests pass. This is offline failure-path evidence;
+no live DNS/TLS or G3 gate was advanced.
+
 Search URL validation is shared between SearXNG candidate filtering and packet
 import/export. Invalid, zero or out-of-range ports are skipped before candidates
 are displayed/exported; valid explicit ports remain passive source data. This

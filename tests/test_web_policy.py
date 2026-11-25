@@ -1,4 +1,5 @@
 """Wikipedia search sends one explicitly confirmed query and treats sources as data."""
+import http.client
 import io
 import json
 import unittest
@@ -176,3 +177,51 @@ class WebPolicyTests(unittest.TestCase):
         packet = dict(version=1, source='SearXNG', host='search.example',
                       query='public query', results=results)
         self.assertEqual(validate_search_packet(packet), packet)
+
+    def test_remote_duplicate_keys_and_nonfinite_json_are_rejected(self):
+        for raw in (b'{"pages":[],"pages":[]}',
+                    b'{"pages":[{"id":7,"id":8,"title":"Source","excerpt":"Text"}]}',
+                    b'{"pages":[],"untrusted":NaN}', b'{"pages":[],"untrusted":Infinity}'):
+            connection=Mock()
+            connection.getresponse.return_value.status=200
+            connection.getresponse.return_value.read.return_value=raw
+            with self.subTest(raw=raw),patch('http.client.HTTPSConnection',return_value=connection):
+                with self.assertRaises(ProbeError):
+                    search_wikipedia('public','en')
+                connection.request.assert_called_once()
+                connection.close.assert_called_once()
+
+    def test_http_disconnects_are_sanitized_closed_and_not_retried(self):
+        for stage, error in (('request',OSError('private transport detail')),
+                             ('getresponse',http.client.RemoteDisconnected('private endpoint')),
+                             ('read',http.client.IncompleteRead(b'private partial response',10))):
+            connection=Mock()
+            response=connection.getresponse.return_value
+            response.status=200
+            if stage=='read':
+                response.read.side_effect=error
+            else:
+                getattr(connection,stage).side_effect=error
+            with self.subTest(stage=stage),patch('http.client.HTTPSConnection',return_value=connection):
+                with self.assertRaises(ProbeError) as caught:
+                    search_wikipedia('public','en')
+                self.assertNotIn('private',str(caught.exception))
+                connection.request.assert_called_once()
+                connection.close.assert_called_once()
+
+    def test_remote_body_limits_and_invalid_payloads_fail_closed(self):
+        for raw in (b'x'*262145,b'\xff',b'['*1500,b'[]'):
+            connection=Mock()
+            connection.getresponse.return_value.status=200
+            connection.getresponse.return_value.read.return_value=raw
+            with self.subTest(size=len(raw)),patch('http.client.HTTPSConnection',return_value=connection):
+                with self.assertRaises(ProbeError):
+                    search_wikipedia('public','en')
+                connection.getresponse.return_value.read.assert_called_once_with(262145)
+                connection.close.assert_called_once()
+        connection=Mock()
+        connection.getresponse.return_value.status=200
+        connection.getresponse.return_value.read.return_value=b'{"pages":[]}'.ljust(262144,b' ')
+        with patch('http.client.HTTPSConnection',return_value=connection):
+            self.assertEqual(search_wikipedia('public','en'),[])
+        connection.close.assert_called_once()

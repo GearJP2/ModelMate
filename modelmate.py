@@ -5643,9 +5643,10 @@ def read_search_json(host, path, method, body=None, *, source):
         if len(data) > 262144:
             raise ProbeError(source + ' search response exceeded its size limit.')
         try:
-            payload = json.loads(data)
-        except (ValueError, RecursionError) as exc:
-            raise ProbeError('Invalid ' + source + ' search response.') from exc
+            payload = json.loads(data, object_pairs_hook=_unique_json_object,
+                                 parse_constant=_invalid_plan_constant)
+        except (ValueError, RecursionError, ProbeError):
+            raise ProbeError('Invalid ' + source + ' search response.') from None
         if not isinstance(payload, dict):
             raise ProbeError('Invalid ' + source + ' search response.')
         return payload
