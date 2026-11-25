@@ -56,8 +56,8 @@ Preflight ไม่ใช่การจอง quota หรือ hard spending 
 ค่าเริ่มต้นยังไม่เปิด tool-check resume; รุ่นทดลองต้องระบุ `--experimental-rechecks`
 กับ `--resume-workflow`, command bindings และ `--execute-workflow`
 `/recheck STEP.CHECK` แสดงคำสั่ง/โมเดล แล้ว `/confirm-recheck TOKEN` ใช้โควตาเพิ่ม
-หนึ่ง verification turn Native threads ถูกเก็บไว้; unknown outcomes ยังต้องหยุด
-และการลบ metadata ที่มี recheck ถูกปิดจนกว่าจะมี scoped cleanup
+หนึ่ง verification turn Native threads ถูกเก็บไว้; recheck outcomes ที่ยังไม่ทราบ
+ยังต้องหยุดและเก็บ metadata ไว้เพื่อ recovery/การลบแบบ scoped ตามหัวข้อด้านล่าง
 ดู [ข้อกำหนด native recheck](NATIVE_RECHECK.md) สำหรับขอบเขตที่เหลือ
 ไม่เปิด effort ultra ที่มี automatic delegation
 การส่ง model ID เป็นการร้องขอโมเดล ไม่ใช่ execution telemetry ที่ยืนยัน actual dispatch
@@ -676,6 +676,21 @@ subscription turns แยกจาก recovery check นี้ ผลบน copy
 สำหรับแผนที่มี test/lint แทนที่จะให้มือยืนยัน exit code ข้าม gate
 Native recovery ที่ active turn จบแล้วอาจเปิดเป็น CHECKING/PAUSED; terminal status
 ไม่เท่ากับ tests ผ่าน หาก cached/native state ขัดกันจะไม่ทำงานต่อ
+
+รุ่นทดลอง `--experimental-rechecks` ร่วมกับ `--check-commands` และ
+`--execute-workflow` รองรับการเข้า resume แม้ cached test/lint result หายหรือ
+unknown ได้ แต่ backend ต้องยืนยัน native turn ที่จบแล้วและ binding ตรงก่อน
+ถ้า UI แสดง pause token ให้ `/continue TOKEN` เพื่อกลับสู่ CHECKING แล้ว `/check`
+จะบันทึกผลที่ตรวจไม่ได้เป็น UNVERIFIED โดยไม่รันคำสั่งเดิมซ้ำ
+
+unknown เดิมอยู่ใน ledger และไม่ใช้เป็น pass หรือเปลี่ยนเป็น pass ด้วยการยืนยัน
+ส่วน pass/fail ที่ stale ยังต้อง revalidate ตามเดิม คำสั่งเก่าอาจรันไปแล้วแม้ไม่มี
+ผลตรวจ จึงต้องตรวจไฟล์/ผลข้างเคียงก่อนเลือกทำ attempt ใหม่อย่างชัดเจน
+ถ้าต้องแก้งานต่อ จาก UNVERIFIED ใช้ `/cancel` เพื่อพัก แล้ว `/continue TOKEN`
+และ `/next` เพื่อขอ correction ใหม่ตาม budget เดิม การเริ่ม turn ใหม่ใช้ quota
+และผ่าน model/tool gates ตามปกติ; ไม่ได้ย้อน side effects หรือรีเซ็ตจำนวน attempts
+native work ที่ยัง active, identity ไม่ตรง หรือ recheck outcome ค้างยังถูกปฏิเสธ
+เส้นทาง missing/unknown นี้มี offline evidence เท่านั้น
 
 ตรวจ happy path แบบ opt-in ด้วยคำสั่งเดียว (สูงสุด 2 turns, ไม่มี retry):
 

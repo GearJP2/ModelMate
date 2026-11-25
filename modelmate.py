@@ -1372,7 +1372,8 @@ class WorkflowController:
         attempt = self._attempt(attempt_id)
         if self.state != 'CHECKING' or attempt['status'] != 'completed':
             raise ProbeError('Attempt is not ready for evaluation.')
-        if any(e['id'] in self._stale_evidence for e in attempt['checks'].values()):
+        # Unknown evidence can only retire as UNVERIFIED, never authorize completion.
+        if any(e['id'] in self._stale_evidence and e['result'] != 'unknown' for e in attempt['checks'].values()):
             raise ProbeError('Saved checks require explicit host revalidation before evaluation.')
         step = self._steps[self._index]
         expected = len(self._plan['steps'][self._index]['checks'])
@@ -5431,13 +5432,6 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         if any(op['status'] in ('pending', 'unknown') for op in validate_recheck_ledger(
                 saved['workflow'].get('rechecks', []), workflow_saved_evidence(saved['workflow']))):
             raise ProbeError('Recheck outcome unresolved; use --show-workflow to inspect retained native IDs. No replay.')
-        active = saved['workflow']['active_attempt']
-        if active is not None:
-            known = {e['check_index']: e for e in active['checks']}
-            index = saved['workflow']['step_index']
-            if active['status'] != 'completed' or any(known.get(j, {}).get('result') not in ('pass', 'fail')
-                    for j, check in enumerate(plan['steps'][index]['checks']) if check['kind'] in ('test', 'lint')):
-                raise ProbeError('Experimental resume needs a completed work turn and known saved tool results; missing/unknown checks are unsupported.')
     if required != {(spec['step'], spec['check']) for spec in commands}:
         raise ProbeError('Every test/lint check needs an explicit --check-commands binding before execution.')
     if any(step['effort'] == 'ultra' for step in plan['steps']):
@@ -5476,6 +5470,16 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
                                      command=spec['command'], cwd=spec['cwd'])
         snapshot = backend.preflight()
         preview.write('Session: ' + backend.session_id + ' · durable checkpoint; ไม่ replay turn อัตโนมัติ')
+        if resume_id is not None and required:
+            state = controller.snapshot()
+            active = state['active_attempt']
+            if active is not None and active['status'] == 'completed':
+                missing = any(check['kind'] in ('test', 'lint')
+                    and active['checks'].get(i, {}).get('result', 'unknown') == 'unknown'
+                    for i, check in enumerate(state['plan']['steps'][state['step_index']]['checks']))
+                if missing:
+                    preview.write('Native turn จบแล้ว แต่ผลคำสั่งบางส่วนยัง unknown; คำสั่งอาจรันไปแล้ว')
+                    preview.write('/check เก็บผลที่ตรวจไม่ได้เป็น UNVERIFIED ไม่รันซ้ำ · ตรวจไฟล์/ผลข้างเคียงก่อนอนุมัติ attempt ใหม่')
         return run_chat(input_stream, output, backend=backend, workflow=controller,
                         workflow_action=host, catalog=snapshot['catalog'], role_policy=policy,
                         recheck_commands=commands if experimental_rechecks else None)

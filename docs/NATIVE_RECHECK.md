@@ -140,8 +140,14 @@ START opens the native session but does not approve a verification turn.
 - `/continue TOKEN`, `/check` and `/finish` still control the original workflow.
   Rechecks do not advance steps or mark the task done automatically.
 
-Only known saved test/lint evidence can be rechecked. Completed active work with
-missing/unknown tool checks is refused. Unresolved recheck operations block native
+Only known saved test/lint evidence can be rechecked. Experimental work resume
+may now reconcile a terminal turn with missing/unknown checks, but cannot infer
+its exit results. `/check` can retire unknown checks as UNVERIFIED history with
+the same attempt/counters; a stale known pass/fail still needs matching trusted
+revalidation. Unknown evidence cannot be revalidated to pass or used to finish.
+No command is replayed: inspect prior effects before explicitly starting a new
+correction under the original budget. Active/mismatched native work is refused.
+Unresolved recheck operations still block native
 resume; --show-workflow remains available offline and displays retained thread/turn
 IDs. Known-binding reconciliation without replay is available below. Use
 `--delete-session SESSION_ID` to preview and confirm the work root, recorded recheck

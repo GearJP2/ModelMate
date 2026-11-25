@@ -3637,3 +3637,42 @@ There is no C2 quality/quota result and no new trained routing rule. The real-ta
 calibration/held-out deliverable, live approval gates and broader G5 remain open.
 The final full offline suite passed all 659 tests with test-owned sockets enabled
 and no skips. Runtime/diagnostic/example compile checks and `git diff --check` passed.
+
+### P12 terminal resume with missing/unknown check results — MOCK_VERIFIED
+
+The experimental tool-check CLI previously rejected a cached active attempt unless
+it was already completed with known test/lint results, preventing native terminal
+reconciliation from handling missing check observations. That early rejection is
+removed only behind the existing experimental recheck opt-in. Native resume still
+requires fresh account/quota/catalog, the same project/thread, a matching terminal
+turn or its validated correlation, and read-only/on-request permissions. Active
+native work and unresolved recheck operations remain blocked. Default tool-check
+resume is unchanged and still disabled.
+
+Unknown evidence can now be retired through normal check evaluation as UNVERIFIED
+history after restore. A stale known pass/fail still blocks evaluation until its
+trusted matching revalidation. Unknown cannot be revalidated to pass, accepted as
+criterion evidence, or advance the step. Evidence/attempt IDs, history and counters
+are retained. A fresh explicitly started correction can later supply independent
+trusted tool evidence under the same budget; it does not replace the old unknown.
+The UI states that missing observations do not mean the command never ran and
+asks the user to inspect effects before authorizing another attempt. Resume and
+retirement themselves start no verification/model turn or replayed command.
+
+All 28 persistence, 24 recheck-UI and 17 native-resume tests passed. Coverage includes
+unknown verdict preservation, rejection of unknown-to-pass promotion, stale-known
+gate retention, budget-preserving fresh evidence, cached unknown/missing checks,
+cached running work confirmed terminal, and refusal of an actually active native
+thread. A fake process exits after accepting a turn but before replying; the CLI
+correlates that original work attempt, records no inferred check pass and retires
+it UNVERIFIED, with one total turn/start and no interrupt. Model claims and manual
+verification cannot turn a test check into a pass. The ledger-preservation test
+selects the attempt by its ID because explicit continue choices precede it in
+history; no controller validation was weakened to accommodate ledger ordering.
+
+Compile checks and `git diff --check` passed. No live inference or connected
+account call was made. Live missing-result recovery, real process/network loss
+and broader G2/G4 gates remain unverified. New rechecks of unknown evidence and
+changing a saved known verdict via revalidation remain unsupported.
+The full offline suite passed all 663 tests with test-owned sockets enabled and
+no skips. Entry-point compile checks and `git diff --check` passed.

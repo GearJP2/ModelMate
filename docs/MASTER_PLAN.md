@@ -500,6 +500,16 @@ corrupt JSON ไม่ถูกทับ, unsupported future version ไม่�
 
 ### P12 — Resume / cancel / delete
 
+Unknown-check resume increment: the experimental tool-check CLI now delegates
+terminal work identity/status proof to native resume even when cached checks
+are missing/unknown. `/check` may retire unknown outcomes only as UNVERIFIED
+history, preserving evidence IDs and work counters. Stale known pass/fail still
+requires trusted matching revalidation; unknown cannot become a pass or satisfy
+criteria. No recheck/model turn is started automatically. A fresh correction
+requires explicit choices and the original budget. Default tool resume remains
+disabled, active/mismatched native work and unresolved rechecks remain blocked.
+This has offline fake-process/controller evidence only; live gates remain open.
+
 Work-turn correlation increment: default native work dispatch now sends the
 already-reserved attempt ID as clientUserMessageId. On explicit resume with a
 known thread but missing native turn ID, only a uniquely correlated latest

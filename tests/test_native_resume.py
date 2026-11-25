@@ -282,6 +282,46 @@ class NativeResumeTests(unittest.TestCase):
         self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 1)
         self.assertFalse(any(r.get('method') == 'turn/interrupt' for r in self.records()))
 
+    def test_experimental_cli_tool_resume_correlates_lost_reply_without_replaying_checks(self):
+        raw = json.dumps(PLAN)
+        controller = WorkflowController(raw, CATALOG, POLICY)
+        connection = self.backend('lost_start_reply')
+        host = connection.connect(controller, self.project, POLICY, store=self.store)
+        sid = connection.session_id
+        host.configure_check(0, command='printf synthetic', cwd=str(self.project))
+        with self.assertRaises(ProbeError):host({'action': 'next', 'task_id': controller.task_id})
+        connection.close()
+        original = self.store.read(sid)['workflow']['active_attempt']
+        commands = self.root / 'check-commands.json'
+        commands.write_text(json.dumps({'version': 1, 'checks': [
+            {'step': 1, 'check': 1, 'command': 'printf synthetic', 'cwd': str(self.project)}]}))
+        def interact(source, output, **kwargs):
+            resumed = kwargs['workflow']
+            self.assertEqual(self.store.read(sid)['turn_id'], '1')
+            self.assertEqual(resumed.state, 'CHECKING')
+            self.assertEqual(resumed.snapshot()['active_attempt']['id'], original['id'])
+            self.assertEqual(resumed.snapshot()['active_attempt']['checks'], {})
+            shell = ChatShell(output, workflow=resumed, workflow_action=kwargs['workflow_action'],
+                              catalog=CATALOG, role_policy=POLICY)
+            shell.line('/check')
+            state = resumed.snapshot()
+            self.assertEqual(state['state'], 'UNVERIFIED')
+            self.assertEqual(state['steps'][0]['attempts'], 1)
+            self.assertEqual(state['history'][-1]['id'], original['id'])
+            self.assertEqual(state['history'][-1]['checks'][0]['result'], 'unknown')
+            return 0
+        output = io.StringIO()
+        with patch.dict(os.environ, {'XDG_STATE_HOME': str(self.root / 'state')}), \
+             patch('modelmate.os.getcwd', return_value=str(self.project)), \
+             patch('modelmate.NativeWorkflowConnection', side_effect=lambda *args, **kwargs: self.backend()), \
+             patch('modelmate.run_chat', side_effect=interact), tempfile.TemporaryFile() as source:
+            source.write(b'START\n');source.seek(0)
+            self.assertEqual(run_workflow_file(None, ['standard=synthetic-standard'], None, True,
+                source, output, str(commands), sid, experimental_rechecks=True), 0)
+        self.assertIn('คำสั่งอาจรันไปแล้ว', output.getvalue())
+        self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 1)
+        self.assertFalse(any(r.get('method') == 'turn/interrupt' for r in self.records()))
+
     def test_work_correlation_rejects_incomplete_duplicate_or_nonterminal_history(self):
         current = dict(id='new', status='completed', itemsView='full',
                        items=[dict(type='userMessage', clientId='attempt')])
