@@ -3676,3 +3676,39 @@ and broader G2/G4 gates remain unverified. New rechecks of unknown evidence and
 changing a saved known verdict via revalidation remain unsupported.
 The full offline suite passed all 663 tests with test-owned sockets enabled and
 no skips. Entry-point compile checks and `git diff --check` passed.
+
+
+### P13 local namespace capability probe (2026-11-25)
+
+`python3 search_isolation_probe.py` completed with `capability_verified` on
+Python 3.12.0 and bubblewrap 0.8.0. Exact probe SHA-256:
+`af049813e126fead836cae96ac059c23be781d13a5db006896328d62914d1d01`.
+All eleven boolean checks passed; `g3Passed` remained false. This used only
+owned synthetic temporary files, no model/account calls and no HTTP requests.
+
+The fixed worker receives only a public query via stdin and a read-only mount,
+plus synthetic probe paths/FD number used to challenge the boundary. A sterile
+environment is applied before launching bubblewrap, then reset inside it. The
+private fixture FD is deliberately inheritable in the parent but closed at exec.
+Private absolute/old-cwd paths and `/home` were unavailable, environment matched
+explicit PATH/LC_CTYPE/PWD values, the public mount resisted writes, and a worker
+write at the same absolute temporary path did not create a host file. The parent
+independently checked marker absence and unchanged private/public input bytes.
+No fixture bytes, paths, environment dumps or worker stderr enter the report.
+
+`python3 -m unittest discover -s tests -p test_search_isolation_probe.py -v`
+passed six tests, including the real local probe, missing utility, malformed or
+wrong-type worker reports, timeout/launch failures and sterile launch settings.
+On unsupported hosts the capability test accepts an explicitly unavailable
+result; that result cannot pass the diagnostic or G3. There is no automatic
+install, privilege fallback or retry. The fixed trusted worker uses bounded known
+output; this script is not a runner for arbitrary code or web page instructions.
+
+Scope limits: `/usr`, `/lib` and `/lib64` are broad read-only capability mounts,
+not a reviewed minimal Python/TLS runtime allowlist. Network is deliberately
+shared for eventual public search feasibility, but this probe sends no request
+and does not establish egress restrictions. It does not test a hostile child,
+credentialless TLS lookup, injection handling, process-loss cleanup, a second
+host, or automatic query approval/integration. Runtime and hosted search policy
+remain unchanged; G3 remains open. A minimal runtime mount/worker design and
+independent denial/injection checks are the next eligible P13 work.

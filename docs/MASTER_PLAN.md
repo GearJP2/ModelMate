@@ -572,6 +572,16 @@ resume missing thread/account mismatch, duplicate delete, partial delete failure
 
 ### P13 — Private-context web search
 
+Host capability increment: `python3 search_isolation_probe.py` runs a fixed,
+synthetic local worker in installed bubblewrap without Codex, inference or HTTP.
+On the tested host it demonstrated hidden private fixture/cwd/home, closed private
+FD, explicit public environment, read-only query input and contained temporary
+writes. Six diagnostic tests pass. This is a capability spike only: broad system
+mounts are not a reviewed production allowlist, network is shared, and neither
+runtime search integration nor G3 isolation/injection evidence is complete.
+Missing utility/namespace capability fails closed as unverified; no installation,
+privileged fallback or host permission expansion is attempted. See VERIFICATION.
+
 Confirmed-result handoff: standalone searches can export bounded JSON with
 `--search-json` after exact query confirmation (prompts on stderr). A new workflow
 can select up to five `--source-result FILE:NUMBER` entries. Validated candidates
