@@ -184,7 +184,7 @@ Recovery รองรับเฉพาะ recheck ที่บันทึก n
 มี `WorkflowController` สำหรับทดสอบลำดับขั้น/ผลตรวจ/งบแก้ไขแบบออฟไลน์แล้ว
 ผูกกับ `SessionStore.workflow(...)` เพื่อบันทึกแต่ละ transition และคืนสถานะข้าม process ได้
 มี Workflow UI แบบ host-injected ผ่าน `run_chat(..., workflow=controller, workflow_action=host)` แล้ว
-มี experimental explicit-plan CLI ตามหัวข้อด้านล่าง; ยังไม่มี auto execution
+มี experimental explicit-plan CLI ตามหัวข้อด้านล่าง; default ยังเดินงานด้วยคำสั่งผู้ใช้
 มีผลสดเฉพาะ happy paths ที่บันทึกใน VERIFICATION.md
 รายละเอียดสัญญา trusted host callbacks และข้อจำกัดอยู่ใน [ผลตรวจ P10](VERIFICATION.md)
 
@@ -429,9 +429,36 @@ Approve plan จะแสดง model และ effort ของทุกขั�
 ทุก role ที่แผนใช้รวม standard baseline ต้องมี `--role-model ROLE=MODEL`
 หากจะเปลี่ยนไปใช้ role อื่นระหว่าง session ให้ระบุ binding ของ role นั้นตั้งแต่เริ่มด้วย
 ใช้ `--workflow-mode auto|ask_to_escalate|approve_plan` ได้; default ask_to_escalate
-นี่คือ model policy เท่านั้น ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
+โดย default นี่คือ model policy ทุกโหมดยังต้องสั่ง `/next` เอง และไม่อนุมัติ tools
 Default จะ decline/pause คำขอเพิ่มสิทธิ์; opt-in approval UI อยู่ด้านล่าง read-only/on-request
 ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
+
+### Experimental Auto advancement
+
+สำหรับแผนใหม่เท่านั้น ใช้ `--workflow-mode auto --experimental-auto-advance`
+เพื่อเริ่ม attempt เมื่อ controller เป็น READY โดยไม่ต้อง `/next` ซ้ำ ตัวอย่าง preview
+ที่ไม่เปิด Codex หรือใช้โควตา:
+
+```sh
+sr --workflow plan.json --role-model standard=MODEL --workflow-mode auto --experimental-auto-advance
+```
+
+ระบุ bindings ของทุก role ที่แผนใช้ด้วย หากจะทดลอง live ต้องเพิ่ม
+`--execute-workflow` และพิมพ์ `START` หลังอ่าน preview การยืนยันนี้อนุญาตให้เริ่ม
+attempts ในแผนนี้ รวม initial + ไม่เกินสอง corrections ต่อขั้น โดยตรวจ
+account/quota/catalog/model gates ใหม่ทุก attempt ไม่อนุมัติ tools แทนผู้ใช้
+และไม่ขยาย read-only/on-request หาก quota/permission ไม่ทราบจะพัก
+
+ยังต้องใช้ `/check` กับผลตรวจจริง เมื่อผ่านจะเริ่มขั้นถัดไป เมื่อ fail ที่ทราบผล
+จะเริ่ม correction ภายใน budget เดิม ส่วน unknown/UNVERIFIED, pending approval,
+การพักและขั้นที่รอ mapping เกณฑ์สำเร็จจะไม่เดินต่อเอง ยังต้องใช้ `/finish` กับ
+accepted evidence เพื่อรับรองเกณฑ์งาน ไม่ใช้ข้อความโมเดลว่า tests passed แทนหลักฐาน
+
+`/cancel`, `/exit` และ EOF ไม่อนุญาตงานเพิ่ม การส่งงานที่ล้มเหลว/ผลไม่แน่ชัด
+จะปิด automatic advancement ใน process นี้โดยไม่ replay ต้องตรวจสถานะก่อนทำต่อ
+flag นี้ไม่ถูกบันทึกหรือ restore และใช้ร่วมกับ `--resume-workflow` ไม่ได้
+โหมดอื่นและการไม่ใส่ flag ยังทำงานแบบเดิม ส่วน prompt ธรรมดายังไม่สร้างแผนอัตโนมัติ
+มีหลักฐาน offline/fake-native เท่านั้น ยังไม่ผ่าน live automation/release gates
 
 ### เลือกโมเดลเองใน workflow
 

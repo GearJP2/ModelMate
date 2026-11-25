@@ -443,6 +443,19 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 
 ### P10 — Workflow และ correction budget
 
+Experimental Auto advancement increment: new explicit Auto plans may opt in with
+`--experimental-auto-advance`. Preview remains offline; executing still requires
+--execute-workflow plus START. A bound host starts each READY attempt through its
+existing fresh preflight, quota/model/permission and durable reservation gates.
+Checks are not auto-accepted: /check still evaluates trusted evidence. A known
+failure permits only the existing two corrections; unknown evidence, pending
+approval, pause and final criterion mapping do not advance. Dispatch errors turn
+off advancement without replay and preserve existing pause reasons. Explicit
+continue after quota pause performs fresh admission. The flag is process-local,
+not checkpointed, and rejected for resume/other modes. Eleven controller/UI/CLI
+and fake-native selector tests pass. This is offline-only, not automatic prompt
+planning, automatic checking/task completion or live gate evidence.
+
 P08/P10 explicit clarification entry: a new plan can receive one repeatable
 `--clarification NUMBER=ANSWER` for each numbered question before preview/START.
 All questions must be answered; duplicates, unknown numbers, empty/oversized

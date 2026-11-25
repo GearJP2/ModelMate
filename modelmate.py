@@ -2158,7 +2158,10 @@ def terminal_text(value):
 class ChatShell:
     """Single-owner Terminal state; an optional trusted controller receives actions."""
 
-    def __init__(self, output, send=None, catalog=None, role_policy=None, *, workflow=None, workflow_action=None):
+    def __init__(self, output, send=None, catalog=None, role_policy=None, *, workflow=None, workflow_action=None, automatic_workflow=False):
+        if automatic_workflow and (not isinstance(workflow_action, WorkflowHost)
+                or not isinstance(workflow, WorkflowController) or workflow.mode != 'auto'):
+            raise ProbeError('Automatic advancement requires a bound Auto workflow host.')
         if workflow is not None and (not isinstance(workflow, WorkflowController) or send is not None):
             raise ProbeError('Workflow UI requires a controller and cannot share a manual executor.')
         if workflow_action is not None and (workflow is None or not callable(workflow_action)):
@@ -2181,6 +2184,7 @@ class ChatShell:
         self.exit_code = 0
         self.workflow = workflow
         self.workflow_action = workflow_action
+        self.automatic_workflow = automatic_workflow
         self.started_at = time.monotonic()
         self._workflow_check_attempt = None
         self._workflow_tool_shown = None
@@ -2269,6 +2273,19 @@ class ChatShell:
             self.write('ยืนยันการหยุดไม่ได้ ผลงานยังไม่ทราบ — ตรวจ backend ก่อนเริ่มใหม่')
             self.exit_code = 130
             self.closed = True
+        if (self.automatic_workflow and not (self.closed or self.stopping or self.exiting)
+                and self.workflow.mode == 'auto'):
+            state = self.workflow.snapshot()
+            if state['state'] == 'READY' and state['active_attempt'] is None:
+                self.write('Experimental Auto · เริ่ม attempt ผ่าน fresh preflight · ไม่เพิ่ม tool permission')
+                try:
+                    self.workflow_action({'action': 'next', 'task_id': self.workflow.task_id})
+                except (ProbeError, OSError, ValueError):
+                    self.automatic_workflow = False
+                    if self.workflow.state not in ('PAUSED', 'FAILED', 'DONE'):
+                        self.workflow.pause('connection_lost')
+                    self.write('พัก automatic advancement · ผลยังไม่ทราบ · ไม่ retry อัตโนมัติ')
+                self.show_workflow()
 
     def show_workflow(self, render=True):
         state = self.workflow.snapshot()
@@ -2880,7 +2897,7 @@ class ChatShell:
 
 def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
              role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None, executor_stream=None,
-             recheck_commands=None):
+             recheck_commands=None, automatic_workflow=False):
     """Multiplex Linux input and controller events in one owning thread."""
     native_workflow = isinstance(backend, NativeWorkflowConnection)
     if workflow is not None and backend is not None:
@@ -2893,7 +2910,8 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
         raise ProbeError('Executor observations require an explicitly bound workflow host.')
     if backend is not None and not native_workflow:
         send, catalog = backend.action, backend.catalog
-    shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action)
+    shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action,
+                      automatic_workflow=automatic_workflow)
     if recheck_commands is not None:
         if not native_workflow or backend.store is None or workflow is None:
             raise ProbeError('Recheck UI requires an attached durable native workflow.')
@@ -5306,9 +5324,11 @@ def check_workflow_account(plan, policy):
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
                       experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
                       check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False,
-                      clarifications=(), source_results=()):
+                      clarifications=(), source_results=(), automatic_workflow=False):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
+    if automatic_workflow and resume_id is not None:
+        raise ProbeError('Experimental automatic advancement requires a new Auto workflow.')
     if clarifications and resume_id is not None:
         raise ProbeError('Clarification answers require a new --workflow; saved plans cannot be rewritten.')
     if source_results and resume_id is not None:
@@ -5334,6 +5354,8 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         with open(path, 'rb') as source:
             raw = source.read(65537).decode('utf-8')
     mode = mode or 'ask_to_escalate'
+    if automatic_workflow and mode != 'auto':
+        raise ProbeError('Experimental automatic advancement requires a new Auto workflow.')
     plan = validate_plan(raw)
     if clarifications:
         questions = {str(i + 1): question for i, question in enumerate(plan['clarifications'])}
@@ -5417,6 +5439,9 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         preview.write('/recheck แสดงแผน; /confirm-recheck TOKEN ใช้โควตาเพิ่มหนึ่ง verification turn')
         if shared_rechecks:
             preview.write('Private recheck server · /recover-recheck และ /stop-recheck TOKEN ใช้ใน session นี้')
+    if automatic_workflow:
+        preview.write('Experimental Auto advancement · START อนุญาตเริ่ม attempts ในแผนนี้; /check ยังต้องใช้หลักฐานจริง')
+        preview.write('ไม่ restore opt-in · quota/permission unknown พัก · initial + 2 corrections ต่อขั้น; ไม่จบงานแทน /finish')
     if experimental_tool_approvals:
         preview.write('Experimental tool approvals · exact command/diff · accept once only · no session grants')
     if not execute and not check_catalog:
@@ -5482,7 +5507,8 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
                     preview.write('/check เก็บผลที่ตรวจไม่ได้เป็น UNVERIFIED ไม่รันซ้ำ · ตรวจไฟล์/ผลข้างเคียงก่อนอนุมัติ attempt ใหม่')
         return run_chat(input_stream, output, backend=backend, workflow=controller,
                         workflow_action=host, catalog=snapshot['catalog'], role_policy=policy,
-                        recheck_commands=commands if experimental_rechecks else None)
+                        recheck_commands=commands if experimental_rechecks else None,
+                        automatic_workflow=automatic_workflow)
     finally:
         elapsed_end = time.monotonic()
         measurements = {}
@@ -6030,6 +6056,8 @@ def main():
                         help='experimental tool-check resume; /confirm-recheck consumes an extra model turn; native threads retained')
     parser.add_argument('--experimental-shared-rechecks', action='store_true',
                         help='experimental private recheck server with recovery inside the attached workflow')
+    parser.add_argument('--experimental-auto-advance', action='store_true',
+                        help='new Auto workflow only: advance READY attempts after START; checks and tool gates remain separate')
     parser.add_argument('--experimental-tool-approvals', action='store_true',
                         help='experimental workflow accept-once command/diff UI; separate from model approvals')
     modes.add_argument('--sessions', action='store_true', help='list local sessions without connecting to Codex')
@@ -6056,6 +6084,8 @@ def main():
         parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
         parser.error('--experimental-rechecks requires --resume-workflow')
+    if args.experimental_auto_advance and (not args.workflow or args.workflow_mode != 'auto'):
+        parser.error('--experimental-auto-advance requires a new --workflow with --workflow-mode auto')
     if args.experimental_tool_approvals and not (args.workflow or args.resume_workflow):
         parser.error('--experimental-tool-approvals requires --workflow or --resume-workflow')
     if args.experimental_shared_rechecks and not (args.experimental_rechecks and args.execute_workflow):
@@ -6122,7 +6152,8 @@ def main():
                                      measure_quota=args.measure_quota, metrics_jsonl=args.metrics_jsonl,
                                      check_catalog=args.check_catalog, shared_rechecks=args.experimental_shared_rechecks,
                                      experimental_tool_approvals=args.experimental_tool_approvals,
-                                     clarifications=args.clarification, source_results=args.source_result)
+                                     clarifications=args.clarification, source_results=args.source_result,
+                                     automatic_workflow=args.experimental_auto_advance)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

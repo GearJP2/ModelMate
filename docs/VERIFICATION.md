@@ -4189,3 +4189,48 @@ workflow activation and the broader release gates remain open.
 
 Full offline verification passed all 710 tests in 113.991 seconds with no skips.
 Runtime/diagnostic compile checks and `git diff --check` passed.
+
+
+### P08/P10 experimental Auto advancement for new explicit plans (2026-11-25)
+
+New explicit Auto workflows can opt into `--experimental-auto-advance`. The flag
+is routed through workflow entry and the attached selector shell, not stored in
+a checkpoint. Preview is offline; execution still requires --execute-workflow
+and exact START. Resume and other modes are rejected; programmatic resume is
+rejected before metadata access. The shell requires the matching bound host.
+Default behavior remains manual /next and no extra classifier/model call exists.
+
+A shell tick dispatches only when its current controller is READY with no active
+attempt, while the shell is open/not stopping and mode remains Auto. The existing
+host performs fresh account/quota/catalog/model gates and durable reservation;
+no alternate dispatch or tool-grant path was added. Controller transitions stop
+repeated ticks from starting another attempt. Checks still need explicit /check
+and trusted evidence. Known failed checks may start a correction within the same
+initial-plus-two budget. Unknown evidence, pending model/tool approval, pause,
+unfinished native work and final criterion mapping cannot dispatch. The shell
+does not call finish_task or infer a pass from model text.
+
+Dispatch/preflight exceptions disable automatic advancement without retry; any
+existing controller PAUSED reason is retained. An unknown quota snapshot pauses
+without polling; explicit continue must pass a fresh admission before dispatch.
+EOF/cancel/exit and switching away from Auto stop new automatic work. Neither
+approval tokens nor tool policy are changed. Changing native permissions or
+accepting a tool action still uses its independent existing gate.
+
+All eleven new tests passed: default-off, once-only READY dispatch, two-step
+progress after explicit trusted checks, initial-plus-two correction limit,
+unknown evidence stopping, unknown quota retaining its reason/no poll retry,
+explicit continue fresh admission, no replay after ambiguous dispatch, no opt-in
+checkpoint persistence, closed/paused/other-mode states, CLI validation and
+preview/missing START refusal before native process creation. The real selector
+integration uses a fake native subprocess and user input pipe: it completes two
+steps with exactly two turn/start calls, on-request native policy and accepted
+command evidence; model text alone never advances it. Final task criteria are
+still pending explicit mapping. No connected account/model/quota was used.
+
+Final-source full offline verification passed all 721 tests in 134.749 seconds,
+with no skips. Runtime entry-point compile and diff checks passed. Tested runtime
+SHA-256: `162015800a77b1a4670629447a0c22770b1fda734834a747157151ae3b479802`.
+Broader live mode/tool/cancellation/recovery gates, plain-prompt planning, automatic
+check orchestration, comparative routing and complete release readiness remain
+open. No connected account, live model or quota was used for these checks.
