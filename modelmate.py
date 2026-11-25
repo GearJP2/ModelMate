@@ -5473,11 +5473,30 @@ def run_plan_draft(prompt, model, effort, destination, input_stream, output):
             + str(len(plan['clarifications'])) + ' clarifications · no execution or verification grant\n')
         return 0
     except KeyboardInterrupt:
+        terminal = None
         if backend.host is not None:
             try:
                 backend.host({'action': 'cancel', 'task_id': controller.task_id})
+                deadline = time.monotonic() + 5
+                with selectors.DefaultSelector() as selector:
+                    for stream in backend.read_streams():
+                        selector.register(stream, selectors.EVENT_READ)
+                    while backend.host._binding is not None and backend.host._terminal is None:
+                        backend.drain()
+                        remaining = deadline - time.monotonic()
+                        if backend.host._terminal is not None or remaining <= 0:
+                            break
+                        for key, _ in selector.select(min(.1, remaining)):
+                            if not backend.read_ready(key.fileobj):
+                                selector.unregister(key.fileobj)
+                terminal = backend.host._terminal
             except (Exception, KeyboardInterrupt):
                 pass  # A failed stop request must not replace the user's cancellation.
+        try:
+            observed = 'native terminal ' + terminal + ' observed' if terminal else 'native outcome unknown'
+            output.write('Planning cancellation: ' + observed + '; no workflow handoff\n');output.flush()
+        except (OSError, ValueError):
+            pass
         raise
     finally:
         try:

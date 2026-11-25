@@ -452,9 +452,12 @@ invalid/missing/multiple output, permission/quota unknown หรือ disconnec
 planning turn นี้เป็น ephemeral และยังไม่มี resume
 
 ระหว่าง planning ใช้ Ctrl+C เพื่อยกเลิก ถ้าทราบ active turn แล้วจะขอ
-native interrupt หนึ่งครั้งก่อนปิด connection; ไม่ retry และไม่ส่งต่อไป work
+native interrupt หนึ่งครั้ง แล้วรอ matching terminal event ไม่เกิน 5 วินาที
+หลังคำขอ interrupt สำเร็จ ก่อนปิด connection; ไม่ retry และไม่ส่งต่อไป work
 หากยกเลิกก่อน publish จะไม่สร้าง draft แม้รับ completed event มาแล้ว
-interrupt acknowledgement ไม่ยืนยันว่างานฝั่งบริการหยุด ถ้า turn/start ยังไม่คืน
+รายงาน Planning cancellation แยก terminal status ที่สังเกตได้จาก outcome unknown
+interrupt acknowledgement หรือ terminal ของ thread อื่นไม่ยืนยันว่าหยุด
+หาก timeout, disconnect หรืออ่าน event ไม่สำเร็จจะรายงาน unknown ถ้า turn/start ยังไม่คืน
 turn ID จะส่ง interrupt แบบเจาะจงไม่ได้และผลอาจไม่ทราบ ไฟล์ที่ publish
 สำเร็จก่อน Ctrl+C ยังคงอยู่ `CANCEL` ใช้ที่คำถามยืนยันก่อน START เท่านั้น
 

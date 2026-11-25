@@ -4705,3 +4705,36 @@ used. Compile/diff checks passed. Tested runtime SHA-256:
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 777 tests in 125.278 seconds, with no skips.
+
+### P06/P12 bounded planning cancellation observation (2026-11-26)
+
+The previous cancellation increment requested an interrupt but closed without
+draining the resulting native terminal events. Two new regressions failed before
+this change: a matching interrupted terminal event remained unobserved, and an
+acknowledgement-only cancellation had no explicit unknown-outcome report.
+After a successful host cancel request, planning now uses its existing native
+reader and selector to wait up to five additional seconds for a matching terminal
+event. The existing host validates thread/turn identity; no new inference,
+recovery connection, retry, grant or persistence format is introduced.
+
+`PYTHONPATH=tests python3 -m unittest test_plan_draft test_planned_workflow
+test_metrics -q` passed 43 tests. A real fake-server subprocess emits a foreign
+terminal event followed by the matching interrupted event only after interrupt;
+the latter is observed and reported without publishing the draft. A second case
+emits only the foreign event and an interrupt acknowledgement: the bounded wait
+expires, native terminal telemetry remains null and cancellation reports unknown.
+Both retain one turn/start and one interrupt request. An observation error after
+draining also reports unknown rather than treating partial observations as a
+confirmed stop, and the original KeyboardInterrupt remains the result. Existing
+tests cover failed stop requests, repeated interruption, prior completion and
+no work handoff. Compile/diff checks passed.
+
+This is offline protocol evidence only. The reported terminal status is not a
+work check verdict, and completed is not a claim that cancellation prevented
+side effects. Missing/unreturned turn IDs, actual remote stopping and live loss
+recovery remain unverified. No model/account/quota or HTTP request was used.
+Tested runtime SHA-256:
+`27f3568ed35d617a0fc7c04f0b0b79ee40ba1e8a320cee443e4274ea897b72f1`.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 780 tests in 120.884 seconds, with no skips.

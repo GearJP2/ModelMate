@@ -24,7 +24,17 @@ class PlanDraftTests(unittest.TestCase):
         server=SERVER.replace("'SYNTHETIC_ANSWER all tests passed DONE'",repr(answer))
         server=server.replace("if mode=='metrics':", "if mode in ('metrics','text-metrics'):")
         server=server.replace("if mode in ('text','text-only','text-only-fail'):",
-                              "if mode in ('text','text-only','text-only-fail','text-metrics','changed-answer'):")
+                              "if mode in ('text','text-only','text-only-fail','text-metrics','changed-answer','text-until-interrupt'):")
+        server=server.replace("elif mode not in ('text-only','text-only-fail'):",
+                              "elif mode not in ('text-only','text-only-fail','text-until-interrupt'):")
+        server=server.replace(" elif method=='turn/interrupt':result={}",
+            " elif method=='turn/interrupt':\n"
+            "  emit({'method':'turn/completed','params':{'threadId':'foreign',"
+            "'turn':{'id':str(turn),'status':'interrupted'}}})\n"
+            "  if mode=='text-until-interrupt':\n"
+            "   emit({'method':'turn/completed','params':{'threadId':'thread',"
+            "'turn':{'id':str(turn),'status':'interrupted'}}})\n"
+            "  result={}")
         server=server.replace("  if mode in ('metrics','text-metrics'):",
             "  if mode=='changed-answer':\n"
             "   emit({'method':'item/completed','params':{'threadId':'thread','turnId':str(turn),"
@@ -179,6 +189,48 @@ class PlanDraftTests(unittest.TestCase):
         records=self.records()
         self.assertEqual(sum(row.get('method')=='turn/start' for row in records),1)
         self.assertFalse(any(row.get('method')=='turn/interrupt' for row in records))
+
+    def test_cancellation_observes_terminal_event_after_interrupt(self):
+        self.cancel_during_wait('text-until-interrupt')
+        self.assertEqual(self.metrics()['planningTurnMeasurements'][0]['terminalStatus'],'interrupted')
+        self.assertIn('Planning cancellation: native terminal interrupted observed',self.output)
+
+    def test_interrupt_acknowledgement_without_matching_terminal_remains_unknown(self):
+        self.cancel_during_wait('text-only')
+        self.assertIsNone(self.metrics()['planningTurnMeasurements'][0]['terminalStatus'])
+        self.assertIn('Planning cancellation: native outcome unknown',self.output)
+
+    def test_stop_observation_error_does_not_claim_confirmed_termination(self):
+        drain=NativeWorkflowConnection.drain
+        calls=0
+        def invalid_observation(backend):
+            nonlocal calls
+            calls+=1
+            if calls==1:raise KeyboardInterrupt
+            drain(backend)
+            raise ProbeError('synthetic invalid stop observation')
+        with patch.object(NativeWorkflowConnection,'drain',invalid_observation),self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN))
+        self.assertIn('Planning cancellation: native outcome unknown',self.output)
+        self.assertNotIn('synthetic invalid stop observation',self.output)
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+
+    def cancel_during_wait(self, mode):
+        drain=NativeWorkflowConnection.drain
+        calls=0
+        def interrupt_once(backend):
+            nonlocal calls
+            calls+=1
+            if calls==1:raise KeyboardInterrupt
+            drain(backend)
+        with patch.object(NativeWorkflowConnection,'drain',interrupt_once),self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN),mode=mode)
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+        records=self.records()
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in records),1)
+        self.assertEqual(sum(row.get('method')=='turn/interrupt' for row in records),1)
 
     def test_missing_usage_stays_unknown_without_prompt_or_native_ids(self):
         self.assertEqual(self.draft(json.dumps(PLAN)),0)

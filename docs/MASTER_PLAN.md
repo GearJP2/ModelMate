@@ -354,6 +354,14 @@ No unpublished draft or work handoff follows cancellation, even after an observe
 completion. Forty planning/handoff/metrics tests passed. Missing turn IDs and
 actual remote stopping remain unverified; no live gate is advanced.
 
+P06/P12 bounded planning stop observation (2026-11-26), MOCK_VERIFIED: after a
+successful cancel request the planning backend drains matching native events
+for at most five additional seconds. Acknowledgement/foreign terminal events
+cannot confirm termination; timeout or observation failure reports unknown.
+Known terminal status is reported separately from proposal publication and work
+verification. Forty-three planning/handoff/metrics tests passed. This closes the
+local observation gap, not the live remote-stop or lost-binding gate.
+
 ไฟล์: modelmate.py, tests/test_routing.py, synthetic plan fixtures
 อัปเดตตามผู้ใช้ 2026-11-18: ไม่ทำ decision model/classifier แยก
 ใช้ validator ตาม section 5 กับ explicit plan/role bindings และ controller policy
