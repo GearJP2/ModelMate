@@ -449,10 +449,13 @@ attempts ในแผนนี้ รวม initial + ไม่เกินส�
 account/quota/catalog/model gates ใหม่ทุก attempt ไม่อนุมัติ tools แทนผู้ใช้
 และไม่ขยาย read-only/on-request หาก quota/permission ไม่ทราบจะพัก
 
-ยังต้องใช้ `/check` กับผลตรวจจริง เมื่อผ่านจะเริ่มขั้นถัดไป เมื่อ fail ที่ทราบผล
-จะเริ่ม correction ภายใน budget เดิม ส่วน unknown/UNVERIFIED, pending approval,
-การพักและขั้นที่รอ mapping เกณฑ์สำเร็จจะไม่เดินต่อเอง ยังต้องใช้ `/finish` กับ
-accepted evidence เพื่อรับรองเกณฑ์งาน ไม่ใช้ข้อความโมเดลว่า tests passed แทนหลักฐาน
+สำหรับขั้นที่ทุก check เป็น test/lint ระบบจะประเมินด้วย trusted host evidence
+หลัง native ยืนยันว่าจบ attempt แล้ว ไม่ส่งคำสั่งตรวจซ้ำ เมื่อผ่านจะเริ่มขั้นถัดไป
+เมื่อ fail ที่ทราบผลจะเริ่ม correction ภายใน budget เดิม ส่วน missing/unknown
+จะเป็น UNVERIFIED และหยุด หากมี manual/rubric/source check แม้เพียงข้อเดียว
+ยังต้องให้ผู้ใช้ตรวจและสั่ง `/check` เอง pending approval, การพัก และขั้นที่รอ
+mapping เกณฑ์สำเร็จจะไม่เดินต่อเอง ยังต้องใช้ `/finish` กับ accepted evidence
+เพื่อรับรองเกณฑ์งาน ไม่ใช้ข้อความโมเดลว่า tests passed แทนหลักฐาน
 
 `/cancel`, `/exit` และ EOF ไม่อนุญาตงานเพิ่ม การส่งงานที่ล้มเหลว/ผลไม่แน่ชัด
 จะปิด automatic advancement ใน process นี้โดยไม่ replay ต้องตรวจสถานะก่อนทำต่อ

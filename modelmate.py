@@ -2276,10 +2276,18 @@ class ChatShell:
         if (self.automatic_workflow and not (self.closed or self.stopping or self.exiting)
                 and self.workflow.mode == 'auto'):
             state = self.workflow.snapshot()
+            action = None
             if state['state'] == 'READY' and state['active_attempt'] is None:
-                self.write('Experimental Auto · เริ่ม attempt ผ่าน fresh preflight · ไม่เพิ่ม tool permission')
+                action = 'next'
+            elif (state['state'] == 'CHECKING' and state['active_attempt'] is not None
+                    and state['active_attempt']['status'] == 'completed'
+                    and all(check['kind'] in ('test', 'lint') for check in
+                            state['plan']['steps'][state['step_index']]['checks'])):
+                action = 'check'
+            if action is not None:
+                self.write('Experimental Auto · ' + action + ' · ใช้ fresh preflight / trusted host evidence')
                 try:
-                    self.workflow_action({'action': 'next', 'task_id': self.workflow.task_id})
+                    self.workflow_action({'action': action, 'task_id': self.workflow.task_id})
                 except (ProbeError, OSError, ValueError):
                     self.automatic_workflow = False
                     if self.workflow.state not in ('PAUSED', 'FAILED', 'DONE'):
@@ -5440,7 +5448,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         if shared_rechecks:
             preview.write('Private recheck server · /recover-recheck และ /stop-recheck TOKEN ใช้ใน session นี้')
     if automatic_workflow:
-        preview.write('Experimental Auto advancement · START อนุญาตเริ่ม attempts ในแผนนี้; /check ยังต้องใช้หลักฐานจริง')
+        preview.write('Experimental Auto advancement · START อนุญาตเริ่ม attempts และตรวจ test/lint ด้วย trusted host evidence ในแผนนี้')
         preview.write('ไม่ restore opt-in · quota/permission unknown พัก · initial + 2 corrections ต่อขั้น; ไม่จบงานแทน /finish')
     if experimental_tool_approvals:
         preview.write('Experimental tool approvals · exact command/diff · accept once only · no session grants')

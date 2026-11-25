@@ -4234,3 +4234,44 @@ SHA-256: `162015800a77b1a4670629447a0c22770b1fda734834a747157151ae3b479802`.
 Broader live mode/tool/cancellation/recovery gates, plain-prompt planning, automatic
 check orchestration, comparative routing and complete release readiness remain
 open. No connected account, live model or quota was used for these checks.
+
+
+### P10 automatic evaluation of terminal test/lint attempts (2026-11-25)
+
+The existing experimental Auto advancement flag now also selects the trusted
+host check action when the controller is CHECKING, its active attempt is confirmed
+completed and every declared check is test/lint. Each shell tick performs at most
+one action. The host retains ownership of exact native command/cwd observations,
+missing-result evidence and evaluation. The shell does not run a check command,
+replay it, generate a verdict, accept model text or call finish_task. After known
+pass/fail, a later tick may dispatch the next step/correction through the existing
+fresh admission and unchanged budget. Missing observations retire UNVERIFIED and
+cannot authorize a new attempt automatically.
+
+Any manual/rubric/source check keeps explicit human verification and /check.
+Failed/interrupted turns, pending model/tool approval, paused/closed/stopping
+shells and final task criterion mapping remain ineligible. The flag is still
+new-plan/Auto-only, explicit START opt-in, not restored and disabled by default.
+Tool approvals and read-only/on-request native policy remain separate. No extra
+model/verification turn or automatic command retry is introduced by evaluation.
+
+All thirteen targeted Auto tests passed. The selector integration now drives two
+steps to accepted tool evidence using a fake native subprocess without /next or
+/check input, with exactly two turn/start calls. Additional cases cover mixed
+human check kinds and failed/interrupted native completion. A model message
+claiming every test passed and requesting DONE still yields UNVERIFIED when no
+matching command observation exists. Initial plus two known-failure corrections
+remain enforced, unknown quota still pauses and explicit continue still requires
+fresh admission. Task criterion mapping remains explicit and no DONE is inferred
+from step completion alone. No connected account/model/quota was used.
+
+This supersedes the preceding milestone's explicit /check requirement only for
+terminal all-tool-check steps. It is offline evidence, not proof that native
+workflow acceptance or broader live automation/release gates passed. Plain-prompt
+plan creation, human-check orchestration and scoped live mode/failure evidence
+remain open. Runtime compile and diff checks pass.
+
+Full offline verification passed all 723 tests in 136.620 seconds with no skips.
+The final thirteen-test Auto set also passed separately. Runtime compile and diff
+checks passed. Tested runtime SHA-256:
+`18696966e103bfa014fc0d7e8a38dc2bbbaf3469f89fb02bae85100be805b45c`.

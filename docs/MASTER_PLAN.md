@@ -443,6 +443,17 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 
 ### P10 — Workflow และ correction budget
 
+Automatic tool-check evaluation increment: the same opt-in now evaluates a
+confirmed completed attempt when every declared check is test/lint, through the
+existing host check action. It does not run commands or create evidence itself.
+Missing observations become UNVERIFIED; known fail uses the unchanged correction
+budget, known pass may advance on a later tick. Mixed manual/rubric/source checks,
+failed/interrupted native turns, pending approvals and task criterion mapping
+still wait. Thirteen targeted tests pass, including a two-step native selector
+run without user /next or /check and model claims without tool evidence failing
+to advance. This supersedes the explicit /check requirement below only for
+terminal all-tool-check steps; human checks and final /finish remain explicit.
+
 Experimental Auto advancement increment: new explicit Auto plans may opt in with
 `--experimental-auto-advance`. Preview remains offline; executing still requires
 --execute-workflow plus START. A bound host starts each READY attempt through its

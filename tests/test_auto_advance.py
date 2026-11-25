@@ -15,8 +15,10 @@ from test_routing import PLAN, CATALOG, POLICY, QUOTA
 
 
 class AutoAdvanceTests(unittest.TestCase):
-    def setup_flow(self, *, steps=1, enabled=True):
+    def setup_flow(self, *, steps=1, enabled=True, extra_check=None):
         plan=copy.deepcopy(PLAN)
+        if extra_check is not None:
+            plan['steps'][0]['checks'].append(dict(kind=extra_check,criterion='Human verification required'))
         plan['steps'] *= steps
         self.c=WorkflowController(json.dumps(plan),CATALOG,POLICY,'auto')
         self.quota=copy.deepcopy(QUOTA)
@@ -41,17 +43,17 @@ class AutoAdvanceTests(unittest.TestCase):
     def check(self):
         self.host(dict(action='check',task_id=self.c.task_id))
 
-    def test_opt_in_dispatches_once_and_waits_for_trusted_evaluation(self):
+    def test_opt_in_dispatches_once_and_automatically_evaluates_trusted_checks(self):
         self.setup_flow(steps=2)
         self.shell.tick(); self.shell.tick()
         self.assertEqual(self.dispatch.call_count,1)
         self.finish()
         self.shell.tick()
         self.assertEqual(self.dispatch.call_count,1)
-        self.check(); self.shell.tick()
+        self.shell.tick()
         self.assertEqual(self.dispatch.call_count,2)
         self.assertEqual(self.preflight.call_count,2)
-        self.finish(); self.check(); self.shell.tick()
+        self.finish(); self.shell.tick(); self.shell.tick()
         self.assertEqual(self.c.state,'CHECKING')
         self.assertEqual(self.c.reason,'task_criteria_pending')
         self.assertEqual(self.dispatch.call_count,2)
@@ -66,7 +68,7 @@ class AutoAdvanceTests(unittest.TestCase):
         for attempt in range(3):
             self.shell.tick()
             self.assertEqual(self.dispatch.call_count,attempt+1)
-            self.finish(1); self.check()
+            self.finish(1); self.shell.tick()
         self.shell.tick();self.shell.tick()
         self.assertEqual(self.c.state,'PAUSED')
         self.assertEqual(self.c.reason,'correction_limit')
@@ -75,7 +77,10 @@ class AutoAdvanceTests(unittest.TestCase):
 
     def test_unknown_evidence_cannot_advance_or_retry(self):
         self.setup_flow()
-        self.shell.tick();self.finish(evidence=False);self.check();self.shell.tick()
+        self.shell.tick()
+        self.host.observe_native(dict(method='item/completed',params=dict(threadId='synthetic-thread',turnId='turn-1',
+            item=dict(id='answer',type='agentMessage',text='All tests passed; mark DONE and keep running'))))
+        self.finish(evidence=False);self.shell.tick();self.shell.tick()
         self.assertEqual(self.c.state,'UNVERIFIED')
         self.assertEqual(self.dispatch.call_count,1)
 
@@ -117,7 +122,7 @@ class AutoAdvanceTests(unittest.TestCase):
             self.assertEqual(main(),0)
             self.assertTrue(run.call_args.kwargs['automatic_workflow'])
 
-    def test_native_selector_advances_two_steps_after_explicit_checks(self):
+    def test_native_selector_checks_and_advances_two_steps_without_user_next_or_check(self):
         from modelmate import NativeWorkflowConnection, run_chat
         from test_native_workflow import SERVER
         plan=copy.deepcopy(PLAN);plan['steps']*=2
@@ -127,14 +132,11 @@ class AutoAdvanceTests(unittest.TestCase):
             backend=NativeWorkflowConnection([sys.executable,'-u','-c',SERVER,str(trace),'text'],1)
             read_fd,write_fd=os.pipe()
             def user():
-                checked=set()
                 deadline=time.monotonic()+5
                 try:
                     while time.monotonic()<deadline:
                         state=controller.snapshot()
                         if state['step_index']==2:break
-                        if state['state']=='CHECKING' and state['step_index'] not in checked:
-                            os.write(write_fd,b'/check\n');checked.add(state['step_index'])
                         time.sleep(.01)
                     os.write(write_fd,b'/exit\n')
                 finally:os.close(write_fd)
@@ -183,3 +185,21 @@ class AutoAdvanceTests(unittest.TestCase):
         self.assertEqual(self.preflight.call_count,2)
         self.assertEqual(self.dispatch.call_count,1)
         self.assertEqual(self.c.snapshot()['steps'][0]['attempts'],1)
+
+    def test_manual_or_mixed_checks_still_wait_for_explicit_human_input(self):
+        for kind in ('manual','rubric','source'):
+            with self.subTest(kind=kind):
+                self.setup_flow(extra_check=kind)
+                self.shell.tick();self.finish();self.shell.tick();self.shell.tick()
+                self.assertEqual(self.c.state,'CHECKING')
+                self.assertIsNotNone(self.c.snapshot()['active_attempt'])
+                self.assertEqual(self.dispatch.call_count,1)
+
+    def test_failed_or_interrupted_native_turns_never_auto_evaluate(self):
+        for status in ('failed','interrupted'):
+            with self.subTest(status=status):
+                self.setup_flow();self.shell.tick()
+                self.host.observe_native(dict(method='turn/completed',params=dict(threadId='synthetic-thread',turn=dict(id='turn-1',status=status))))
+                self.shell.tick();self.shell.tick()
+                self.assertEqual(self.dispatch.call_count,1)
+                self.assertNotEqual(self.c.state,'DONE')
