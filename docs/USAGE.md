@@ -433,6 +433,30 @@ Approve plan จะแสดง model และ effort ของทุกขั�
 Default จะ decline/pause คำขอเพิ่มสิทธิ์; opt-in approval UI อยู่ด้านล่าง read-only/on-request
 ยังอนุญาตคำสั่งที่ sandbox อนุญาตให้ทำงานเองตามพฤติกรรม Codex
 
+### สร้าง draft plan จาก prompt ด้วยโมเดลที่เลือก
+
+```sh
+sr --draft-plan new-plan.json --model MODEL "เพิ่มตัวกรองรายการในโปรเจกต์นี้"
+```
+
+คำสั่งนี้แสดงโมเดล/effort และ goal ก่อนขอ `START` เพื่อใช้หนึ่ง planning turn
+เลือก effort ได้ด้วย `--effort`; ไม่เรียก classifier เพื่อเลือกโมเดลเริ่มต้น
+EOF/CANCEL/บรรทัดยืนยันไม่ครบไม่เปิด backend ใช้ native read-only/on-request;
+คำขอขยายสิทธิ์ถูก decline คำสั่งที่ sandbox อนุญาตยังอยู่ภายใต้นโยบาย native เดิม
+ไม่ได้รับประกันว่าการบอกโมเดลไม่ใช้ tools เป็นขอบเขตความปลอดภัย
+
+ผลต้องเป็น JSON plan เดียวที่ validator รับและ goal ตรงกับคำขอ จึงสร้างไฟล์ใหม่
+mode 0600 ใน directory ที่มีอยู่แล้ว ไม่เขียนทับไฟล์เดิมหรือไฟล์ที่ถูกสร้างแข่งกัน
+invalid/missing/multiple output, permission/quota unknown หรือ disconnect จะหยุด
+โดยไม่ retry หรือเริ่มงานตามข้อเสนอ การได้ draft ไม่ได้แปลว่าเกณฑ์งานผ่าน
+planning turn นี้เป็น ephemeral และยังไม่มี resume
+
+อ่าน goal/criteria/steps/reasons ในไฟล์ก่อนใช้ `--workflow new-plan.json` พร้อม
+bindings ของทุก role ที่แผนใช้ หากมี clarifications ให้ตอบผ่าน `--clarification`
+ให้ครบตาม flow เดิม การ execute ยังต้อง opt-in/START และผ่าน model/tool gates
+ของ workflow อีกครั้ง คำสั่งนี้ยังไม่เชื่อม plain prompt ไปเป็น workflow อัตโนมัติ
+มีหลักฐาน fake-server/offline เท่านั้น ยังไม่ได้ทดสอบ live ด้วย quota จริง
+
 ### Experimental Auto advancement
 
 สำหรับแผนใหม่เท่านั้น ใช้ `--workflow-mode auto --experimental-auto-advance`

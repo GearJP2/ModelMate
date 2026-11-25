@@ -4275,3 +4275,53 @@ Full offline verification passed all 723 tests in 136.620 seconds with no skips.
 The final thirteen-test Auto set also passed separately. Runtime compile and diff
 checks passed. Tested runtime SHA-256:
 `18696966e103bfa014fc0d7e8a38dc2bbbaf3469f89fb02bae85100be805b45c`.
+
+
+### P06 selected-model prompt-to-draft proposal entry (2026-11-25)
+
+`--draft-plan NEW_FILE --model MODEL "prompt"` adds an explicit one-turn planning
+entry, with optional --effort. No classifier or model-selection inference is
+introduced: the caller chooses the planning model/effort. The original goal is
+separate from fixed proposal/schema instructions and must be preserved exactly.
+A minimal plan-step controller reuses native fresh account/quota/catalog/model
+admission, read-only/on-request thread validation, hosted web disabling and
+bounded native completion/interrupt behavior. START is required before backend
+construction. Server-requested tool escalation is declined by the existing
+default path. This does not claim all native sandbox-permitted tools are disabled;
+the prompt's request to avoid tools is not permission enforcement.
+
+The collector accepts exactly one bounded completed assistant item from the
+matching native turn (not deltas, foreign items or duplicate completed items).
+Terminal controller state and active completed attempt must agree before parsing.
+The returned text must be an exact JSON plan accepted by validate_plan; no markdown
+repair, retry or accepting a claimed success exists. Extra permission/command/
+counter/status fields and changed goals cannot publish a draft. Clarifications
+remain unresolved data. Future role/effort bindings are validated again when the
+user separately enters the workflow; this draft grants none of them.
+
+Validated output is limited to 64 KiB and published through an owned temporary
+0600 snapshot, fsync and exclusive hard link into the requested new filename.
+Existing files, symlinks and concurrent destination creation are not overwritten;
+owned temporary directories are removed on publication failure. This is atomic
+exclusive publication, not a claim of directory-fsync crash durability. No local
+session, automatic handoff/task execution or resume is created by drafting. The
+native planning thread is ephemeral; timeout/disconnect never causes replay.
+
+All ten targeted tests passed using a real fake-native subprocess, never Codex
+or a live model. Cases include one selected planning turn and exact valid file,
+foreign/delta/duplicate-item filtering, invalid JSON/markdown/extra authority/empty
+steps/changed goal, preserved clarifications, max-length goal, oversized output,
+CANCEL/EOF/incomplete START before backend access, existing destination refusal,
+unknown quota/API-key login/widened permissions blocking dispatch, a competing
+publisher and connection loss with no second turn. Successful draft files have
+0600 mode, and temporary snapshots are cleaned after publication failure. No
+private real prompt, account, credential or trace is included in repository data.
+
+Runtime entry-point compile and diff checks pass. This is implemented/offline
+verified proposal capture only: plain-prompt automatic routing, clarification
+interaction/handoff into a workflow, real output compatibility and broader live
+planning/permission/quota/release gates remain open. No live inference was run.
+
+Full offline verification passed all 733 tests in 146.391 seconds, with no skips.
+Compile and diff checks passed. Tested runtime SHA-256:
+`f97d26a2cbfbe7736bebd1334f3ff5312d67d8952e780d1de4ce634c2cf415a7`.

@@ -208,7 +208,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P03 | พิสูจน์ permission boundary | P01 | IN_PROGRESS: user ยอมรับ native policy; live prototype tests | จำเป็น |
 | P04 | Quota policy และ pause | P02 | MOCK_VERIFIED | จำเป็น |
 | P05 | Model roles และ effort policy | P02 | MOCK_VERIFIED; live mapping ยังไม่กำหนด | ตรวจตารางบทบาทครั้งแรก |
-| P06 | Plan schema / policy routing | P04, P05 | MOCK_VERIFIED: explicit plan validation; decision classifier removed by user scope | จำเป็น |
+| P06 | Plan schema / policy routing | P04, P05 | MOCK_VERIFIED: explicit plan validation and selected-model draft; automatic handoff/live draft remain open; no decision classifier | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: explicit-plan CLI/command-check happy path user LIVE_VERIFIED; broader routing/recovery pending | ไม่จำเป็นถ้าไม่แตะ policy |
 | P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: native command/patch UI MOCK_VERIFIED | จำเป็น |
@@ -312,6 +312,19 @@ missing role, hidden model, catalog เปลี่ยนตอน resume แล
 ไม่รวม: auto benchmarking ทุก startup หรือ scraping ราคา
 
 ### P06 — Plan และ routing
+
+Selected-model draft entry increment: `--draft-plan NEW_FILE --model MODEL
+"prompt"` requests one explicitly selected planning turn after START. This is
+workflow proposal generation, not a classifier/extra inference to select an
+initial model. Native read-only/on-request permissions and fresh admission remain
+enforced; escalation requests are declined. Exactly one bounded completed JSON
+message from the bound turn must pass validate_plan and preserve the supplied
+goal. Clarifications remain unresolved proposal data. No proposed task/tool,
+permission, counter or success verdict is executed/accepted. A private 0600 draft
+is published exclusively via an owned snapshot/hard link; existing or concurrently
+created files are never replaced. No automatic retry, local session or resume is
+added for this ephemeral planning turn. Ten fake-native/CLI/publication tests pass.
+Plain prompt auto entry, answer-to-workflow handoff and live evidence remain open.
 
 ไฟล์: modelmate.py, tests/test_routing.py, synthetic plan fixtures
 อัปเดตตามผู้ใช้ 2026-11-18: ไม่ทำ decision model/classifier แยก

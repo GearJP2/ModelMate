@@ -5329,6 +5329,86 @@ def check_workflow_account(plan, policy):
         connection.close()
 
 
+def run_plan_draft(prompt, model, effort, destination, input_stream, output):
+    """One explicitly selected planning turn; validated output grants no execution."""
+    _plan_text(prompt)
+    _plan_text(model)
+    destination = Path(destination)
+    if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
+        raise ProbeError('Choose a new plan file in an existing directory; nothing overwritten.')
+    example = {'version': 1, 'goal': prompt, 'clarifications': [],
+        'success_criteria': ['Observable success criterion'], 'steps': [{
+            'kind': 'implement', 'objective': 'One bounded step', 'role': 'standard',
+            'effort': effort, 'risk': 'normal', 'reason': 'Short selection reason',
+            'checks': [{'kind': 'test', 'criterion': 'Observable check'}]}]}
+    validate_plan(json.dumps(example))
+    objective = ('Propose a workflow, do not execute work or tools. Return exactly one JSON object, '
+        'without markdown or commentary. Keep goal exactly equal to the supplied goal. '
+        'Ask necessary questions in clarifications. Use only these fields and schema: '
+        + json.dumps(dict(example, goal='Copy supplied goal exactly'), ensure_ascii=False) + '. Allowed kind: plan/implement/review; '
+        'role: economy/standard/strong; risk: normal/high; check kind: test/lint/source/rubric/manual. '
+        'Effort: low/medium/high/xhigh (must be supported when bound). '
+        'At most 12 steps. High-risk work requires a later strong review step. '
+        'No command, permission, grant, counter or completion field. Give short reasons, not private reasoning.')
+    # Keep the original goal separate from the instruction/example text.
+    example['steps'][0].update(kind='plan', objective=objective,
+        checks=[{'kind': 'manual', 'criterion': 'Controller validates the proposed plan'}])
+    raw = json.dumps(example, ensure_ascii=False)
+    catalog = [{'model': model, 'defaultReasoningEffort': effort,
+                'supportedReasoningEfforts': [{'reasoningEffort': effort}]}]
+    controller = WorkflowController(raw, catalog, {'standard': model}, 'auto')
+    output.write('Draft only · one requested turn: ' + terminal_text(model + '/' + effort) + '\n')
+    output.write('Native read-only/on-request; tool escalation requests are declined. Draft does not start its workflow.\n')
+    output.write('Goal: ' + terminal_text(prompt) + '\nType START then Enter, or CANCEL.\n');output.flush()
+    if not read_workflow_confirmation(input_stream, lambda text: output.write(text + '\n')):
+        return 2
+    backend = NativeWorkflowConnection(['codex', 'app-server', '--stdio',
+        '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
+    answers = []
+    def capture(event):
+        if event.get('type') == 'text':
+            text = event['text']
+            if answers or len(text.encode('utf-8')) > 65536:
+                raise ProbeError('Plan draft requires one bounded completed JSON message; no retry.')
+            answers.append(text)
+    try:
+        host = backend.connect(controller, os.getcwd(), {'standard': model})
+        host.on_change = capture
+        host({'action': 'next', 'task_id': controller.task_id})
+        with selectors.DefaultSelector() as selector:
+            for stream in backend.read_streams():
+                selector.register(stream, selectors.EVENT_READ)
+            while controller.state == 'RUNNING':
+                backend.drain();backend.tick()
+                if controller.state != 'RUNNING':
+                    break
+                for key, _ in selector.select(.1):
+                    if not backend.read_ready(key.fileobj):
+                        selector.unregister(key.fileobj)
+            backend.drain()
+        state = controller.snapshot()
+        if (state['state'] != 'CHECKING' or state['active_attempt'] is None
+                or state['active_attempt']['status'] != 'completed' or len(answers) != 1):
+            raise ProbeError('Plan drafting did not finish with one confirmed proposal; nothing saved or replayed.')
+        plan = validate_plan(answers[0])
+        if plan['goal'] != prompt:
+            raise ProbeError('Draft changed the requested goal; nothing saved.')
+        encoded = (json.dumps(plan, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        if len(encoded) > 65536:
+            raise ProbeError('Draft plan file exceeds 64 KiB; nothing saved.')
+        with tempfile.TemporaryDirectory(prefix='.modelmate-draft-', dir=destination.parent) as directory:
+            snapshot = Path(directory) / 'plan.json'
+            fd = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'wb') as source:
+                source.write(encoded);source.flush();os.fsync(source.fileno())
+            os.link(snapshot, destination)
+        output.write('Validated draft saved · ' + str(len(plan['steps'])) + ' steps · '
+            + str(len(plan['clarifications'])) + ' clarifications · no execution or verification grant\n')
+        return 0
+    finally:
+        backend.close()
+
+
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
                       experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
                       check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False,
@@ -6041,6 +6121,8 @@ def main():
     modes.add_argument('--recover-recheck', metavar='SESSION_ID',
                        help='inspect/reconcile a retained recheck; no model turns; STOP/PAUSE if active')
     modes.add_argument('--resume-workflow', metavar='SESSION_ID', help='preview/resume a durable workflow; never replay unknown work')
+    modes.add_argument('--draft-plan', metavar='NEW_FILE',
+                       help='one selected planning turn after START; save a validated proposal without workflow execution')
     modes.add_argument('--workflow', metavar='PLAN_JSON', help='preview an explicit workflow plan offline')
     parser.add_argument('--check-catalog', action='store_true',
                         help='validate a new workflow against live catalog and quota without inference')
@@ -6100,6 +6182,17 @@ def main():
         parser.error('--experimental-shared-rechecks requires --experimental-rechecks and --execute-workflow')
     if not (args.workflow or args.resume_workflow) and (args.role_model or args.workflow_mode or args.execute_workflow or args.check_commands):
         parser.error('Workflow options require --workflow PLAN_JSON or --resume-workflow SESSION_ID')
+    if args.draft_plan:
+        if not args.prompt or not args.model or args.resume:
+            parser.error('--draft-plan requires a prompt and --model; resume is not supported')
+        try:
+            return run_plan_draft(args.prompt, args.model, args.effort, args.draft_plan, sys.stdin, sys.stdout)
+        except KeyboardInterrupt:
+            return 130
+        except (ProbeError, OSError, ValueError, UnicodeError) as exc:
+            message = str(exc) if isinstance(exc, ProbeError) else 'Plan drafting failed; no automatic retry.'
+            print('ModelMate draft: ' + terminal_text(message), file=sys.stderr)
+            return 1
     if args.delete_session:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Session deletion does not accept prompt/model/effort overrides')
