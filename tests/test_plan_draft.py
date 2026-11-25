@@ -24,7 +24,12 @@ class PlanDraftTests(unittest.TestCase):
         server=SERVER.replace("'SYNTHETIC_ANSWER all tests passed DONE'",repr(answer))
         server=server.replace("if mode=='metrics':", "if mode in ('metrics','text-metrics'):")
         server=server.replace("if mode in ('text','text-only','text-only-fail'):",
-                              "if mode in ('text','text-only','text-only-fail','text-metrics'):")
+                              "if mode in ('text','text-only','text-only-fail','text-metrics','changed-answer'):")
+        server=server.replace("  if mode in ('metrics','text-metrics'):",
+            "  if mode=='changed-answer':\n"
+            "   emit({'method':'item/completed','params':{'threadId':'thread','turnId':str(turn),"
+            "'item':{'id':'answer','type':'agentMessage','text':'different completed text'}}})\n"
+            "  if mode in ('metrics','text-metrics'):")
         def backend(command):
             return NativeWorkflowConnection([sys.executable,'-u','-c',server,str(self.trace),mode],1)
         with tempfile.TemporaryFile('w+') as source,patch('modelmate.NativeWorkflowConnection',side_effect=backend):
@@ -121,6 +126,13 @@ class PlanDraftTests(unittest.TestCase):
     def test_disconnect_does_not_publish_or_replay(self):
         with self.assertRaises(ProbeError):self.draft(json.dumps(PLAN),mode='disconnect')
         self.assertFalse(self.destination.exists())
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)
+
+    def test_conflicting_completed_item_does_not_publish_or_replay(self):
+        with self.assertRaisesRegex(ProbeError,'changed after completion'):
+            self.draft(json.dumps(PLAN),mode='changed-answer')
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
         self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)
 
     def test_missing_usage_stays_unknown_without_prompt_or_native_ids(self):

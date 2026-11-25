@@ -3836,7 +3836,7 @@ class NativeWorkflowConnection(Connection):
         self._events = []
         self._event_bytes = 0
         self._sent_attempts = set()
-        self._displayed = set()
+        self._displayed = {}
         self.store = self.session_id = self._attachment = self.controller = None
         self.shared_rechecks = False
         self.experimental_tool_approvals = False
@@ -4282,11 +4282,16 @@ class NativeWorkflowConnection(Connection):
         if (not isinstance(item_id, str) or not item_id or len(item_id) > 256
                 or not isinstance(text, str) or len(text.encode()) > 4 * 1024 * 1024):
             raise ProbeError('Invalid workflow assistant text.')
-        if item_id in self._displayed or self.host.on_change is None:
+        digest = hashlib.sha256(text.encode()).digest()
+        if item_id in self._displayed:
+            if self._displayed[item_id] != digest:
+                raise ProbeError('Workflow assistant item changed after completion.')
+            return
+        if self.host.on_change is None:
             return
         if len(self._displayed) >= 10000:
             raise ProbeError('Too many workflow assistant messages.')
-        self._displayed.add(item_id)
+        self._displayed[item_id] = digest
         # Display completed text only: deltas never become evidence or duplicate the final answer.
         self.host.on_change({'type': 'text', 'text': text})
 

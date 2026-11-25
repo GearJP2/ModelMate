@@ -4652,3 +4652,26 @@ this Auto race; planning proposal publication behavior was not changed.
 Full offline verification passed all 771 tests in 119.391 seconds, with no skips.
 Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
 `79e1d9ee5f2994565f6970f04622c69c30771aa659cd220cda7f781ce008b76d`.
+
+### P06/P10 conflicting completed assistant item (2026-11-26)
+
+A fake native server emitted a valid planning JSON completion, then different
+completed text with the same bound item ID before the turn terminal event.
+The new regression failed before the fix: the backend silently discarded the
+changed completion and published the first proposal. The shared backend now
+stores a SHA-256 digest per displayed item and rejects a changed completion.
+Exact duplicates still display once; the digest table is cleared per turn, so
+reused IDs in later turns remain valid. Foreign bindings and post-terminal text
+retain their existing filtering. No raw answer is added to error messages or
+telemetry, and no grant, retry counter or completion verdict is inferred.
+
+`PYTHONPATH=tests python3 -m unittest test_plan_draft test_native_workflow -q`
+passed 34 tests. The regression verifies no draft publication, proposalSaved
+false and only one turn/start. Existing tests cover exact duplicate filtering
+and item ID reuse across turns. Runtime/diagnostic compilation and diff checks
+passed. This is offline protocol validation, not live server evidence; no model,
+account, quota or HTTP request was used. Runtime SHA-256:
+`274a1ae81e0569c68c33b0750071d5203bfcd87774c7917824db4cd99bba5121`.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 772 tests in 121.004 seconds, with no skips.

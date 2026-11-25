@@ -339,6 +339,13 @@ created files are never replaced. No automatic retry, local session or resume is
 added for this ephemeral planning turn. Ten fake-native/CLI/publication tests pass.
 Plain default prompt auto entry and live draft evidence remain open; combined handoff is described above.
 
+P06/P10 completion-conflict fix (2026-11-26), MOCK_VERIFIED: the shared native
+backend rejects changed completed assistant text for the same bound item ID
+before turn termination. Exact duplicates remain deduplicated and IDs may be
+reused in later turns. A fake-server regression reproduced silent draft
+publication before the fix and now verifies no publication or retry. Planning
+and native-workflow targeted tests: 34 passed. No live gate is advanced.
+
 ไฟล์: modelmate.py, tests/test_routing.py, synthetic plan fixtures
 อัปเดตตามผู้ใช้ 2026-11-18: ไม่ทำ decision model/classifier แยก
 ใช้ validator ตาม section 5 กับ explicit plan/role bindings และ controller policy
