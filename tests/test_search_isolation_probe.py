@@ -1,5 +1,7 @@
+import io
 import json
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -110,3 +112,52 @@ class IsolationProbeTests(unittest.TestCase):
                 report = isolation.probe()
                 self.assertEqual(report['status'], 'unverified')
                 self.assertFalse(report['checks']['namespaceExitStopsDetachedChild'])
+
+
+class LiveWikipediaProbeTests(unittest.TestCase):
+    def input_file(self, text):
+        stream = tempfile.TemporaryFile('w+')
+        self.addCleanup(stream.close)
+        stream.write(text);stream.seek(0)
+        return stream
+
+    def test_default_command_never_calls_live_lookup(self):
+        with patch.object(isolation, 'probe', return_value={'status':'capability_verified'}), patch.object(isolation, 'live_wikipedia') as live, patch('sys.stdout',new_callable=io.StringIO):
+            self.assertEqual(isolation.main([]),0)
+            live.assert_not_called()
+
+    def test_eof_cancellation_and_stale_token_never_launch(self):
+        for answer in ('','CANCEL\n','SEARCH stale\n','SEARCH deadbeef'):
+            with self.subTest(answer=answer), patch.object(isolation.secrets,'token_hex',return_value='deadbeef'), patch.object(isolation,'run_isolated_search') as launch:
+                report=isolation.live_wikipedia('en',self.input_file(answer),io.StringIO())
+                self.assertEqual(report['status'],'cancelled')
+                self.assertEqual(report['searchLaunches'],0)
+                launch.assert_not_called()
+
+    def test_confirmed_fixture_query_runs_once_and_report_does_not_dump_sources(self):
+        results=[dict(title='Synthetic private title',excerpt='Synthetic private body',url='https://en.wikipedia.org/?curid=7')]
+        with patch.object(isolation.secrets,'token_hex',return_value='deadbeef'), patch.object(isolation,'run_isolated_search',return_value=results) as launch:
+            report=isolation.live_wikipedia('en',self.input_file('SEARCH deadbeef\nprivate history\n'),io.StringIO())
+        launch.assert_called_once_with('Python programming language','en.wikipedia.org','Wikipedia')
+        self.assertEqual(report['status'],'scoped_live_verified')
+        self.assertFalse(report['g3Passed'])
+        self.assertEqual(report['modelTurnsRequested'],0)
+        self.assertEqual(len(report['runtimeSha256']),64)
+        self.assertNotIn('Synthetic private',json.dumps(report))
+        self.assertNotIn('private history',json.dumps(report))
+        self.assertNotIn('deadbeef',json.dumps(report))
+
+    def test_lookup_failure_and_invalid_results_are_sanitized_without_retry(self):
+        for value in (isolation.ProbeError('private trace'),[],[dict(title='Bad',excerpt='',url='file:///private')]):
+            options=dict(side_effect=value) if isinstance(value,Exception) else dict(return_value=value)
+            with self.subTest(value=type(value).__name__),patch.object(isolation.secrets,'token_hex',return_value='deadbeef'),patch.object(isolation,'run_isolated_search',**options) as launch:
+                report=isolation.live_wikipedia('th',self.input_file('SEARCH deadbeef\n'),io.StringIO())
+                self.assertEqual(report['status'],'unverified')
+                self.assertEqual(report['searchLaunches'],1)
+                self.assertNotIn('private',json.dumps(report))
+                self.assertEqual(launch.call_count,1)
+
+    def test_live_flag_routes_to_separate_zero_model_mode(self):
+        with patch.object(isolation,'probe',side_effect=AssertionError('offline probe not selected')),patch.object(isolation,'live_wikipedia',return_value={'status':'cancelled'}) as live,patch('sys.stdout',new_callable=io.StringIO):
+            self.assertEqual(isolation.main(['--live-wikipedia','en']),2)
+            self.assertEqual(live.call_args.args[0],'en')

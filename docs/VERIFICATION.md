@@ -4021,3 +4021,47 @@ closed rather than widening mounts or permissions.
 
 Full offline verification passed all 699 tests in 104.128 seconds with no skips.
 The strengthened seven-test launcher set also passed separately; compile and diff checks passed.
+
+
+### P13 scoped live DNS/TLS verifier prepared, not executed (2026-11-25)
+
+Explicit commands, to be run only when requested/authorized:
+
+```sh
+bwrap --version
+python3 search_isolation_probe.py --live-wikipedia en
+```
+
+`th` selects the Thai endpoint instead. This is not a Codex/inference command and
+requests zero model turns/account calls. The mode previews one fixed public query
+(`Python programming language` for en, `ภาษาไพทอน` for th), host and fresh SEARCH
+token on stderr. Exact interactive confirmation is required before setup/lookup;
+EOF, cancellation, stale or incomplete tokens launch nothing. One confirmed
+launcher call is allowed, without retry. Normal invocation without the flag still
+runs only the offline namespace probe. Help is offline.
+
+The live mode reuses the internal namespace launcher, its fixed mounts, fresh
+process, bounded response and exact request binding. A successful scoped report
+requires at least one result with canonical endpoint source URLs. It records
+runtime/probe SHA-256, zero requested model turns, launch count and boolean checks,
+but no query text, returned source title/snippet/URL, credentials or stderr trace.
+Failures are unverified with a sanitized reason; interruption is explicitly
+outcome-unknown and never triggers replay. `g3Passed` remains false even on scoped
+success: this command cannot certify all isolation/injection/lifecycle evidence.
+The bwrap version above should accompany a real report for version scope.
+
+All seventeen diagnostic tests passed, including default/live routing, confirmed
+query forwarding without following history, refusal before launch, sanitized
+failure/invalid/empty results and one-launch/no-retry behavior. Tests use actual
+file descriptors for the existing confirmation reader and mocked lookup results;
+a mocked scoped success is NOT live evidence. The default real offline probe
+still passed nineteen checks. Compile/diff checks passed. No live Wikipedia,
+DNS/TLS, model or account request was made for this increment. Full suite was not
+rerun for diagnostic-only changes; last full suite remains 699 tests passed.
+Probe SHA-256: `6197c966b06a1d15c4ea74f13672fb8e8b44084af205093c3e9667aed2f6daad`.
+
+Next eligible work: review the concrete launcher boundary and run the scoped
+command only with explicit live authorization; continue parent/server-loss and
+injection validation independently. SearXNG, automatic workflow search and full
+G3/release gates remain open. The runtime CLI has not been activated by adding
+this separate diagnostic entry point.

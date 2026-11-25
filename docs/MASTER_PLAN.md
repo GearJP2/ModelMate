@@ -625,6 +625,12 @@ launcher tests pass including a real namespace with a fixed fake HTTPS peer.
 There is still no CLI/workflow activation or real DNS/TLS evidence; G3 is open.
 This internal prototype supersedes the preceding statement that the parent
 launcher has not yet been implemented, without claiming release approval.
+An opt-in verifier is now prepared: `python3 search_isolation_probe.py
+--live-wikipedia en` (or th). It previews one fixed public fixture query and
+requires an exact fresh SEARCH token before one launcher call, with no model or
+account access. The report omits query/results/traces and retains source hashes.
+Seventeen diagnostic tests pass; the live mode has NOT been run and does not
+satisfy its own gate from these mocked tests. Default command stays offline.
 
 Search URL validation is shared between SearXNG candidate filtering and packet
 import/export. Invalid, zero or out-of-range ports are skipped before candidates

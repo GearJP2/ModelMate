@@ -1,14 +1,17 @@
-"""Offline P13 host capability probe; no model or network requests."""
+"""P13 isolation diagnostic: offline by default; live Wikipedia requires explicit opt-in."""
+import argparse
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
+import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 
-from modelmate import ProbeError, SEARCH_MOUNTS, _unique_json_object, run_search_process, validate_search_worker_response
+from modelmate import ProbeError, SEARCH_MOUNTS, _unique_json_object, read_workflow_confirmation, run_isolated_search, run_search_process, validate_search_packet, validate_search_worker_response
 
 
 CHILD = r"""
@@ -200,7 +203,45 @@ def probe(timeout=10):
                 'runtimeSha256': hashlib.sha256(runtime_bytes).hexdigest()}
 
 
-if __name__ == '__main__':
-    report = probe()
+def live_wikipedia(language, input_stream, output):
+    host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
+    query = {'en': 'Python programming language', 'th': 'ภาษาไพทอน'}[language]
+    report = dict(scope='isolated_wikipedia_dns_tls_only', g3Passed=False,
+                  modelTurnsRequested=0, searchLaunches=0)
+    def write(message):
+        output.write(message + '\n');output.flush()
+    token = 'SEARCH ' + secrets.token_hex(4)
+    write('One isolated public Wikipedia lookup; no model/account call. No retry.')
+    write('Host: ' + host + ' · Query: ' + query)
+    write('Type ' + token + ' then Enter, or CANCEL.')
+    if not read_workflow_confirmation(input_stream, write, confirmation=token):
+        return dict(report, status='cancelled')
+    try:
+        report.update(
+            runtimeSha256=hashlib.sha256(Path(__file__).with_name('modelmate.py').read_bytes()).hexdigest(),
+            probeSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        report['searchLaunches'] = 1
+        results = run_isolated_search(query, host, 'Wikipedia')
+        validate_search_packet(dict(version=1, source='Wikipedia', host=host, query=query, results=results))
+    except (ProbeError, OSError, ValueError):
+        return dict(report, status='unverified', reason='isolated_lookup_failed')
+    checks = dict(resultsAvailable=bool(results),
+        canonicalSourceUrls=all(row['url'].startswith('https://' + host + '/?curid=') for row in results))
+    return dict(report, status='scoped_live_verified' if all(checks.values()) else 'unverified', checks=checks)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--live-wikipedia', choices=('en', 'th'),
+        help='opt in to one fixed public query after exact confirmation; no inference')
+    args = parser.parse_args(argv)
+    try:
+        report = live_wikipedia(args.live_wikipedia, sys.stdin, sys.stderr) if args.live_wikipedia else probe()
+    except KeyboardInterrupt:
+        report = dict(status='unverified', reason='interrupted_outcome_unknown', g3Passed=False, modelTurnsRequested=0)
     print(json.dumps(report, sort_keys=True))
-    raise SystemExit(0 if report['status'] == 'capability_verified' else 1)
+    return 0 if report['status'] in ('capability_verified', 'scoped_live_verified') else 2 if report['status'] == 'cancelled' else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
