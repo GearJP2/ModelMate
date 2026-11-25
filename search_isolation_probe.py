@@ -9,7 +9,7 @@ import tempfile
 
 
 CHILD = r"""
-import json, os, sys
+import json, os, sys, ssl, http.client
 from pathlib import Path
 secret, marker, fd = sys.argv[1:]
 def unreadable(path):
@@ -18,9 +18,12 @@ def unreadable(path):
     except (FileNotFoundError, PermissionError):
         return True
     return False
+tls = ssl.create_default_context(cafile='/public-ca.pem')
 public = Path('/public-query.json')
 query = json.loads(sys.stdin.read())
 checks = {
+    'tlsTrustLoaded': tls.cert_store_stats()['x509_ca'] > 0 and tls.check_hostname and tls.verify_mode == ssl.CERT_REQUIRED,
+    'unmountedToolsHidden': all(not Path(path).exists() for path in ('/usr/bin/sh', '/usr/bin/env', '/usr/local', '/etc', '/run')),
     'queryOnly': query == {'query': 'synthetic public query'} and json.loads(public.read_text()) == query,
     'privateFileHidden': unreadable(secret),
     'oldCwdHidden': unreadable('secret'),
@@ -44,9 +47,21 @@ path.write_text('worker marker')
 checks['workerWriteSucceeded'] = path.read_text() == 'worker marker'
 print(json.dumps(checks))
 """
-KEYS = {'queryOnly', 'privateFileHidden', 'oldCwdHidden', 'homeHidden',
+KEYS = {'tlsTrustLoaded', 'unmountedToolsHidden', 'queryOnly', 'privateFileHidden', 'oldCwdHidden', 'homeHidden',
         'cwdIsolated', 'environmentCleared', 'privateFdClosed',
         'publicReadOnly', 'workerWriteSucceeded'}
+
+
+# This diagnostic profile is deliberately host-specific; do not widen on failure.
+MOUNTS = (
+    ('/usr/bin/python3.11', '/usr/bin/python3'),
+    ('/usr/lib/python3.11', '/usr/lib/python3.11'),
+    ('/lib64/ld-linux-x86-64.so.2', '/lib64/ld-linux-x86-64.so.2'),
+    *((f'/lib/x86_64-linux-gnu/{name}', f'/lib/x86_64-linux-gnu/{name}')
+      for name in ('libc.so.6', 'libm.so.6', 'libz.so.1', 'libexpat.so.1',
+                   'libssl.so.3', 'libcrypto.so.3')),
+    ('/etc/ssl/certs/ca-certificates.crt', '/public-ca.pem'),
+)
 
 
 def probe(timeout=10):
@@ -55,6 +70,8 @@ def probe(timeout=10):
     executable = shutil.which('bwrap')
     if not executable or not Path('/usr/bin/python3').is_file():
         return {'status': 'unverified', 'reason': 'missing_host_utility'}
+    if any(not Path(source).exists() for source, _ in MOUNTS):
+        return {'status': 'unverified', 'reason': 'unsupported_runtime_profile'}
     with tempfile.TemporaryDirectory(prefix='modelmate-isolation-') as directory:
         root = Path(directory)
         secret, public, marker = root / 'secret', root / 'query.json', root / 'worker-marker'
@@ -64,10 +81,8 @@ def probe(timeout=10):
         public.write_bytes(public_bytes)
         command = [executable, '--unshare-all', '--share-net', '--die-with-parent',
                    '--new-session', '--cap-drop', 'ALL']
-        # shortcut: broad system mounts test capability only; review a minimal runtime allowlist before G3.
-        for system in ('/usr', '/lib', '/lib64'):
-            if Path(system).exists():
-                command += ['--ro-bind', system, system]
+        for source, destination in MOUNTS:
+            command += ['--ro-bind', str(Path(source).resolve()), destination]
         command += ['--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
                     '--ro-bind', str(public), '/public-query.json', '--chdir', '/tmp',
                     '--clearenv', '--setenv', 'PATH', '/usr/bin',

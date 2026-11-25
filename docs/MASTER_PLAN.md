@@ -576,9 +576,12 @@ Host capability increment: `python3 search_isolation_probe.py` runs a fixed,
 synthetic local worker in installed bubblewrap without Codex, inference or HTTP.
 On the tested host it demonstrated hidden private fixture/cwd/home, closed private
 FD, explicit public environment, read-only query input and contained temporary
-writes. Six diagnostic tests pass. This is a capability spike only: broad system
-mounts are not a reviewed production allowlist, network is shared, and neither
-runtime search integration nor G3 isolation/injection evidence is complete.
+writes. Seven diagnostic tests pass. The probe now uses an explicit Debian-style
+x86-64 CPython 3.11 / OpenSSL 3 profile (interpreter, stdlib, selected shared
+libraries and one CA bundle), with no broad /usr, /lib or /etc mount. TLS trust
+loads without a network request. This remains a host-specific capability spike:
+network is shared, and neither runtime search integration nor full G3
+isolation/injection evidence is complete.
 Missing utility/namespace capability fails closed as unverified; no installation,
 privileged fallback or host permission expansion is attempted. See VERIFICATION.
 

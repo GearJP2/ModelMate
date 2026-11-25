@@ -14,7 +14,7 @@ class IsolationProbeTests(unittest.TestCase):
             self.assertTrue(all(report['checks'].values()), report)
             self.assertFalse(report['g3Passed'])
         else:
-            self.assertIn(report['reason'], ('missing_host_utility', 'namespace_or_worker_failed', 'launch_failed'))
+            self.assertIn(report['reason'], ('missing_host_utility', 'unsupported_runtime_profile', 'namespace_or_worker_failed', 'launch_failed'))
 
     def test_missing_utility_does_not_launch(self):
         with patch.object(isolation.shutil, 'which', return_value=None), patch.object(isolation.subprocess, 'run') as run:
@@ -38,6 +38,11 @@ class IsolationProbeTests(unittest.TestCase):
             self.assertIs(kwargs['close_fds'], True)
             self.assertNotIn('--bind', command)
             self.assertIn('--die-with-parent', command)
+            mounts = [command[index + 2] for index, flag in enumerate(command) if flag == '--ro-bind']
+            self.assertNotIn('/usr', mounts)
+            self.assertNotIn('/lib', mounts)
+            self.assertNotIn('/etc', mounts)
+            self.assertIn('/public-ca.pem', mounts)
             return subprocess.CompletedProcess(command, 1, b'', b'private error')
         with patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation.subprocess, 'run', side_effect=run):
             self.assertEqual(isolation.probe()['reason'], 'namespace_or_worker_failed')
@@ -46,3 +51,8 @@ class IsolationProbeTests(unittest.TestCase):
         for value in (0, -1, float('inf'), float('nan')):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 isolation.probe(value)
+
+    def test_missing_profile_never_falls_back_to_broad_mounts(self):
+        with patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation, 'MOUNTS', (('/nonexistent-modelmate-profile', '/runtime'),)), patch.object(isolation.subprocess, 'run') as run:
+            self.assertEqual(isolation.probe()['reason'], 'unsupported_runtime_profile')
+            run.assert_not_called()

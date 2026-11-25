@@ -3712,3 +3712,37 @@ credentialless TLS lookup, injection handling, process-loss cleanup, a second
 host, or automatic query approval/integration. Runtime and hosted search policy
 remain unchanged; G3 remains open. A minimal runtime mount/worker design and
 independent denial/injection checks are the next eligible P13 work.
+
+
+### P13 explicit runtime mount profile (2026-11-25)
+
+The broad mounts used by the preceding capability spike have been removed from
+`search_isolation_probe.py`. The current fixed profile mounts CPython 3.11,
+its stdlib directory, the x86-64 dynamic loader, libc/libm/zlib/expat,
+OpenSSL 3 libraries and a single system CA bundle at `/public-ca.pem` read-only.
+Source symlinks are resolved before binding; destination paths remain fixed.
+Missing profile files return `unsupported_runtime_profile`, without launching a
+worker or falling back to broader mounts. No runtime dependency was added.
+
+`python3 search_isolation_probe.py` passed thirteen checks with bubblewrap 0.8.0,
+parent Python 3.12.0 and worker Python 3.11.2. Probe SHA-256:
+`341466fb38cc3bc7eb7fa5f24354b4720f2e49de7e04c73513545d4ecb83c99b`.
+The worker additionally imports HTTP/TLS stdlib modules, loads CA certificates
+with hostname/certificate verification enabled, and verifies `/usr/bin/sh`,
+`/usr/bin/env`, `/usr/local`, `/etc` and `/run` are absent. It makes no TLS
+connection, DNS lookup, HTTP request, model call or account request.
+
+All seven `test_search_isolation_probe.py` tests passed, including refusal of a
+missing profile and launch-argument checks against broad mount fallback. Compile
+and diff checks passed. Runtime/shared CLI behavior was untouched, so the full
+suite was not rerun for this diagnostic-only increment.
+
+This profile is deliberately specific to the tested host layout, not a portable
+production mount detector. The stdlib directory remains a directory mount and
+has not been reduced to a dependency closure. Certificate presence does not prove
+successful HTTPS or working DNS; no resolver configuration is mounted. Shared
+network is not an egress policy. Fixed trusted code checking selected hidden
+paths does not prove resistance to arbitrary hostile code or prompt injection.
+G3 remains open. Next: prepare and independently test the actual bounded search
+worker and data-only result handling under reviewed mounts; keep automated
+private-context search disabled until its required evidence exists.
