@@ -74,9 +74,12 @@ def deny_effect(event, args):
         side_effects.append(event)
         raise RuntimeError('Unexpected worker side effect')
 sys.addaudithook(deny_effect)
-results = runtime['search_wikipedia'](query['query'], 'en')
-packet = runtime['validate_search_packet'](dict(version=1, source='Wikipedia',
-    host='en.wikipedia.org', query=query['query'], results=results))
+import io
+worker_input = io.BytesIO(json.dumps(dict(version=1, source='Wikipedia',
+    host='en.wikipedia.org', query=query['query'])).encode())
+worker_output = io.BytesIO()
+runtime['run_search_worker'](worker_input, worker_output)
+packet = runtime['validate_search_packet'](json.loads(worker_output.getvalue()))
 checks['runtimeSearchParsed'] = packet['results'] == [dict(title='Public source',
     excerpt=injection, url='https://en.wikipedia.org/?curid=7')]
 checks['runtimeQueryOnly'] = requests == [('GET',

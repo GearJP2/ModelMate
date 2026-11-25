@@ -3804,3 +3804,38 @@ or the whole G3 gate. Shared network and a stdlib directory mount remain scope
 limits. Automated/private-context search stays disabled. The next P13 increment
 must connect a bounded data-only worker protocol and independently verify its
 input/output and failure handling before enabling any new search path.
+
+
+### P13 bounded internal search worker protocol (2026-11-25)
+
+`run_search_worker` in the one-file runtime reads at most 8193 bytes from a binary
+input stream and rejects requests above 8192 bytes. The exact request fields are
+`version`, `source`, `host`, `query`; existing strict packet validation with an
+empty result list checks their values before dispatch. Duplicate keys, nonfinite
+constants, invalid UTF-8/JSON, unknown fields and unsupported source/host values
+cannot dispatch. The worker calls the existing Wikipedia or SearXNG function
+with only the validated query/host. It validates the full resulting packet and
+encodes at most 32768 bytes before writing any output. Search/validation failures
+propagate without a partial result packet; caller owns process/error handling.
+
+The namespace probe now calls this actual binary protocol with its synthetic
+HTTPS peer, rather than calling the search function directly. All seventeen
+capability checks passed. Tested runtime SHA-256:
+`1051a4827f23318a0950b06b7d90a8ea8d865e3de6d8ba9e57383dfa729cd6c4`;
+probe SHA-256:
+`194bbd4f8f1c04d2c03c15466e452dd7008064312a64873bcb3d25e804a711cc`.
+Six new protocol tests and nine probe tests passed, including query-only dispatch
+for both sources, injection remaining text, rejection before dispatch, invalid
+transport results and an otherwise valid oversized output emitting no bytes.
+
+This internal function is currently called by diagnostics/tests only. It does
+not itself grant consent or isolation, and no CLI bypass or automatic workflow
+search has been added. The production parent must enforce query provenance and
+required approval, restricted process launch, deadlines, output collection,
+fresh request/response binding and sanitized failures. The present 8 KiB/32 KiB
+limits bound message data, not remote latency or a hostile process's output.
+Real DNS/TLS and full G3 isolation/injection/lifecycle gates remain open. No model,
+account or network request was made by this increment's verification.
+
+The full offline suite passed all 679 tests in 117.570 seconds, with no skips.
+Runtime/probe compile checks and `git diff --check` passed.

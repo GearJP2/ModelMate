@@ -590,6 +590,14 @@ permission enforcement. Runtime snapshots are hash-bound in the report.
 Missing utility/namespace capability fails closed as unverified; no installation,
 privileged fallback or host permission expansion is attempted. See VERIFICATION.
 
+Internal `run_search_worker` now provides a bounded binary JSON request/response
+protocol, exercised by the namespace probe. Requests contain only version,
+source, host and query (8 KiB maximum); strict validated result packets are
+limited to 32 KiB before output. Extra authority/history fields, duplicate JSON
+keys and malformed inputs fail before transport. Six protocol tests pass. This
+is not a CLI entry point or consent/isolation enforcement; the future approved
+parent launcher must provide those before enabling this path.
+
 Search URL validation is shared between SearXNG candidate filtering and packet
 import/export. Invalid, zero or out-of-range ports are skipped before candidates
 are displayed/exported; valid explicit ports remain passive source data. This

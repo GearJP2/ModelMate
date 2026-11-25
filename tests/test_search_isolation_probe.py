@@ -61,7 +61,7 @@ class IsolationProbeTests(unittest.TestCase):
 
     def test_worker_side_effect_attempt_cannot_pass(self):
         # Audit instrumentation observes a deliberate effect in the trusted test worker.
-        child = isolation.CHILD.replace("results = runtime['search_wikipedia']", "os.system('synthetic-forbidden-command'); results = runtime['search_wikipedia']")
+        child = isolation.CHILD.replace("runtime['run_search_worker'](worker_input, worker_output)", "os.system('synthetic-forbidden-command'); runtime['run_search_worker'](worker_input, worker_output)")
         with patch.object(isolation, 'CHILD', child):
             report = isolation.probe()
         self.assertEqual(report['status'], 'unverified')

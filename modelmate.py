@@ -5762,6 +5762,32 @@ def validate_search_packet(packet):
     return packet
 
 
+def run_search_worker(input_stream, output):
+    """Internal binary protocol for an already-approved query; caller owns isolation/consent."""
+    content = input_stream.read(8193)
+    try:
+        if not isinstance(content, bytes) or len(content) > 8192:
+            raise ValueError
+        request = json.loads(content.decode('utf-8'), object_pairs_hook=_unique_json_object,
+                             parse_constant=_invalid_plan_constant)
+        if not isinstance(request, dict) or set(request) != {'version', 'source', 'host', 'query'}:
+            raise ValueError
+        packet = validate_search_packet(dict(request, results=[]))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ProbeError('Invalid search worker request.') from exc
+    if packet['source'] == 'Wikipedia':
+        results = search_wikipedia(packet['query'], packet['host'].split('.')[0])
+    else:
+        results = search_searxng(packet['query'], packet['host'])
+    packet['results'] = results
+    validate_search_packet(packet)
+    encoded = (json.dumps(packet, ensure_ascii=False) + '\n').encode('utf-8')
+    if len(encoded) > 32768:
+        raise ProbeError('Search worker packet exceeds 32 KiB.')
+    output.write(encoded)
+    output.flush()
+
+
 def run_wikipedia_search(input_stream, output, language, *, json_output=None):
     host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
     return run_confirmed_search(input_stream, output, host, 'Wikipedia',
