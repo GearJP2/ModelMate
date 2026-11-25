@@ -594,13 +594,19 @@ Internal `run_search_worker` now provides a bounded binary JSON request/response
 protocol, exercised by the namespace probe. Requests contain only version,
 source, host and query (8 KiB maximum); strict validated result packets are
 limited to 32 KiB before output. Extra authority/history fields, duplicate JSON
-keys and malformed inputs fail before transport. Six protocol tests pass. This
+keys and malformed inputs fail before transport. Nine protocol tests pass. This
 is not a CLI entry point or consent/isolation enforcement; the future approved
 parent launcher must provide those before enabling this path. Parent response
 validation now rejects malformed/oversized/duplicate-key results and binds all
 version/source/host/query fields to the caller-owned request. The namespace
 probe transfers the result across the process boundary and applies this check
 independently of child-reported booleans; mismatched responses never pass.
+`run_search_process` now bounds stdout while collecting it (32 KiB default,
+64 KiB for the probe envelope), discards stderr, supplies sterile environment and
+closed FDs, and applies one deadline to collection plus process exit. Timeout or
+overflow kills the owned process group without retry. Seven local-process tests
+pass. This collector is not a sandbox/consent policy or a complete approved
+launcher; no new user-facing search path is enabled.
 
 Search URL validation is shared between SearXNG candidate filtering and packet
 import/export. Invalid, zero or out-of-range ports are skipped before candidates

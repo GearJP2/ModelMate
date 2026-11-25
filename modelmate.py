@@ -5762,6 +5762,50 @@ def validate_search_packet(packet):
     return packet
 
 
+def run_search_process(command, content, *, cwd, timeout, output_limit=32768):
+    """Collect a trusted launcher command; caller supplies consent and sandbox policy."""
+    import signal
+
+    if (not isinstance(content, bytes) or len(content) > 8192
+            or not math.isfinite(timeout) or timeout <= 0
+            or type(output_limit) is not int or not 0 < output_limit <= 65536):
+        raise ProbeError('Invalid search process limits.')
+    deadline = time.monotonic() + timeout
+    with tempfile.TemporaryFile() as source:
+        source.write(content);source.seek(0)
+        process = subprocess.Popen(command, stdin=source, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, cwd=cwd, env={'PATH': os.defpath},
+            close_fds=True, start_new_session=True)
+        finished = False
+        try:
+            data = bytearray()
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    for key, _ in selector.select(remaining):
+                        chunk = os.read(key.fd, min(8192, output_limit + 1 - len(data)))
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        data.extend(chunk)
+                        if len(data) > output_limit:
+                            raise ProbeError('Search worker output exceeded its size limit.')
+            code = process.wait(timeout=max(0, deadline - time.monotonic()))
+            finished = True
+            return subprocess.CompletedProcess(command, code, bytes(data), b'')
+        finally:
+            if not finished:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=3)
+            process.stdout.close()
+
+
 def validate_search_worker_response(content, request):
     """Bind one bounded worker response to the exact caller-owned public request."""
     if not isinstance(request, dict) or set(request) != {'version', 'source', 'host', 'query'}:

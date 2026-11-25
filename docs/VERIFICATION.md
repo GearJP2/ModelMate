@@ -3877,3 +3877,46 @@ it is not a hostile-worker streaming output limit. G3 remains open.
 
 Full offline verification passed all 683 tests in 119.191 seconds with no skips.
 The expanded ten-test diagnostic boundary set also passed separately.
+
+
+### P13 bounded process collection and timeout cleanup (2026-11-25)
+
+The namespace probe now uses runtime `run_search_process` instead of unbounded
+`subprocess.run(capture_output=True)`. The collector validates input/limits before
+launch, supplies at most 8 KiB public input from an anonymous temporary file,
+clears the inherited environment except PATH, closes unrelated FDs and starts
+one owned process session. A selector reads at most the output limit plus one
+byte (32 KiB default, 64 KiB for this diagnostic envelope); overflow fails without
+returning partial results. stderr goes directly to DEVNULL and is never captured.
+A monotonic deadline covers stdout collection and waiting for exit, including a
+process that closes stdout but continues running. There is no retry. On overflow,
+timeout or interruption the collector sends SIGKILL to its owned process group
+and waits for the leader. It returns an explicit exit code for the caller to
+check before accepting any response; the probe rejects all nonzero codes.
+
+Seven real local-process tests passed: bounded success/exact boundary/nonzero
+exit, stderr flood without memory accumulation, stdout overflow, timeout with
+stdout open or closed, a descendant holding stdout open, sterile environment and
+private FD closure, and invalid limits not launching a process. The descendant
+check polls only its test-owned child for up to two seconds because SIGKILL
+handling is asynchronous; it observes disappearance or zombie state, not a
+running process. Ten probe tests passed including timeout/launch/overflow failure
+redaction. The actual namespace probe still passes eighteen capability checks.
+
+Tested runtime SHA-256:
+`63efaefea7c405e2cde2e84b3827a1a30eeecf7f667a7d8e473ab20af8ba6ad6`;
+probe SHA-256:
+`dd3e9e9570b6b4f748cf3d193ad52e4b3b135a098df7cb6ffd35c79c08a3d765`.
+Compile and diff checks passed. No model, account or network call was made.
+
+This helper accepts only a trusted caller-constructed launcher command and is not
+a sandbox or approval gate. Process creation itself is not interruptible by the
+selector deadline. A process group is not containment for hostile children that
+create new sessions; successful children that close inherited pipes are not
+independently inspected by this collector. The actual namespace/PID lifecycle
+and approved parent-launch design still need evidence. The fixed bubblewrap
+probe remains the only caller; no automatic/private-context search was enabled,
+and G3 remains open. These limits supersede the preceding capture_output note.
+
+Full offline verification passed all 690 tests in 105.281 seconds, with no skips.
+Runtime/probe compile checks and `git diff --check` passed.

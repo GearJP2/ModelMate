@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 
-from modelmate import ProbeError, _unique_json_object, validate_search_worker_response
+from modelmate import ProbeError, _unique_json_object, run_search_process, validate_search_worker_response
 
 
 CHILD = r"""
@@ -145,13 +145,14 @@ def probe(timeout=10):
             command += ['--', '/usr/bin/python3', '-I', '-S', '-c', CHILD,
                         str(secret), str(marker), str(private_fd.fileno())]
             try:
-                result = subprocess.run(command, input=public_bytes, capture_output=True,
-                                        timeout=timeout, close_fds=True, cwd=root,
-                                        env={'PATH': os.defpath})
+                result = run_search_process(command, public_bytes,
+                    timeout=timeout, cwd=root, output_limit=65536)
             except subprocess.TimeoutExpired:
                 return {'status': 'unverified', 'reason': 'timeout'}
             except OSError:
                 return {'status': 'unverified', 'reason': 'launch_failed'}
+            except ProbeError:
+                return {'status': 'unverified', 'reason': 'output_limit'}
         if result.returncode:
             return {'status': 'unverified', 'reason': 'namespace_or_worker_failed'}
         try:
