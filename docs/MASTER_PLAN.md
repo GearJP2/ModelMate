@@ -614,6 +614,18 @@ shows that this child did not survive normal initial-worker exit. Timeout, faile
 exit or missing readiness cannot pass. This does not cover arbitrary namespace
 escape, server/host death or a production approved search launcher.
 
+Internal parent launcher increment: `run_isolated_confirmed_search` uses the
+existing exact SEARCH-token UI before calling `run_isolated_search`. The latter
+validates the request, creates an owned runtime/resolver snapshot, launches one
+fixed bubblewrap command, requires a successful exit and validates the exact
+response binding. Runtime and probe share the tested mount profile; default TLS
+trust loads from a read-only CA bundle mount. Only bounded numeric nameservers
+are copied from resolver configuration, never search domains/options. Seven
+launcher tests pass including a real namespace with a fixed fake HTTPS peer.
+There is still no CLI/workflow activation or real DNS/TLS evidence; G3 is open.
+This internal prototype supersedes the preceding statement that the parent
+launcher has not yet been implemented, without claiming release approval.
+
 Search URL validation is shared between SearXNG candidate filtering and packet
 import/export. Invalid, zero or out-of-range ports are skipped before candidates
 are displayed/exported; valid explicit ports remain passive source data. This

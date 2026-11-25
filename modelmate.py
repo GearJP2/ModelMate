@@ -5762,6 +5762,85 @@ def validate_search_packet(packet):
     return packet
 
 
+# Fixed tested host profile; unsupported layouts fail without broader mounts.
+SEARCH_MOUNTS = (
+    ('/usr/bin/python3.11', '/usr/bin/python3'),
+    ('/usr/lib/python3.11', '/usr/lib/python3.11'),
+    ('/lib64/ld-linux-x86-64.so.2', '/lib64/ld-linux-x86-64.so.2'),
+    *((f'/lib/x86_64-linux-gnu/{name}', f'/lib/x86_64-linux-gnu/{name}')
+      for name in ('libc.so.6', 'libm.so.6', 'libz.so.1', 'libexpat.so.1',
+                   'libssl.so.3', 'libcrypto.so.3')),
+    ('/etc/ssl/certs/ca-certificates.crt', '/public-ca.pem'),
+    ('/etc/ssl/certs/ca-certificates.crt', '/usr/lib/ssl/cert.pem'),
+)
+
+
+SEARCH_WORKER_CODE = "import runpy,sys; runtime=runpy.run_path('/modelmate.py',run_name='search_worker'); runtime['run_search_worker'](sys.stdin.buffer,sys.stdout.buffer)"
+
+
+def read_search_resolver():
+    import ipaddress
+
+    with open('/etc/resolv.conf', 'rb') as source:
+        content = source.read(16385)
+    if len(content) > 16384:
+        raise ProbeError('Unsupported search resolver configuration.')
+    addresses = []
+    for line in content.decode('ascii').splitlines():
+        fields = line.split('#', 1)[0].split()
+        if fields and fields[0] == 'nameserver':
+            if len(fields) != 2 or '%' in fields[1]:
+                raise ProbeError('Unsupported search resolver configuration.')
+            address = str(ipaddress.ip_address(fields[1]))
+            if address not in addresses:
+                addresses.append(address)
+    if not addresses or len(addresses) > 3:
+        raise ProbeError('Unsupported search resolver configuration.')
+    return ''.join('nameserver ' + address + '\n' for address in addresses).encode('ascii')
+
+
+def run_isolated_search(query, host, source):
+    """Internal launcher for an already-confirmed public query; not exposed by the CLI."""
+    request = dict(version=1, source=source, host=host, query=query)
+    validate_search_packet(dict(request, results=[]))
+    content = json.dumps(request, ensure_ascii=False).encode('utf-8')
+    if len(content) > 8192:
+        raise ProbeError('Search worker request exceeds 8 KiB.')
+    if (not Path('/usr/bin/bwrap').is_file()
+            or any(not Path(path).exists() for path, _ in SEARCH_MOUNTS)):
+        raise ProbeError('Isolated search is unsupported on this host.')
+    try:
+        resolver = read_search_resolver()
+        runtime = Path(__file__).read_bytes()
+        with tempfile.TemporaryDirectory(prefix='modelmate-search-') as directory:
+            root = Path(directory)
+            runtime_copy, resolver_copy = root / 'modelmate.py', root / 'resolv.conf'
+            runtime_copy.write_bytes(runtime)
+            resolver_copy.write_bytes(resolver)
+            command = ['/usr/bin/bwrap', '--unshare-all', '--share-net', '--die-with-parent',
+                       '--new-session', '--cap-drop', 'ALL']
+            for path, destination in SEARCH_MOUNTS:
+                command += ['--ro-bind', str(Path(path).resolve()), destination]
+            command += ['--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
+                '--ro-bind', str(runtime_copy), '/modelmate.py',
+                '--ro-bind', str(resolver_copy), '/etc/resolv.conf', '--chdir', '/tmp',
+                '--clearenv', '--setenv', 'PATH', '/usr/bin', '--setenv', 'LC_CTYPE', 'C.UTF-8',
+                '--', '/usr/bin/python3', '-I', '-S', '-c', SEARCH_WORKER_CODE]
+            result = run_search_process(command, content, cwd=root, timeout=12)
+            if result.returncode != 0:
+                raise ProbeError('Isolated search worker failed; no retry was attempted.')
+            return validate_search_worker_response(result.stdout, request)['results']
+    except subprocess.TimeoutExpired:
+        raise ProbeError('Isolated search timed out; no retry was attempted.') from None
+    except (OSError, ValueError, UnicodeError):
+        raise ProbeError('Isolated search setup failed; no retry was attempted.') from None
+
+
+def run_isolated_confirmed_search(input_stream, output, host, source, *, json_output=None):
+    validate_search_packet(dict(version=1, source=source, host=host, query='preview', results=[]))
+    return run_confirmed_search(input_stream, output, host, source,
+        lambda query: run_isolated_search(query, host, source), json_output=json_output)
+
 def run_search_process(command, content, *, cwd, timeout, output_limit=32768):
     """Collect a trusted launcher command; caller supplies consent and sandbox policy."""
     import signal

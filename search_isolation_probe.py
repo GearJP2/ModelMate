@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 
-from modelmate import ProbeError, _unique_json_object, run_search_process, validate_search_worker_response
+from modelmate import ProbeError, SEARCH_MOUNTS, _unique_json_object, run_search_process, validate_search_worker_response
 
 
 CHILD = r"""
@@ -21,7 +21,7 @@ def unreadable(path):
     except (FileNotFoundError, PermissionError):
         return True
     return False
-tls = ssl.create_default_context(cafile='/public-ca.pem')
+tls = ssl.create_default_context()
 public = Path('/public-query.json')
 query = json.loads(sys.stdin.read())
 checks = {
@@ -117,17 +117,7 @@ KEYS = {'runtimeSearchParsed', 'runtimeQueryOnly', 'injectionRemainsData', 'pack
         'publicReadOnly', 'workerWriteSucceeded'}
 
 
-# This diagnostic profile is deliberately host-specific; do not widen on failure.
-MOUNTS = (
-    ('/usr/bin/python3.11', '/usr/bin/python3'),
-    ('/usr/lib/python3.11', '/usr/lib/python3.11'),
-    ('/lib64/ld-linux-x86-64.so.2', '/lib64/ld-linux-x86-64.so.2'),
-    *((f'/lib/x86_64-linux-gnu/{name}', f'/lib/x86_64-linux-gnu/{name}')
-      for name in ('libc.so.6', 'libm.so.6', 'libz.so.1', 'libexpat.so.1',
-                   'libssl.so.3', 'libcrypto.so.3')),
-    ('/etc/ssl/certs/ca-certificates.crt', '/public-ca.pem'),
-)
-
+MOUNTS = SEARCH_MOUNTS
 
 def probe(timeout=10):
     if not math.isfinite(timeout) or timeout <= 0:

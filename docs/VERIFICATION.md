@@ -3962,3 +3962,62 @@ search stays disabled. Runtime was untouched; full suite was not rerun for this
 diagnostic-only change (last full suite: 690 tests passed).
 
 All seven real-process collector tests also passed; probe compile and diff checks passed.
+
+
+### P13 internal confirmation-bound parent launcher (2026-11-25)
+
+`run_isolated_confirmed_search` wraps the existing exact SEARCH-token query UI.
+EOF, cancellation, stale tokens and incomplete confirmation lines never call the
+launcher or create its snapshots. Once confirmed, `run_isolated_search` validates
+source/host/query and launches exactly one fixed `/usr/bin/bwrap` command; it
+accepts no model-supplied command, mount, environment or approval fields.
+Unsupported utility/runtime layouts fail without installation or fallback.
+
+The parent creates an owned temporary runtime snapshot and a generated resolver
+file, then mounts only those plus the fixed Python/TLS profile read-only. Host
+cwd, project tree, credentials and session metadata are not mounted. Runtime and
+probe now share SEARCH_MOUNTS. The CA bundle is also mounted at the worker's
+default Python/OpenSSL certificate path, so default HTTPS certificate validation
+loads trust without environment overrides. The parent reads at most 16 KiB of
+resolver configuration and emits at most three unique numeric nameserver entries;
+search domains, arbitrary options and comments are not copied. Unsupported or
+malformed resolver configurations fail explicitly. Host configuration is unchanged.
+
+The collector uses a fresh session, sterile environment/closed FDs, a 12-second
+collection deadline, 32 KiB response ceiling and discarded stderr. Nonzero exit,
+timeout, setup failure or invalid response cannot return results. No retry occurs;
+a timed-out public query might already have been sent. On success the parent
+requires the response's exact version/source/host/query binding and returns only
+passive candidate records. Owned snapshots are removed after the process exits.
+The internal callable assumes its caller has confirmed the query; only the wrapper
+implements that consent UI. Neither callable is exposed as a CLI switch or used
+by automatic workflow search yet.
+
+Seven launcher tests passed, covering refusal before setup, exact confirmed query
+forwarding without subsequent history, owned mount/snapshot construction and
+cleanup, invalid/missing capabilities, failure/no-retry behavior, resolver data
+minimization and the actual namespace launch. That real launch uses synthetic
+resolver data and a fixed fake HTTPS peer; an audit hook prevents network socket
+creation. It verifies hidden home/shell, private cwd, absence of a synthetic
+credential environment value, only resolv.conf under /etc, unchanged public query,
+loaded default TLS trust and injection text remaining source data. No real
+resolver, model, account or network call is used by the tests. The standalone
+capability probe still passes nineteen checks and all twelve probe tests pass.
+
+Tested runtime SHA-256:
+`b1f51f67baafbb91e5e22ea3df33d4ed1c639ce0dce89989200c8557825d741e`;
+probe SHA-256:
+`365b6502c8b54ebf5ff3149615009096be97368d6735f2c57e04c878aef02672`.
+Runtime/probe compile and diff checks passed.
+
+Remaining limits: explicit Debian-style x86-64 CPython 3.11/OpenSSL 3 layout,
+shared network without egress enforcement, stdlib directory mount, no real
+DNS/TLS/SearXNG verification, and incomplete parent/server-loss lifecycle evidence.
+The fixed fake peer validates this path offline, not G3 as a whole. Automatic
+private-context search and hosted web remain disabled. Next: review this concrete
+launcher boundary and obtain the required scoped real-network/lifecycle evidence
+before any user-facing activation; unsupported systems must continue to fail
+closed rather than widening mounts or permissions.
+
+Full offline verification passed all 699 tests in 104.128 seconds with no skips.
+The strengthened seven-test launcher set also passed separately; compile and diff checks passed.
