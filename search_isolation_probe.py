@@ -20,7 +20,7 @@ from modelmate import ProbeError, SEARCH_MOUNTS, _unique_json_object, read_workf
 CHILD = r"""
 import json, os, sys, ssl, http.client
 from pathlib import Path
-secret, marker, fd = sys.argv[1:]
+secret, marker, fd, host_pid = sys.argv[1:]
 def unreadable(path):
     try:
         Path(path).read_bytes()
@@ -35,6 +35,9 @@ checks = {
     'unmountedToolsHidden': all(not Path(path).exists() for path in ('/usr/bin/sh', '/usr/bin/env', '/usr/local', '/etc', '/run')),
     'queryOnly': query == {'query': 'synthetic public query'} and json.loads(public.read_text()) == query,
     'privateFileHidden': unreadable(secret),
+    'procRootCannotReadPrivateFile': unreadable('/proc/1/root' + secret),
+    'procCwdCannotReadPrivateFile': unreadable('/proc/1/cwd/secret'),
+    'hostParentPidHidden': not Path('/proc', host_pid).exists(),
     'oldCwdHidden': unreadable('secret'),
     'homeHidden': not Path('/home').exists(),
     'cwdIsolated': os.getcwd() == '/tmp',
@@ -180,7 +183,7 @@ def probe_parent_death(command, runtime_copy, root):
                 supervisor.kill()
             supervisor.wait(timeout=3)
 
-KEYS = {'runtimeSearchParsed', 'runtimeQueryOnly', 'injectionRemainsData', 'packetAuthorityRejected', 'tlsTrustLoaded', 'unmountedToolsHidden', 'queryOnly', 'privateFileHidden', 'oldCwdHidden', 'homeHidden',
+KEYS = {'procRootCannotReadPrivateFile', 'procCwdCannotReadPrivateFile', 'hostParentPidHidden', 'runtimeSearchParsed', 'runtimeQueryOnly', 'injectionRemainsData', 'packetAuthorityRejected', 'tlsTrustLoaded', 'unmountedToolsHidden', 'queryOnly', 'privateFileHidden', 'oldCwdHidden', 'homeHidden',
         'cwdIsolated', 'environmentCleared', 'privateFdClosed',
         'publicReadOnly', 'workerWriteSucceeded'}
 
@@ -217,7 +220,7 @@ def probe(timeout=10):
         with secret.open('rb') as private_fd:
             os.set_inheritable(private_fd.fileno(), True)
             command += ['--', '/usr/bin/python3', '-I', '-S', '-c', CHILD,
-                        str(secret), str(marker), str(private_fd.fileno())]
+                        str(secret), str(marker), str(private_fd.fileno()), str(os.getpid())]
             try:
                 result = run_search_process(command, public_bytes,
                     timeout=timeout, cwd=root, output_limit=65536)

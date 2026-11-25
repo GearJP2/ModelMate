@@ -132,6 +132,21 @@ class IsolationProbeTests(unittest.TestCase):
         if 'checks' in report:
             self.assertFalse(report['checks']['namespaceParentDeathStopsDetachedChild'])
 
+    def test_deliberately_exposed_synthetic_secret_is_detected(self):
+        original=isolation.run_search_process
+        def expose_fixture(command, content, **kwargs):
+            command=command.copy()
+            secret=command[command.index(isolation.CHILD)+1]
+            index=command.index('--')
+            command[index:index]=['--ro-bind',secret,secret]
+            return original(command,content,**kwargs)
+        with patch.object(isolation,'run_search_process',side_effect=expose_fixture):
+            report=isolation.probe()
+        self.assertEqual(report['status'],'unverified')
+        if 'checks' in report:
+            self.assertFalse(report['checks']['privateFileHidden'])
+            self.assertFalse(report['checks']['procRootCannotReadPrivateFile'])
+
 
 class LiveWikipediaProbeTests(unittest.TestCase):
     def input_file(self, text):

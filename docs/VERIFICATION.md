@@ -4113,3 +4113,50 @@ resistance, host shutdown behavior, HTTP server loss behavior, broader native
 workflow recovery, another host or complete G3. The separate prepared live
 verifier, boundary review and remaining injection/activation requirements still
 apply. Runtime CLI/automatic private-context search remain disabled.
+
+
+### P13 proc filesystem boundary and deliberate leak control (2026-11-25)
+
+The fixed diagnostic worker now challenges the owned private fixture through its
+absolute path, `/proc/1/root` plus that path and `/proc/1/cwd/secret`. It also
+checks that the host diagnostic parent's numeric PID is not present under the
+worker's proc mount. The parent PID and synthetic paths are challenge metadata
+only and are not copied into the sanitized report. These are targeted checks of
+the tested PID/filesystem namespace, not proof about every possible proc entry.
+
+All twenty-three default capability checks passed. A real negative control adds
+a read-only bind of only the owned synthetic secret into the challenged namespace.
+That control is unverified with direct private-file and proc-root checks both
+false, showing that readable secrets cannot silently produce a passing report.
+It changes no runtime mount policy and never prints the fixture bytes. Later
+lifecycle challenges are skipped when the privacy checks have already failed.
+
+The actual internal launcher test now creates a separate owned private fixture
+outside the mounted runtime/resolver snapshots and actively attempts all three
+file routes from its fixed fake-HTTPS worker. The reads fail under the launcher's
+actual mounts as well. The injected test code knows this synthetic fixture path
+only to challenge the boundary; normal worker input remains the query-only
+protocol, with no private project path/history supplied. No real secret, prompt,
+credential, account or network request is used.
+
+All twenty diagnostic tests passed in 3.871 seconds, and all seven launcher tests
+passed in 0.293 seconds. Probe SHA-256:
+`85335a4c726e6da149f94e934ac5b606fa6adaa40886c1da8df869002409f05d`.
+Runtime remains unchanged at:
+`b1f51f67baafbb91e5e22ea3df33d4ed1c639ce0dce89989200c8557825d741e`.
+Compile and diff checks passed; full suite was not repeated for diagnostic/test/
+documentation-only changes (last full suite: 699 tests passed).
+
+Boundary review at this revision:
+
+| Boundary | Concrete enforcement/evidence | Remaining limitation |
+| --- | --- | --- |
+| Request | Exact UI confirmation before launcher setup; strict source/host/query-only schema | Automatic query provenance/entry is not enabled |
+| Files/processes | Fixed read-only runtime/profile/resolver snapshots; fresh PID namespace; closed FDs; direct/proc leak control; scoped normal/parent-death challenges | Host-specific profile, stdlib directory mount and broader adversarial/host failure coverage remain |
+| Result | Bounded collection, strict schema, exact parent-owned request binding; no result URL fetch or grant/evidence creation | No real DNS/TLS/SearXNG result yet; imported sources are not fact verification |
+
+The review supports continuing scoped verification of this internal prototype;
+it does not authorize activation or certify G3. Hosted web and automatic
+private-context search remain disabled. Next eligible P13 evidence is the
+prepared explicitly authorized live DNS/TLS command and the remaining adversarial
+input/HTTP-failure checks; unrelated native lifecycle/release gates remain open.

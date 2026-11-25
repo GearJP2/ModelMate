@@ -576,7 +576,7 @@ Host capability increment: `python3 search_isolation_probe.py` runs a fixed,
 synthetic local worker in installed bubblewrap without Codex, inference or HTTP.
 On the tested host it demonstrated hidden private fixture/cwd/home, closed private
 FD, explicit public environment, read-only query input and contained temporary
-writes. Nineteen diagnostic tests pass. The probe now uses an explicit Debian-style
+writes. Twenty diagnostic tests pass. The probe now uses an explicit Debian-style
 x86-64 CPython 3.11 / OpenSSL 3 profile (interpreter, stdlib, selected shared
 libraries and one CA bundle), with no broad /usr, /lib or /etc mount. TLS trust
 loads without a network request. This remains a host-specific capability spike:
@@ -619,6 +619,13 @@ harness duplicates the worker pipe through the owned supervisor's /proc FD befor
 killing it; EOF must arrive within two seconds. This passes with die-with-parent
 and fails in a real negative control without that flag. This is scoped parent
 process-loss evidence only, not host failure or full G3 completion.
+Filesystem boundary follow-up: direct fixture reads, /proc/1/root and PID 1 cwd
+reads fail in both the standalone probe and actual launcher fake-peer test. The
+host diagnostic parent's PID is absent from the worker's proc namespace. A real
+negative control deliberately mounts only the owned synthetic secret and is
+rejected for both direct and proc-root visibility. The probe now has 23 checks;
+seven launcher tests and twenty diagnostic tests pass. These are scoped offline
+boundary checks, not a completed G3 gate.
 
 Internal parent launcher increment: `run_isolated_confirmed_search` uses the
 existing exact SEARCH-token UI before calling `run_isolated_search`. The latter
