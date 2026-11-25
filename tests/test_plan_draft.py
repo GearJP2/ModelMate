@@ -135,6 +135,51 @@ class PlanDraftTests(unittest.TestCase):
         self.assertFalse(self.metrics()['proposalSaved'])
         self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)
 
+    def test_interrupt_after_dispatch_requests_native_stop_without_publication(self):
+        with patch.object(NativeWorkflowConnection,'drain',side_effect=KeyboardInterrupt),self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN))
+        records=self.records()
+        turns=[row for row in records if row.get('method')=='turn/start']
+        stops=[row for row in records if row.get('method')=='turn/interrupt']
+        self.assertEqual(len(turns),1)
+        self.assertEqual(len(stops),1)
+        self.assertEqual(stops[0]['params'],dict(threadId='thread',turnId='1'))
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+
+    def test_stop_failure_does_not_replace_keyboard_interrupt_or_retry(self):
+        with patch.object(NativeWorkflowConnection,'drain',side_effect=KeyboardInterrupt),patch.object(
+                NativeWorkflowConnection,'interrupt',side_effect=ProbeError('synthetic disconnect')) as stop:
+            with self.assertRaises(KeyboardInterrupt):self.draft(json.dumps(PLAN))
+        stop.assert_called_once()
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)
+
+    def test_interrupt_before_connection_has_no_turn_to_stop(self):
+        with patch.object(NativeWorkflowConnection,'connect',side_effect=KeyboardInterrupt),patch.object(
+                NativeWorkflowConnection,'interrupt') as stop,self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN))
+        stop.assert_not_called()
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+        self.assertFalse(self.trace.exists())
+
+    def test_interrupt_after_completed_observation_still_does_not_publish(self):
+        drain=NativeWorkflowConnection.drain
+        def completed_then_interrupt(backend):
+            drain(backend)
+            raise KeyboardInterrupt
+        with patch.object(NativeWorkflowConnection,'drain',completed_then_interrupt),self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN))
+        self.assertFalse(self.destination.exists())
+        report=self.metrics()
+        self.assertFalse(report['proposalSaved'])
+        self.assertEqual(report['planningTurnMeasurements'][0]['terminalStatus'],'completed')
+        records=self.records()
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in records),1)
+        self.assertFalse(any(row.get('method')=='turn/interrupt' for row in records))
+
     def test_missing_usage_stays_unknown_without_prompt_or_native_ids(self):
         self.assertEqual(self.draft(json.dumps(PLAN)),0)
         report=self.metrics()

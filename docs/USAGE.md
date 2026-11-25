@@ -451,6 +451,13 @@ invalid/missing/multiple output, permission/quota unknown หรือ disconnec
 โดยไม่ retry หรือเริ่มงานตามข้อเสนอ การได้ draft ไม่ได้แปลว่าเกณฑ์งานผ่าน
 planning turn นี้เป็น ephemeral และยังไม่มี resume
 
+ระหว่าง planning ใช้ Ctrl+C เพื่อยกเลิก ถ้าทราบ active turn แล้วจะขอ
+native interrupt หนึ่งครั้งก่อนปิด connection; ไม่ retry และไม่ส่งต่อไป work
+หากยกเลิกก่อน publish จะไม่สร้าง draft แม้รับ completed event มาแล้ว
+interrupt acknowledgement ไม่ยืนยันว่างานฝั่งบริการหยุด ถ้า turn/start ยังไม่คืน
+turn ID จะส่ง interrupt แบบเจาะจงไม่ได้และผลอาจไม่ทราบ ไฟล์ที่ publish
+สำเร็จก่อน Ctrl+C ยังคงอยู่ `CANCEL` ใช้ที่คำถามยืนยันก่อน START เท่านั้น
+
 อ่าน goal/criteria/steps/reasons ในไฟล์ก่อนใช้ `--workflow new-plan.json` พร้อม
 bindings ของทุก role ที่แผนใช้ หากมี clarifications ให้ตอบผ่าน `--clarification`
 ให้ครบ หรือใช้ --execute-workflow เพื่อตอบแบบ interactive ก่อน START การ execute ยังต้อง opt-in/START และผ่าน model/tool gates

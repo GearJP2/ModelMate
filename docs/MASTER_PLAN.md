@@ -346,6 +346,14 @@ reused in later turns. A fake-server regression reproduced silent draft
 publication before the fix and now verifies no publication or retry. Planning
 and native-workflow targeted tests: 34 passed. No live gate is advanced.
 
+P06/P12 planning Ctrl+C increment (2026-11-26), MOCK_VERIFIED: a KeyboardInterrupt
+uses the existing host cancellation path before closing the planning backend.
+A known active bound turn receives one interrupt request; completed/unbound turns
+are not targeted and failed stop requests do not replace cancellation or retry.
+No unpublished draft or work handoff follows cancellation, even after an observed
+completion. Forty planning/handoff/metrics tests passed. Missing turn IDs and
+actual remote stopping remain unverified; no live gate is advanced.
+
 ไฟล์: modelmate.py, tests/test_routing.py, synthetic plan fixtures
 อัปเดตตามผู้ใช้ 2026-11-18: ไม่ทำ decision model/classifier แยก
 ใช้ validator ตาม section 5 กับ explicit plan/role bindings และ controller policy

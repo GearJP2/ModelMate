@@ -97,6 +97,18 @@ class PlannedWorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.traces),1)
         self.assertEqual(len(self.turns()),1)
 
+    def test_keyboard_interrupt_during_planning_stops_without_work_handoff(self):
+        with patch.object(NativeWorkflowConnection,'drain',side_effect=KeyboardInterrupt):
+            result,remaining=self.invoke('START\nSTART\n',chat=lambda *a,**k:self.fail('no work handoff'))
+        self.assertEqual(result,130)
+        self.assertEqual(remaining,b'START\n')
+        self.assertFalse(self.path.exists())
+        self.assertEqual(len(self.traces),1)
+        self.assertEqual(len(self.turns()),1)
+        records=[json.loads(line) for line in self.traces[0].read_text().splitlines()]
+        self.assertEqual(sum(row.get('method')=='turn/interrupt' for row in records),1)
+        self.assertIsNone(self.timing()['workflowWallSeconds'])
+
     def test_work_bindings_are_required_and_validated_before_planning(self):
         for bindings in ([],['economy=synthetic-economy'],['standard=one','standard=two'],['invalid=one']):
             with self.subTest(bindings=bindings):

@@ -4675,3 +4675,33 @@ account, quota or HTTP request was used. Runtime SHA-256:
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 772 tests in 121.004 seconds, with no skips.
+
+### P06/P12 planning KeyboardInterrupt cancellation (2026-11-26)
+
+Inspection found that planning closed its owned backend on KeyboardInterrupt
+without requesting a native interrupt for an already bound active turn. Two
+regressions failed before the change: no interrupt RPC was traced, and the
+existing native stop method was never called. The planning entry now calls the
+existing host cancel action before its existing cleanup, then re-raises the
+original KeyboardInterrupt. CLI cancellation remains exit 130. A stop-request
+failure cannot replace the cancellation or cause automatic replay.
+
+`PYTHONPATH=tests python3 -m unittest test_plan_draft test_planned_workflow
+test_metrics -q` passed 40 tests. New fake-server cases cover cancellation before
+connect (no turn/interrupt), after a bound dispatch (one exact turn/interrupt),
+failed interrupt (one attempt, original KeyboardInterrupt), and after an already
+observed completion (no extra interrupt, no draft publication). The combined
+CLI case verifies exit 130, no work handoff, no saved draft, null workflow timing
+and preservation of the next phase's unread START. No asynchronous input reader
+or command parser was added to planning, so handoff confirmations remain intact.
+
+This is MOCK_VERIFIED only. Interrupt acknowledgement is not proof of remote
+termination, and a lost/unreturned turn/start ID cannot be targeted by guessing.
+Cancellation before publication prevents a new draft; an already published file
+is not rolled back. There is no planning resume, textual cancellation after START,
+or live stop evidence in this increment. No model/account/quota/HTTP request was
+used. Compile/diff checks passed. Tested runtime SHA-256:
+`c70fe79fa2e650ec1a5d74cef12ca386219d976d6b2e474399e16b3e0a63d1ca`.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 777 tests in 125.278 seconds, with no skips.

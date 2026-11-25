@@ -5472,6 +5472,13 @@ def run_plan_draft(prompt, model, effort, destination, input_stream, output):
         output.write('Validated draft saved · ' + str(len(plan['steps'])) + ' steps · '
             + str(len(plan['clarifications'])) + ' clarifications · no execution or verification grant\n')
         return 0
+    except KeyboardInterrupt:
+        if backend.host is not None:
+            try:
+                backend.host({'action': 'cancel', 'task_id': controller.task_id})
+            except (Exception, KeyboardInterrupt):
+                pass  # A failed stop request must not replace the user's cancellation.
+        raise
     finally:
         try:
             backend.close()
