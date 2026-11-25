@@ -4516,3 +4516,56 @@ implemented/offline-tested local clock reporting, not new live evidence.
 Full offline verification passed all 758 tests in 143.964 seconds, with no skips.
 Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
 `3300379db176436587e0f163c95e05abdc5fcc747b1372d3af85a2d8dc9407a8`.
+
+
+### P13 authorized isolated Wikipedia smoke, unverified (2026-11-26)
+
+The user explicitly authorized the prepared one-shot command and entering its
+fresh confirmation token:
+
+```sh
+python3 search_isolation_probe.py --live-wikipedia en
+```
+
+It ran once with the fixed public fixture query, exited 1 and reported
+status=unverified, reason=isolated_lookup_failed, searchLaunches=1,
+modelTurnsRequested=0 and g3Passed=false. No retry occurred. This is not a passed
+DNS/TLS, result or isolation gate. The original generic worker failure does not
+identify its exact failing layer, and is not proof of a completed remote request.
+No account/model call was made, and no private prompt or source result is stored.
+
+Exact attempted runtime SHA-256:
+`3300379db176436587e0f163c95e05abdc5fcc747b1372d3af85a2d8dc9407a8`;
+verifier SHA-256:
+`85335a4c726e6da149f94e934ac5b606fa6adaa40886c1da8df869002409f05d`.
+Observed local versions: bubblewrap 0.8.0, parent Python 3.12.0, worker Python
+3.11.2. No live Codex CLI/version compatibility is inferred from this HTTP mode.
+
+Separate local socket-creation probes made no bind/connect/DNS/send call and
+observed PermissionError errno 1 (EPERM) for IPv4 stream and datagram sockets in
+the current tool execution profile. This establishes a missing host capability
+in that profile, not the exact original worker exception or a service outage.
+Host/organization restrictions were not widened and no proxy/privileged fallback
+was attempted. A normal Terminal may have different capabilities; its outcome
+would need a separately scoped real run, not reuse of this failed result.
+
+The updated diagnostic performs a no-connect TCP/UDP creation preflight after
+exact confirmation. If neither tested IPv4/IPv6 family has both socket types, it
+returns unverified/host_socket_capability_unavailable with zero search launches.
+Every created descriptor is closed. A successful creation check alone cannot
+verify routing, DNS, TLS or G3; the real lookup would still have to succeed.
+
+All twenty-three diagnostic tests passed, including refusal before search launch,
+no connect/bind/send/resolve in the capability test and explicit socket denial.
+A separate direct call of only that local capability helper returned false with
+zero network requests; it was not another lookup or invocation of live mode.
+Updated verifier SHA-256:
+`63eaaca040b610a3afedf0258fb390753468f6cc50ea595593f9b93f983f467d`.
+Compile and diff checks passed. Runtime was untouched; full suite was not rerun
+for this diagnostic-only increment (last full runtime suite: 758 tests passed).
+
+Remaining P13 capability/evidence: an authorized environment allowing the
+required socket creation and endpoint access, real isolated DNS/TLS/result
+verification, live SearXNG and automatic query-provenance/handoff integration.
+Neither the failed authorized smoke nor these offline checks satisfy full G3 or
+release readiness. Hosted web/automatic private-context search remain disabled.

@@ -646,11 +646,21 @@ resume missing thread/account mismatch, duplicate delete, partial delete failure
 
 ### P13 — Private-context web search
 
+2026-11-26 scoped live attempt: user authorized one isolated English Wikipedia
+fixture lookup with no model/account call or retry. It returned unverified /
+isolated_lookup_failed (exit 1), not a G3 pass. Separate no-connect local probes
+observed TCP/UDP socket creation denied with EPERM in this execution profile.
+The verifier now checks socket creation only after confirmation and stops before
+worker launch if neither tested address family has TCP/UDP capability. It never
+connects/sends/resolves during that preflight, widens policy or retries a lookup.
+Twenty-three diagnostic tests pass. Current-profile isolated DNS/TLS evidence
+remains unavailable; other normal-Terminal/live and integration gates stay open.
+
 Host capability increment: `python3 search_isolation_probe.py` runs a fixed,
 synthetic local worker in installed bubblewrap without Codex, inference or HTTP.
 On the tested host it demonstrated hidden private fixture/cwd/home, closed private
 FD, explicit public environment, read-only query input and contained temporary
-writes. Twenty diagnostic tests pass. The probe now uses an explicit Debian-style
+writes. Twenty-three diagnostic tests pass. The probe now uses an explicit Debian-style
 x86-64 CPython 3.11 / OpenSSL 3 profile (interpreter, stdlib, selected shared
 libraries and one CA bundle), with no broad /usr, /lib or /etc mount. TLS trust
 loads without a network request. This remains a host-specific capability spike:

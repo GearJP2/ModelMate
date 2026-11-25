@@ -149,6 +149,10 @@ class IsolationProbeTests(unittest.TestCase):
 
 
 class LiveWikipediaProbeTests(unittest.TestCase):
+    def setUp(self):
+        capability=patch.object(isolation,'probe_socket_creation',return_value=True)
+        capability.start();self.addCleanup(capability.stop)
+
     def input_file(self, text):
         stream = tempfile.TemporaryFile('w+')
         self.addCleanup(stream.close)
@@ -195,3 +199,28 @@ class LiveWikipediaProbeTests(unittest.TestCase):
         with patch.object(isolation,'probe',side_effect=AssertionError('offline probe not selected')),patch.object(isolation,'live_wikipedia',return_value={'status':'cancelled'}) as live,patch('sys.stdout',new_callable=io.StringIO):
             self.assertEqual(isolation.main(['--live-wikipedia','en']),2)
             self.assertEqual(live.call_args.args[0],'en')
+
+    def test_unavailable_socket_capability_stops_before_search_launch(self):
+        with patch.object(isolation.secrets,'token_hex',return_value='deadbeef'),patch.object(isolation,'probe_socket_creation',return_value=False),patch.object(isolation,'run_isolated_search') as launch:
+            report=isolation.live_wikipedia('en',self.input_file('SEARCH deadbeef\n'),io.StringIO())
+        self.assertEqual(report['status'],'unverified')
+        self.assertEqual(report['reason'],'host_socket_capability_unavailable')
+        self.assertEqual(report['searchLaunches'],0)
+        self.assertEqual(report['modelTurnsRequested'],0)
+        launch.assert_not_called()
+
+
+class SocketCapabilityTests(unittest.TestCase):
+    def test_capability_probe_never_connects_binds_sends_or_resolves(self):
+        with patch('socket.socket') as create,patch('socket.getaddrinfo',side_effect=AssertionError('no DNS')):
+            self.assertTrue(isolation.probe_socket_creation())
+            self.assertEqual(create.call_count,2)
+            handle=create.return_value.__enter__.return_value
+            for method in ('connect','connect_ex','bind','send','sendto'):
+                getattr(handle,method).assert_not_called()
+            self.assertEqual(create.return_value.__exit__.call_count,2)
+
+    def test_socket_creation_denial_stays_unavailable_without_fallback(self):
+        with patch('socket.socket',side_effect=PermissionError('synthetic host restriction')) as create:
+            self.assertFalse(isolation.probe_socket_creation())
+            self.assertEqual(create.call_count,2)
