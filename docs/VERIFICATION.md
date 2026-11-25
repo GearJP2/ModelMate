@@ -4613,3 +4613,42 @@ G1/G4/G5 and broader live/release gates remain open.
 Full offline verification passed all 766 tests in 121.080 seconds, with no skips.
 Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
 `a903c53a6371a44d6ecfca0702ab63fd097d4871f7fc741f9bd7318d66ce2d7f`.
+
+
+### P10 cancel revokes Auto despite late native completion (2026-11-26)
+
+A new regression reproduced a stop race in the experimental Auto scheduler:
+/cancel requested interruption and set UI stopping, but a subsequent native
+completed event cleared stopping and moved the attempt into CHECKING. The old
+process Auto opt-in then permitted evaluation and a following attempt, contrary
+to the user's stop. The controller's completed observation itself was valid;
+rewriting it to interrupted or discarding known results would be incorrect.
+
+The shared ChatShell workflow cancellation path now revokes automatic advancement
+immediately. Exit, EOF and the selector's KeyboardInterrupt cancellation use the
+same path. Valid UI-token negative tool/model/pause choices also revoke the
+process opt-in before their existing response handlers. Invalid/stale tokens still
+fail validation before any new opt-in mutation. This changes no native tool grant,
+model policy, retry counter, controller terminal semantics or persistence schema.
+Known completion/evidence remain available for explicit manual check/next/finish;
+mode changes or ordinary continue do not silently restore the revoked opt-in.
+
+Twenty Auto tests passed. New cases cover cancel while running followed by a
+completed native turn, stopping before the first dispatch, stopping after accepted
+steps but before criterion mapping, exit/EOF with late completion, invalid versus
+valid pause tokens and declining a model escalation. The former race test failed
+before the change and now observes only one dispatch, no step advancement and no
+DONE after late completion. Existing quota-continue, correction-limit, unknown
+and stale-evidence behavior remains covered. Twenty-seven workflow UI and nine
+native-permission tests passed separately. Compile/diff checks passed; no live
+model/account/quota or HTTP request was used.
+
+This fixes process-local Auto continuation after explicit user stop. It does not
+prove the native command was prevented from completing, roll back side effects,
+implement planning-turn textual cancellation after START, or close the broader
+live stop/process-loss/permission gates. The separate planning inspection exposed
+this Auto race; planning proposal publication behavior was not changed.
+
+Full offline verification passed all 771 tests in 119.391 seconds, with no skips.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`79e1d9ee5f2994565f6970f04622c69c30771aa659cd220cda7f781ce008b76d`.

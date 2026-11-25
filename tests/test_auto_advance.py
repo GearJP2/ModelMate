@@ -233,3 +233,62 @@ class AutoAdvanceTests(unittest.TestCase):
         self.assertFalse(shell.automatic_workflow)
         self.assertIn('revalidation',shell.output.getvalue())
         dispatch.assert_not_called()
+
+    def test_cancel_revokes_auto_even_when_native_completion_arrives_late(self):
+        self.setup_flow(steps=2,finish_references=['1=1.1,2.1'])
+        self.shell.tick()
+        self.shell.line('/cancel')
+        self.finish()
+        self.assertEqual(self.c.snapshot()['active_attempt']['status'],'completed')
+        self.shell.tick();self.shell.tick();self.shell.tick()
+        self.assertEqual(self.dispatch.call_count,1)
+        self.assertFalse(self.shell.automatic_workflow)
+        self.assertEqual(self.c.snapshot()['step_index'],0)
+        self.assertNotEqual(self.c.state,'DONE')
+
+    def test_cancel_between_steps_prevents_first_dispatch_and_final_mapping(self):
+        self.setup_flow(finish_references=['1=1.1'])
+        self.shell.line('/cancel');self.shell.tick()
+        self.dispatch.assert_not_called()
+        self.setup_flow(finish_references=['1=1.1'])
+        self.shell.tick();self.finish();self.shell.tick()
+        self.assertEqual(self.c.snapshot()['step_index'],1)
+        self.shell.line('/cancel');self.shell.tick()
+        self.assertNotEqual(self.c.state,'DONE')
+        self.assertEqual(self.dispatch.call_count,1)
+        self.assertTrue(self.c.snapshot()['steps'][0]['evidence'])
+
+    def test_exit_and_eof_revocation_survives_late_native_completion(self):
+        for eof in (False,True):
+            with self.subTest(eof=eof):
+                self.setup_flow(steps=2)
+                self.shell.tick()
+                if eof:self.shell.cancel(exit_after=True)
+                else:self.shell.line('/exit')
+                self.finish();self.shell.tick()
+                self.assertFalse(self.shell.automatic_workflow)
+                self.assertTrue(self.shell.closed)
+                self.assertEqual(self.dispatch.call_count,1)
+
+    def test_valid_pause_choice_revokes_auto_but_invalid_token_does_not(self):
+        self.setup_flow()
+        self.c.pause();self.shell.show_workflow()
+        token=self.c.snapshot()['pause_token']
+        self.shell.line('/pause stale')
+        self.assertTrue(self.shell.automatic_workflow)
+        self.shell.line('/pause '+token)
+        self.assertFalse(self.shell.automatic_workflow)
+        self.shell.tick();self.dispatch.assert_not_called()
+
+    def test_declining_a_model_request_revokes_auto_without_granting_tools(self):
+        self.setup_flow()
+        revised=copy.deepcopy(PLAN);revised['steps'][0]['role']='strong'
+        self.c.revise_step(json.dumps(revised))
+        self.c.change_mode('ask_to_escalate')
+        self.host(dict(action='next',task_id=self.c.task_id))
+        self.assertEqual(self.c.state,'AWAITING_MODEL_APPROVAL')
+        token=self.c.snapshot()['model_request']['token']
+        self.shell.line('/decline '+token)
+        self.assertFalse(self.shell.automatic_workflow)
+        self.dispatch.assert_not_called()
+        self.assertFalse(self.c._approvals._grants)

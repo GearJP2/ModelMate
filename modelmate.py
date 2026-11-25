@@ -2225,6 +2225,7 @@ class ChatShell:
     def cancel(self, exit_after=False):
         self.recheck_stop_pending = None
         if self.workflow is not None:
+            self.automatic_workflow = False
             self.recheck_pending = None
             self._workflow_check_attempt = None
             self.exiting = self.exiting or exit_after
@@ -2693,6 +2694,9 @@ class ChatShell:
                 if ((len(values) != 1 and not start_now) or self.pending is None
                         or values[0] != self.pending['token']):
                     raise ProbeError('Invalid or stale workflow choice token.')
+                if ((self.pending['kind'] in ('workflow_tool', 'workflow_model') and cmd in ('/decline', '/pause'))
+                        or (self.pending['kind'] == 'workflow_pause' and cmd == '/pause')):
+                    self.automatic_workflow = False
                 if self.pending['kind'] == 'workflow_tool' and cmd in ('/approve', '/decline', '/pause'):
                     if start_now:
                         raise ProbeError('Tool approval accepts once only; --next is a model-approval option.')

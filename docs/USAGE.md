@@ -513,6 +513,12 @@ account/quota/catalog/model gates ใหม่ทุก attempt ไม่อน�
 mapping เกณฑ์สำเร็จจะไม่เดินต่อเอง หากไม่ระบุ --criterion-map ยังต้องใช้ `/finish`
 กับ accepted evidence เพื่อรับรองเกณฑ์งาน ไม่ใช้ข้อความโมเดลว่า tests passed แทนหลักฐาน
 
+`/cancel`, `/exit` และ EOF ปิด automatic advancement ใน process นี้ทันที
+แม้ native จะส่ง completed ตามมาภายหลัง จะไม่ auto-check/correct/dispatch หรือ apply
+criterion map ต่อเอง ผล native ที่ทราบยังเก็บตามจริง และผู้ใช้ตรวจ/เดินต่อด้วยคำสั่งเดิมได้
+negative choice `/decline` หรือ `/pause` ที่ตรงกับ token/request ปัจจุบันก็ปิด Auto เช่นกัน
+การ /continue หรือเปลี่ยน model mode ไม่เปิด process opt-in กลับเอง token เก่ายังถูกปฏิเสธ
+
 `/cancel`, `/exit` และ EOF ไม่อนุญาตงานเพิ่ม การส่งงานที่ล้มเหลว/ผลไม่แน่ชัด
 จะปิด automatic advancement ใน process นี้โดยไม่ replay ต้องตรวจสถานะก่อนทำต่อ
 flag นี้ไม่ถูกบันทึกหรือ restore และใช้ร่วมกับ `--resume-workflow` ไม่ได้

@@ -481,6 +481,16 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 
 ### P10 — Workflow และ correction budget
 
+Auto stop/late-completion correction (2026-11-26): shared workflow cancel now
+revokes the process-local automatic advancement opt-in before requesting native
+stop. Exit/EOF/KeyboardInterrupt share that path. Valid negative model/tool/pause
+choices also revoke Auto after UI token validation. A late native completed event
+is still recorded truthfully, but cannot reauthorize auto checks, corrections,
+next-step dispatch or criterion-map completion. Manual commands remain available
+under existing gates; no automatic reenabling or checkpoint/schema change exists.
+Twenty Auto, twenty-seven workflow UI and nine native-permission tests pass.
+This is offline race evidence, not a new live cancellation gate pass.
+
 User-approved Auto completion increment: --criterion-map MAP_JSON is accepted
 only with new explicit Auto advancement. Its bounded version-1 schema maps every
 success criterion to unique declared STEP.CHECK references, is previewed before
