@@ -4738,3 +4738,30 @@ Tested runtime SHA-256:
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 780 tests in 120.884 seconds, with no skips.
+
+### P16 release capability revalidation (2026-11-26)
+
+At feature commit `e28be63`, `git status -sb` was clean and synchronized with
+its remote branch. `codex --version` returned `codex-cli 0.172.0` (with a
+read-only PATH-alias warning); no App Server or model was started. The runtime
+SHA-256 remains `27f3568ed35d617a0fc7c04f0b0b79ee40ba1e8a320cee443e4274ea897b72f1`;
+verifier SHA-256 is `9da8763da620333778ea00c579b814ba4ce902943933e6c5702e6ed7acbe429e`.
+
+The Docker command resolves to a Desktop WSL wrapper, but
+`docker version --format '{{.Server.Version}}'` exited 1 and reported that WSL
+integration is not enabled for this distro. It returned no engine version.
+This establishes an unavailable local route to a clean container test, not an
+installation failure of ModelMate or proof that every possible external
+environment is unavailable. No image was pulled, container launched, dependency
+installed or host setting changed. Existing two-Python same-host installation
+evidence remains scoped to that host; independent second-environment evidence
+is still missing.
+
+The current requirement checklist was reread against the actual CLI paths and
+prepared probes. Default plain-prompt workflow entry and automatic search are
+still unimplemented/gated; comparative model policy, live permission/loss/quota
+evidence and real/held-out evaluation remain open. Offline planning cancellation
+improvements do not close these release requirements. The prepared bounded
+command approval probe is awaiting explicit authorization; no inference or HTTP
+request was made. Documentation-only revalidation does not rerun the full suite
+or alter the previous 780-test result.

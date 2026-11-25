@@ -21,6 +21,18 @@ must be read with its exact version and limitations in VERIFICATION.md. Recent
 source-check changes have offline evidence only. No new live test was run for
 this audit.
 
+2026-11-26 revalidation at `e28be63`: installed Codex reports 0.172.0. The
+current planning cancellation path requests one known-turn interrupt, waits up
+to five additional seconds for a matching terminal event, and reports unknown
+on missing/invalid observations; its evidence is offline only (780 tests passed
+at the recorded runtime hash). This does not transfer legacy live evidence to
+the current source. Docker's WSL integration is unavailable in this distro, so
+`docker version --format '{{.Server.Version}}'` exited 1 without reaching an
+engine. No second clean environment was provisioned or tested. Enabling host
+integration, installing dependencies or widening native permissions was not
+attempted. The next prepared permission probe still needs explicit live-command
+authorization; no subscription turn was requested by this revalidation.
+
 | Requirement | Current implementation / offline evidence | Missing implementation or release proof |
 | --- | --- | --- |
 | R01 subscription only | ChatGPT/provider validation and quota admission; test_doctor.py, test_quota.py, test_live.py | G4 account/billing limitations remain; preflight is not a service spending cap. |

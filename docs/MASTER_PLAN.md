@@ -854,6 +854,12 @@ evidence remain pending.
 
 ### P16 — Release candidate และ evaluation
 
+2026-11-26 capability revalidation, IN_PROGRESS: the requirement/release checklist
+was checked at `e28be63` (780 offline tests). Codex is still 0.172.0; Docker WSL
+integration is unavailable, so no independent clean environment was tested.
+The prepared bounded G2 command-approval probe awaits explicit live authorization.
+No release gate, live compatibility claim or evaluation result was advanced.
+
 C2 authoring fixture increment: `routing-pilot.py prepare --case cli` prepares
 two identical row-printing CLI projects and a hash-bound frozen checker. The
 model must implement --limit N and retain default/help/error behavior; this is
