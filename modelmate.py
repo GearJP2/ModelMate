@@ -5176,6 +5176,24 @@ def workflow_statistics(controller, started_at, *, now=None):
             'reportedModels': None, 'tokenUsage': None}
 
 
+def report_planned_workflow_timing(output, started_at, planning_end, workflow_end=None):
+    ended_at = planning_end if workflow_end is None else workflow_end
+    if (any(type(value) not in (int, float) or not math.isfinite(value)
+            for value in (started_at, planning_end, ended_at))
+            or not started_at <= planning_end <= ended_at):
+        raise ProbeError('Invalid planned workflow statistics clock.')
+    report = {'scope': 'current_plan_workflow_command', 'includesUserWait': True,
+        'planningWallSeconds': round(planning_end - started_at, 3),
+        'workflowWallSeconds': None if workflow_end is None else round(ended_at - planning_end, 3),
+        'totalWallSeconds': round(ended_at - started_at, 3)}
+    try:
+        output.write('Plan-workflow timing: ' + json.dumps(report, allow_nan=False) + '\n')
+        output.flush()
+    except (OSError, ValueError):
+        pass  # Reporting failure must not replace the work result.
+    return report
+
+
 def append_workflow_metrics(path, stats):
     """Append a private, quota-free workflow summary without storing session data."""
     import fcntl
@@ -6276,19 +6294,29 @@ def main():
     if args.draft_plan or args.plan_workflow:
         if not args.prompt or not args.model or args.resume:
             parser.error('Planning entry requires a prompt and --model; resume is not supported')
+        planned_started_at = planning_finished_at = None
+        handoff_ready = False
         try:
             if args.plan_workflow and 'standard' not in workflow_role_bindings(args.role_model):
                 raise ProbeError('--plan-workflow requires an explicit standard work-model binding.')
+            if args.plan_workflow:
+                planned_started_at = time.monotonic()
             drafted = run_plan_draft(args.prompt, args.model, args.effort,
                                      args.draft_plan or args.plan_workflow, sys.stdin, sys.stdout)
             if drafted != 0 or not args.plan_workflow:
                 return drafted
+            handoff_ready = True
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, UnicodeError) as exc:
             message = str(exc) if isinstance(exc, ProbeError) else 'Plan drafting failed; no automatic retry.'
             print('ModelMate draft: ' + terminal_text(message), file=sys.stderr)
             return 1
+        finally:
+            if planned_started_at is not None:
+                planning_finished_at = time.monotonic()
+                if not handoff_ready:
+                    report_planned_workflow_timing(sys.stdout, planned_started_at, planning_finished_at)
     if args.delete_session:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Session deletion does not accept prompt/model/effort overrides')
@@ -6358,6 +6386,10 @@ def main():
             message = str(exc) if isinstance(exc, ProbeError) else 'Cannot load/start explicit workflow.'
             print('ModelMate workflow: ' + terminal_text(message), file=sys.stderr)
             return 1
+        finally:
+            if args.plan_workflow:
+                report_planned_workflow_timing(sys.stdout, planned_started_at,
+                                              planning_finished_at, time.monotonic())
     if args.sessions or args.show_workflow is not None:
         if args.prompt is not None or args.model or args.resume or args.effort != 'low':
             parser.error('Local inspection does not accept prompt, model, resume or effort overrides')

@@ -4475,3 +4475,44 @@ Final-source full offline verification passed all 754 tests in 145.259 seconds,
 with no skips. Seven map/preview tests also passed against the final wording.
 Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
 `8f157b77d23ca36bea8ac1f5c42e8444293853161aea43060ae7e4b2c9877646`.
+
+
+### P14 observed total wall time for planned commands (2026-11-25)
+
+The combined --plan-workflow command previously emitted only workflow-phase
+timing, omitting its earlier planning phase from the user-visible time summary.
+It now emits one additional timing report scoped to the current planned command:
+planningWallSeconds, workflowWallSeconds and totalWallSeconds, with
+includesUserWait true. Trusted monotonic markers bracket the planning call and
+subsequent workflow entry/cleanup, covering both START confirmations, questions,
+previews, native waiting and file/transport cleanup. The report contains no prompt,
+path, native/account ID, token total or inferred actual model.
+
+If planning is cancelled, fails or is interrupted before handoff, the observed
+planning duration is still reported and workflowWallSeconds is null. If handoff
+occurs but work is cancelled/fails/preview-only, its elapsed preview/wait/setup
+phase is measured without claiming that a model ran. Values are finite, ordered
+and rounded to milliseconds; invalid clocks fail rather than fabricating zero.
+Output write/flush errors do not override the operation's return value or change
+controller state. No model/metadata call is added for reporting.
+
+Workflow native turn/usage measurements and --metrics-jsonl stay phase-scoped and
+unchanged. This new combined wall report is Terminal output only, not a new JSONL
+schema or combined planning token/dispatch estimate. Neither wall time nor a quota
+change is interpreted as cost or savings. Existing observed/unknown telemetry
+boundaries remain intact.
+
+All twelve metrics tests and seven planned-workflow tests passed. New cases cover
+known split/total durations, unfinished planning, invalid/nonfinite/reversed clocks,
+report write failure and exactly one final command report for successful, cancelled
+and invalid-draft paths. The fake-native two-phase flow checks that the two measured
+phase durations sum to total within millisecond rounding tolerance. Compile and
+diff checks pass. No connected account/model/quota was used.
+
+Actual dispatch telemetry, combined planning usage, attribution to account quota,
+comparative evaluation and broader live/release gates remain unverified. This is
+implemented/offline-tested local clock reporting, not new live evidence.
+
+Full offline verification passed all 758 tests in 143.964 seconds, with no skips.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`3300379db176436587e0f163c95e05abdc5fcc747b1372d3af85a2d8dc9407a8`.

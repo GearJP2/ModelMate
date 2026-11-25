@@ -481,7 +481,9 @@ model/tool grants หรือ attempt budget จาก planning เลือก
 
 ยกเลิก START แรกจะไม่มี draft ยกเลิกช่วง clarification หรือ START ที่สองจะไม่เริ่ม work
 แต่เก็บ draft ที่ผ่าน validator แล้วไว้ goal ที่เปลี่ยนระหว่าง handoff จะถูกปฏิเสธ
-ส่วน metrics ของ workflow วัดเฉพาะช่วง workflow ไม่รวม planning turn ก่อนหน้า
+รายงาน Plan-workflow timing แยก wall time ของ planning/workflow และเวลารวม รวมเวลารอผู้ใช้
+ถ้าจบก่อน handoff ช่วง workflow เป็น null ส่วน usage และ JSONL ของ workflow
+ยังวัดเฉพาะ workflow ไม่รวม planning usage และไม่สร้างยอด token/model รวมเอง
 ยังเป็น experimental/offline-tested flow และ plain prompt ปกติยังไม่ใช้โหมดนี้เอง
 
 ### Experimental Auto advancement

@@ -1,4 +1,5 @@
 """Metrics preserve observed counters and exclude incomparable quota windows."""
+import io
 import json
 import os
 from pathlib import Path
@@ -145,3 +146,36 @@ class MetricsTests(unittest.TestCase):
             self.assertEqual(change[0]['deltaPercentagePoints'] if change else None, expected)
             self.assertEqual([call.args[0] for call in backend.request.call_args_list],
                              ['account/read', 'account/rateLimits/read'])
+
+
+class PlannedTimingTests(unittest.TestCase):
+    def test_total_wall_includes_both_phases_without_usage_invention(self):
+        from modelmate import report_planned_workflow_timing
+        output=io.StringIO()
+        report=report_planned_workflow_timing(output,10,14,22)
+        self.assertEqual(report['planningWallSeconds'],4)
+        self.assertEqual(report['workflowWallSeconds'],8)
+        self.assertEqual(report['totalWallSeconds'],12)
+        self.assertIs(report['includesUserWait'],True)
+        self.assertNotIn('tokenUsage',report)
+        self.assertNotIn('reportedModels',report)
+        self.assertIn('Plan-workflow timing:',output.getvalue())
+
+    def test_cancelled_planning_has_no_workflow_duration(self):
+        from modelmate import report_planned_workflow_timing
+        report=report_planned_workflow_timing(io.StringIO(),10,15)
+        self.assertEqual(report['totalWallSeconds'],5)
+        self.assertIsNone(report['workflowWallSeconds'])
+
+    def test_bad_clocks_never_produce_a_report(self):
+        from modelmate import report_planned_workflow_timing
+        for clocks in ((True,2,3),(1,float('nan'),3),(3,2,4),(1,3,2),(1,2,float('inf'))):
+            output=io.StringIO()
+            with self.subTest(clocks=clocks),self.assertRaises(ProbeError):
+                report_planned_workflow_timing(output,*clocks)
+            self.assertEqual(output.getvalue(),'')
+
+    def test_report_write_failure_does_not_replace_work_result(self):
+        from modelmate import report_planned_workflow_timing
+        output=Mock();output.write.side_effect=OSError('closed output')
+        self.assertEqual(report_planned_workflow_timing(output,10,14,22)['totalWallSeconds'],12)

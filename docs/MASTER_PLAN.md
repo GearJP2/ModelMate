@@ -756,6 +756,16 @@ public query เดินได้และแสดงแหล่งอ้า�
 
 ### P14 — Metrics
 
+Planned-command wall timing increment: --plan-workflow reports observed monotonic
+planningWallSeconds, workflowWallSeconds and totalWallSeconds, including both
+START waits, clarification and cleanup. Ending before handoff leaves workflow
+wall time null; cancellation/errors/interruption still report the observed phase
+without replay. Existing workflow usage/turn metrics and private JSONL remain
+workflow-scoped; no combined tokens/actual-model/credit estimate is invented.
+Reporting I/O failure cannot replace the work result. Twelve metrics and seven
+planned-workflow tests pass. This closes the omitted planning-wall-time display,
+not the pending actual-dispatch/quota attribution or live evidence gates.
+
 ไฟล์: modelmate.py, tests/test_metrics.py
 แสดง elapsed monotonic time, requested model, reported model ถ้ามี,
 phase, attempts, outcome และ usage ที่ server รายงาน

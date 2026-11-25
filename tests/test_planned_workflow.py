@@ -31,11 +31,18 @@ class PlannedWorkflowTests(unittest.TestCase):
             trace=self.root/('trace-'+str(len(self.traces)));self.traces.append(trace)
             server=SERVER.replace("'SYNTHETIC_ANSWER all tests passed DONE'",repr(answer if answer is not None else json.dumps(self.plan)))
             return NativeWorkflowConnection([sys.executable,'-u','-c',server,str(trace),'text'],1)
-        with tempfile.TemporaryFile('w+') as source,patch.dict(os.environ,{'XDG_STATE_HOME':str(self.root/'state')}),patch('sys.argv',args),patch('sys.stdin',source),patch('sys.stdout',new_callable=io.StringIO),patch('sys.stderr',new_callable=io.StringIO),patch('modelmate.NativeWorkflowConnection',side_effect=backend),patch('modelmate.run_chat',side_effect=chat or (lambda *a,**k:0)):
+        with tempfile.TemporaryFile('w+') as source,patch.dict(os.environ,{'XDG_STATE_HOME':str(self.root/'state')}),patch('sys.argv',args),patch('sys.stdin',source),patch('sys.stdout',new_callable=io.StringIO) as output,patch('sys.stderr',new_callable=io.StringIO),patch('modelmate.NativeWorkflowConnection',side_effect=backend),patch('modelmate.run_chat',side_effect=chat or (lambda *a,**k:0)):
             source.write(text);source.seek(0)
             result=main()
+            self.output=output.getvalue()
             remaining=os.read(source.fileno(),65536)
         return result,remaining
+
+    def timing(self):
+        rows=[line.removeprefix('Plan-workflow timing: ') for line in self.output.splitlines()
+              if line.startswith('Plan-workflow timing: ')]
+        self.assertEqual(len(rows),1)
+        return json.loads(rows[0])
 
     def turns(self):
         return [row for path in self.traces for row in map(json.loads,path.read_text().splitlines()) if row.get('method')=='turn/start']
@@ -59,6 +66,9 @@ class PlannedWorkflowTests(unittest.TestCase):
         self.assertEqual([row['params']['model'] for row in turns],['synthetic-strong','synthetic-standard'])
         self.assertEqual(json.loads(self.path.read_text()),self.plan)
         self.assertEqual(len(self.traces),2)
+        timing=self.timing()
+        self.assertIsNotNone(timing['workflowWallSeconds'])
+        self.assertAlmostEqual(timing['planningWallSeconds']+timing['workflowWallSeconds'],timing['totalWallSeconds'],delta=.002)
 
     def test_second_start_is_required_even_after_successful_draft(self):
         result,remaining=self.invoke('START\nCANCEL\n/next\n')
@@ -79,9 +89,11 @@ class PlannedWorkflowTests(unittest.TestCase):
         result,_=self.invoke('CANCEL\nSTART\n')
         self.assertEqual(result,2)
         self.assertEqual(self.traces,[])
+        self.assertIsNone(self.timing()['workflowWallSeconds'])
         result,_=self.invoke('START\nSTART\n',answer='not JSON')
         self.assertEqual(result,1)
         self.assertFalse(self.path.exists())
+        self.assertIsNone(self.timing()['workflowWallSeconds'])
         self.assertEqual(len(self.traces),1)
         self.assertEqual(len(self.turns()),1)
 
