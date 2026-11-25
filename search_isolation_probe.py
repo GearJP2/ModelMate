@@ -96,6 +96,22 @@ except runtime['ProbeError']:
     checks['packetAuthorityRejected'] = True
 print(json.dumps(dict(checks=checks, response=worker_output.getvalue().decode("utf-8"))))
 """
+
+LIFECYCLE_CHILD = r"""
+import os, subprocess, sys, time
+from pathlib import Path
+ready = Path('/tmp/descendant-ready')
+child = subprocess.Popen([sys.executable, '-I', '-S', '-c',
+    "from pathlib import Path; import time; Path('/tmp/descendant-ready').touch(); time.sleep(5)"],
+    start_new_session=True)
+deadline = time.monotonic() + 1
+while not ready.exists() and time.monotonic() < deadline:
+    time.sleep(.01)
+if not ready.exists() or os.getsid(child.pid) == os.getsid(0):
+    raise SystemExit(2)
+print('namespace-descendant-ready', flush=True)
+"""
+
 KEYS = {'runtimeSearchParsed', 'runtimeQueryOnly', 'injectionRemainsData', 'packetAuthorityRejected', 'tlsTrustLoaded', 'unmountedToolsHidden', 'queryOnly', 'privateFileHidden', 'oldCwdHidden', 'homeHidden',
         'cwdIsolated', 'environmentCleared', 'privateFdClosed',
         'publicReadOnly', 'workerWriteSucceeded'}
@@ -179,6 +195,16 @@ def probe(timeout=10):
         checks['hostInputsUnchanged'] = (secret.read_bytes() == private_bytes
                                         and public.read_bytes() == public_bytes
                                         and runtime_copy.read_bytes() == runtime_bytes)
+        if all(checks.values()):
+            lifecycle_command = command.copy()
+            lifecycle_command[lifecycle_command.index(CHILD)] = LIFECYCLE_CHILD
+            try:
+                lifecycle = run_search_process(lifecycle_command, b'', cwd=root,
+                    timeout=min(timeout, 2), output_limit=64)
+            except (subprocess.TimeoutExpired, OSError, ProbeError):
+                return {'status': 'unverified', 'reason': 'namespace_lifecycle_unverified'}
+            checks['namespaceExitStopsDetachedChild'] = (lifecycle.returncode == 0
+                and lifecycle.stdout == b'namespace-descendant-ready\n')
         return {'status': 'capability_verified' if all(checks.values()) else 'unverified',
                 'checks': checks, 'scope': 'synthetic_local_probe_only', 'g3Passed': False,
                 'runtimeSha256': hashlib.sha256(runtime_bytes).hexdigest()}

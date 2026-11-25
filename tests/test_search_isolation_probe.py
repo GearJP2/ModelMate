@@ -87,3 +87,26 @@ class IsolationProbeTests(unittest.TestCase):
         result = subprocess.CompletedProcess([], 0, json.dumps(report).encode(), b'')
         with patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation, 'run_search_process', return_value=result):
             self.assertEqual(isolation.probe(), {'status': 'unverified', 'reason': 'invalid_worker_response'})
+
+    def test_lifecycle_failure_never_passes_on_successful_parser_checks(self):
+        response = dict(version=1, source='Wikipedia', host='en.wikipedia.org', query='synthetic public query', results=[])
+        report = dict(checks=dict.fromkeys(isolation.KEYS, True), response=json.dumps(response))
+        first = subprocess.CompletedProcess([], 0, json.dumps(report).encode(), b'')
+        for failure in (subprocess.TimeoutExpired('synthetic launcher', 2),
+                        OSError('private detail'), isolation.ProbeError('overflow')):
+            with self.subTest(failure=type(failure).__name__), patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation, 'run_search_process', side_effect=[first, failure]) as run:
+                self.assertEqual(isolation.probe(), {'status': 'unverified', 'reason': 'namespace_lifecycle_unverified'})
+                self.assertEqual(run.call_count, 2)
+                self.assertIn(isolation.LIFECYCLE_CHILD, run.call_args.args[0])
+                self.assertEqual(run.call_args.kwargs['timeout'], 2)
+
+    def test_lifecycle_wrong_exit_or_missing_readiness_cannot_pass(self):
+        response = dict(version=1, source='Wikipedia', host='en.wikipedia.org', query='synthetic public query', results=[])
+        report = dict(checks=dict.fromkeys(isolation.KEYS, True), response=json.dumps(response))
+        first = subprocess.CompletedProcess([], 0, json.dumps(report).encode(), b'')
+        for code, output in ((0, b''), (7, b'namespace-descendant-ready\n')):
+            last = subprocess.CompletedProcess([], code, output, b'')
+            with self.subTest(code=code), patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation, 'run_search_process', side_effect=[first, last]):
+                report = isolation.probe()
+                self.assertEqual(report['status'], 'unverified')
+                self.assertFalse(report['checks']['namespaceExitStopsDetachedChild'])

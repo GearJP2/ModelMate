@@ -3920,3 +3920,45 @@ and G3 remains open. These limits supersede the preceding capture_output note.
 
 Full offline verification passed all 690 tests in 105.281 seconds, with no skips.
 Runtime/probe compile checks and `git diff --check` passed.
+
+
+### P13 normal namespace exit with a detached descendant (2026-11-25)
+
+The probe now runs a separate fixed lifecycle challenge after all parser/privacy
+checks pass, using the same bubblewrap namespaces/mounts and bounded collector.
+Inside the namespace the initial worker starts a Python descendant with
+`start_new_session=True`. That descendant writes a readiness file only inside the
+private tmpfs, retains inherited stdout and sleeps for five seconds. The initial
+worker waits up to one second for readiness, verifies its child's session differs
+from its own, emits an exact public readiness marker and exits without waiting
+for or terminating that child. No host-writable mount or network call is used.
+
+The parent requires zero exit status, that exact marker and EOF within at most
+two seconds. Because the fixed sleeping descendant never closes stdout, EOF
+before its five-second sleep expires demonstrates that it did not remain alive
+holding the pipe after initial-worker exit. Its detached process session prevents
+normal parent process-group cleanup from being mistaken for this normal-exit
+namespace result; the collector never enters failure cleanup on a passing run.
+This is a scoped observed behavior, not a claim about arbitrary hostile programs.
+
+`python3 search_isolation_probe.py` passed all nineteen checks on bubblewrap
+0.8.0 / worker Python 3.11.2. Probe SHA-256:
+`66a59f6f802af87d9e303ed607161360001e284dd9258c3adfdd6327a4267e7e`.
+Runtime SHA-256 remains:
+`63efaefea7c405e2cde2e84b3827a1a30eeecf7f667a7d8e473ab20af8ba6ad6`.
+All twelve probe tests passed, including refusing lifecycle timeout/launch/output
+failures, missing readiness and nonzero exit even when earlier parser checks
+were all true. Each challenge runs at most once; no failed launch is replayed.
+The initial read-only exploratory run also returned promptly, before committing
+this challenge to the diagnostic. No account/model/DNS/HTTP call was made.
+
+Limitations: this adds normal-exit evidence for one detached child, not proof of
+cleanup after parent/server/host death, arbitrary namespace escapes, hostile
+resource exhaustion or clean installation on another host. If containment fails,
+the fixed challenge child naturally exits after five seconds; no long-lived
+fixture is intentionally left behind. A production approval-bound launcher and
+real DNS/TLS evidence remain absent. G3 remains open and automated/private-context
+search stays disabled. Runtime was untouched; full suite was not rerun for this
+diagnostic-only change (last full suite: 690 tests passed).
+
+All seven real-process collector tests also passed; probe compile and diff checks passed.

@@ -576,7 +576,7 @@ Host capability increment: `python3 search_isolation_probe.py` runs a fixed,
 synthetic local worker in installed bubblewrap without Codex, inference or HTTP.
 On the tested host it demonstrated hidden private fixture/cwd/home, closed private
 FD, explicit public environment, read-only query input and contained temporary
-writes. Ten diagnostic tests pass. The probe now uses an explicit Debian-style
+writes. Twelve diagnostic tests pass. The probe now uses an explicit Debian-style
 x86-64 CPython 3.11 / OpenSSL 3 profile (interpreter, stdlib, selected shared
 libraries and one CA bundle), with no broad /usr, /lib or /etc mount. TLS trust
 loads without a network request. This remains a host-specific capability spike:
@@ -607,6 +607,12 @@ closed FDs, and applies one deadline to collection plus process exit. Timeout or
 overflow kills the owned process group without retry. Seven local-process tests
 pass. This collector is not a sandbox/consent policy or a complete approved
 launcher; no new user-facing search path is enabled.
+A separate fixed namespace lifecycle challenge now starts a detached-session
+child that holds stdout open for five seconds. The parent accepts readiness plus
+EOF/success within at most two seconds only; this passed on the tested host and
+shows that this child did not survive normal initial-worker exit. Timeout, failed
+exit or missing readiness cannot pass. This does not cover arbitrary namespace
+escape, server/host death or a production approved search launcher.
 
 Search URL validation is shared between SearXNG candidate filtering and packet
 import/export. Invalid, zero or out-of-range ports are skipped before candidates
