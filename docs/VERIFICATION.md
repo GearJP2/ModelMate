@@ -4569,3 +4569,47 @@ required socket creation and endpoint access, real isolated DNS/TLS/result
 verification, live SearXNG and automatic query-provenance/handoff integration.
 Neither the failed authorized smoke nor these offline checks satisfy full G3 or
 release readiness. Hosted web/automatic private-context search remain disabled.
+
+
+### P14 observed planning-turn usage without extra account reads (2026-11-26)
+
+Drafting previously discarded native planning measurements even when the matching
+turn had supplied token/reroute/terminal observations. The planning path now emits
+a separate planning_turn report using the existing bounded native measurement
+collector. Requested model/effort remains labeled requested; actual model is not
+inferred from that selection. Reroutes and token snapshots are retained only when
+matched to the native binding by the existing observer, with foreign/duplicate
+observations filtered as before. Missing usage/terminal/elapsed observations stay
+unknown rather than fabricated zero or success.
+
+proposalSaved is set only after validated exclusive file publication and is
+separate from native terminalStatus. A completed generation with invalid JSON can
+therefore report completed plus proposalSaved false, with no task/grant created.
+The report includes no goal, answer text, local path, account ID, native binding,
+quota window or raw error. Native per-turn tokens are not summed across planning
+and workflow, cached/reasoning fields are not added again, and no quota/cost or
+savings estimate is made. Workflow JSONL and its existing scope remain unchanged;
+planning metrics are Terminal output only.
+
+The shared measurement method retains its previous default but accepts an explicit
+include_quota=False path. Planning always uses that path after closing its native
+transport: even a saved quota window cannot cause a reporting-time account read.
+No extra metadata/model call or replay is introduced. Report serialization/write
+failures cannot replace the original publication or failure result.
+
+All fourteen draft tests, thirteen metrics tests and seven planned-workflow tests
+passed. New fake-native cases cover absent usage, matching usage/reroute telemetry,
+duplicate/foreign observation filtering, requested-versus-reported model distinction,
+completed-but-invalid proposals, report I/O failure preserving the published file
+and no account/rate-limit reads after the planning turn. A direct measurement test
+also supplies a saved quota window while forbidding all RPC calls in no-quota mode.
+Compile/diff checks passed. No live inference/account/quota call was made for this
+increment; the prior authorized HTTP smoke was not repeated.
+
+This reports available planning observations, not complete actual-dispatch proof,
+combined task-token attribution, quota savings or live service compatibility.
+G1/G4/G5 and broader live/release gates remain open.
+
+Full offline verification passed all 766 tests in 121.080 seconds, with no skips.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`a903c53a6371a44d6ecfca0702ab63fd097d4871f7fc741f9bd7318d66ce2d7f`.

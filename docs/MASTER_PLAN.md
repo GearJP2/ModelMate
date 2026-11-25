@@ -766,6 +766,16 @@ public query เดินได้และแสดงแหล่งอ้า�
 
 ### P14 — Metrics
 
+Planning telemetry increment (2026-11-26): one-shot drafting now emits a separate
+planning_turn summary from existing matching native observations: requested
+selection, observed token snapshot/reroutes and measured turn elapsed time.
+proposalSaved is controller-owned and distinct from native completed status.
+Missing telemetry stays unknown; no planning/workflow total, quota/cost conversion
+or actual-model inference is added. Measurement collection explicitly disables
+account/quota reads, including when a saved quota window exists. Report I/O
+failure cannot change publication/error results. Fourteen draft tests, thirteen
+metrics tests and seven planned-workflow tests pass; live telemetry remains open.
+
 Planned-command wall timing increment: --plan-workflow reports observed monotonic
 planningWallSeconds, workflowWallSeconds and totalWallSeconds, including both
 START waits, clarification and cleanup. Ending before handoff leaves workflow

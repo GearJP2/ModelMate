@@ -3845,9 +3845,9 @@ class NativeWorkflowConnection(Connection):
         self._measured_turns = {}
         self._work_turn_measurements = []
 
-    def workflow_measurements(self):
+    def workflow_measurements(self, *, include_quota=True):
         changes = None
-        if self._quota_first:
+        if include_quota and self._quota_first:
             try:
                 account = self.request('account/read', {'refreshToken': False}).get('account')
                 if isinstance(account, dict) and account.get('type') == 'chatgpt':
@@ -5421,6 +5421,7 @@ def run_plan_draft(prompt, model, effort, destination, input_stream, output):
     backend = NativeWorkflowConnection(['codex', 'app-server', '--stdio',
         '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
     answers = []
+    proposal_saved = False
     def capture(event):
         if event.get('type') == 'text':
             text = event['text']
@@ -5458,11 +5459,27 @@ def run_plan_draft(prompt, model, effort, destination, input_stream, output):
             with os.fdopen(fd, 'wb') as source:
                 source.write(encoded);source.flush();os.fsync(source.fileno())
             os.link(snapshot, destination)
+            proposal_saved = True
         output.write('Validated draft saved · ' + str(len(plan['steps'])) + ' steps · '
             + str(len(plan['clarifications'])) + ' clarifications · no execution or verification grant\n')
         return 0
     finally:
-        backend.close()
+        try:
+            backend.close()
+        finally:
+            try:
+                measured = backend.workflow_measurements(include_quota=False)
+                report = {'scope': 'planning_turn', 'proposalSaved': proposal_saved,
+                    'requestedSelection': {'model': model, 'effort': effort},
+                    'tokenUsage': measured['tokenUsage'],
+                    'tokenUsageScope': 'last_observed_planning_thread_update' if measured['tokenUsage'] else None,
+                    'turnElapsedSeconds': measured['turnElapsedSeconds'],
+                    'planningTurnMeasurements': measured['workTurnMeasurements']}
+                output.write('Planning metrics: ' + json.dumps(report, ensure_ascii=True, allow_nan=False) + '\n')
+                output.flush()
+            except (OSError, ValueError, ProbeError):
+                pass  # Observed metrics must not replace publication/error results.
+
 
 
 def load_criterion_map(path, plan):

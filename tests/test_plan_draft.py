@@ -20,13 +20,26 @@ class PlanDraftTests(unittest.TestCase):
         self.destination=self.root/'new plan.json'
         self.trace=self.root/'trace'
 
-    def draft(self, answer, *, mode='text', confirmation='START\n', prompt=None):
+    def draft(self, answer, *, mode='text', confirmation='START\n', prompt=None, output=None):
         server=SERVER.replace("'SYNTHETIC_ANSWER all tests passed DONE'",repr(answer))
+        server=server.replace("if mode=='metrics':", "if mode in ('metrics','text-metrics'):")
+        server=server.replace("if mode in ('text','text-only','text-only-fail'):",
+                              "if mode in ('text','text-only','text-only-fail','text-metrics'):")
         def backend(command):
             return NativeWorkflowConnection([sys.executable,'-u','-c',server,str(self.trace),mode],1)
         with tempfile.TemporaryFile('w+') as source,patch('modelmate.NativeWorkflowConnection',side_effect=backend):
             source.write(confirmation);source.seek(0)
-            return run_plan_draft(prompt or PLAN['goal'],'synthetic-standard','low',self.destination,source,io.StringIO())
+            output=io.StringIO() if output is None else output
+            try:
+                return run_plan_draft(prompt or PLAN['goal'],'synthetic-standard','low',self.destination,source,output)
+            finally:
+                self.output=output.getvalue()
+
+    def metrics(self):
+        rows=[line.removeprefix('Planning metrics: ') for line in self.output.splitlines()
+              if line.startswith('Planning metrics: ')]
+        self.assertEqual(len(rows),1)
+        return json.loads(rows[0])
 
     def records(self):
         return [json.loads(line) for line in self.trace.read_text().splitlines()]
@@ -108,4 +121,42 @@ class PlanDraftTests(unittest.TestCase):
     def test_disconnect_does_not_publish_or_replay(self):
         with self.assertRaises(ProbeError):self.draft(json.dumps(PLAN),mode='disconnect')
         self.assertFalse(self.destination.exists())
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)
+
+    def test_missing_usage_stays_unknown_without_prompt_or_native_ids(self):
+        self.assertEqual(self.draft(json.dumps(PLAN)),0)
+        report=self.metrics()
+        self.assertTrue(report['proposalSaved'])
+        self.assertIsNone(report['tokenUsage'])
+        self.assertIsNone(report['tokenUsageScope'])
+        self.assertNotIn(PLAN['goal'],json.dumps(report,ensure_ascii=False))
+        self.assertNotIn('threadId',json.dumps(report))
+        self.assertNotIn('accountId',json.dumps(report))
+        self.assertEqual(report['planningTurnMeasurements'][0]['terminalStatus'],'completed')
+
+    def test_observed_usage_and_reroute_are_not_requested_model_guesses(self):
+        self.assertEqual(self.draft(json.dumps(PLAN),mode='text-metrics'),0)
+        report=self.metrics()
+        self.assertEqual(report['tokenUsage']['last']['totalTokens'],11)
+        self.assertEqual(report['tokenUsage']['last']['cachedInputTokens'],3)
+        self.assertEqual(report['requestedSelection']['model'],'synthetic-standard')
+        self.assertEqual(report['planningTurnMeasurements'][0]['modelReroutes'],[
+            dict(fromModel='synthetic-standard',toModel='synthetic-fallback')])
+        records=self.records();start=next(i for i,row in enumerate(records) if row.get('method')=='turn/start')
+        self.assertFalse(any(row.get('method') in ('account/read','account/rateLimits/read') for row in records[start+1:]))
+
+    def test_invalid_proposal_is_distinct_from_native_completed_status(self):
+        with self.assertRaises(ProbeError):self.draft('not JSON')
+        report=self.metrics()
+        self.assertFalse(report['proposalSaved'])
+        self.assertEqual(report['planningTurnMeasurements'][0]['terminalStatus'],'completed')
+        self.assertFalse(self.destination.exists())
+
+    def test_metrics_write_error_does_not_lose_published_draft(self):
+        class BrokenMetrics(io.StringIO):
+            def write(self,text):
+                if text.startswith('Planning metrics: '):raise OSError('synthetic output failure')
+                return super().write(text)
+        self.assertEqual(self.draft(json.dumps(PLAN),output=BrokenMetrics()),0)
+        self.assertEqual(json.loads(self.destination.read_text()),PLAN)
         self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)

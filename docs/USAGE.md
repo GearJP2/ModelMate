@@ -455,6 +455,9 @@ planning turn นี้เป็น ephemeral และยังไม่มี 
 bindings ของทุก role ที่แผนใช้ หากมี clarifications ให้ตอบผ่าน `--clarification`
 ให้ครบ หรือใช้ --execute-workflow เพื่อตอบแบบ interactive ก่อน START การ execute ยังต้อง opt-in/START และผ่าน model/tool gates
 ของ workflow อีกครั้ง คำสั่งนี้ยังไม่เชื่อม plain prompt ไปเป็น workflow อัตโนมัติ
+รายงาน Planning metrics แสดง requested selection, usage/reroute และเวลา turn ที่สังเกตได้
+แยก proposalSaved ออกจาก native terminal status เมื่อไม่มี telemetry ค่ายังคง unknown
+ไม่อ่านบัญชีเพิ่มเพื่อสรุปรายงาน และไม่รวมเป็น token/quota/cost ของทั้งคำสั่ง
 มีหลักฐาน fake-server/offline เท่านั้น ยังไม่ได้ทดสอบ live ด้วย quota จริง
 
 ### จาก prompt ไป draft และ workflow ในคำสั่งเดียว
