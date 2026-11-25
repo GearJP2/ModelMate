@@ -2158,7 +2158,9 @@ def terminal_text(value):
 class ChatShell:
     """Single-owner Terminal state; an optional trusted controller receives actions."""
 
-    def __init__(self, output, send=None, catalog=None, role_policy=None, *, workflow=None, workflow_action=None, automatic_workflow=False):
+    def __init__(self, output, send=None, catalog=None, role_policy=None, *, workflow=None, workflow_action=None, automatic_workflow=False, finish_references=None):
+        if finish_references is not None and not automatic_workflow:
+            raise ProbeError('Automatic criterion mapping requires explicit Auto advancement.')
         if automatic_workflow and (not isinstance(workflow_action, WorkflowHost)
                 or not isinstance(workflow, WorkflowController) or workflow.mode != 'auto'):
             raise ProbeError('Automatic advancement requires a bound Auto workflow host.')
@@ -2185,6 +2187,7 @@ class ChatShell:
         self.workflow = workflow
         self.workflow_action = workflow_action
         self.automatic_workflow = automatic_workflow
+        self.finish_references = None if finish_references is None else tuple(finish_references)
         self.started_at = time.monotonic()
         self._workflow_check_attempt = None
         self._workflow_tool_shown = None
@@ -2284,6 +2287,12 @@ class ChatShell:
                     and all(check['kind'] in ('test', 'lint') for check in
                             state['plan']['steps'][state['step_index']]['checks'])):
                 action = 'check'
+            elif (state['state'] == 'CHECKING' and state['active_attempt'] is None
+                    and state['step_index'] == len(state['steps']) and self.finish_references is not None):
+                self.automatic_workflow = False
+                self.write('Experimental Auto · resolve user-approved criterion mapping · no automatic retry')
+                self.workflow_command('/finish', list(self.finish_references))
+                return
             if action is not None:
                 self.write('Experimental Auto · ' + action + ' · ใช้ fresh preflight / trusted host evidence')
                 try:
@@ -2905,7 +2914,7 @@ class ChatShell:
 
 def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None,
              role_policy=None, prompt=None, backend=None, workflow=None, workflow_action=None, executor_stream=None,
-             recheck_commands=None, automatic_workflow=False):
+             recheck_commands=None, automatic_workflow=False, finish_references=None):
     """Multiplex Linux input and controller events in one owning thread."""
     native_workflow = isinstance(backend, NativeWorkflowConnection)
     if workflow is not None and backend is not None:
@@ -2919,7 +2928,7 @@ def run_chat(input_stream, output, *, event_stream=None, send=None, catalog=None
     if backend is not None and not native_workflow:
         send, catalog = backend.action, backend.catalog
     shell = ChatShell(output, send, catalog, role_policy, workflow=workflow, workflow_action=workflow_action,
-                      automatic_workflow=automatic_workflow)
+                      automatic_workflow=automatic_workflow, finish_references=finish_references)
     if recheck_commands is not None:
         if not native_workflow or backend.store is None or workflow is None:
             raise ProbeError('Recheck UI requires an attached durable native workflow.')
@@ -5438,6 +5447,36 @@ def run_plan_draft(prompt, model, effort, destination, input_stream, output):
         backend.close()
 
 
+def load_criterion_map(path, plan):
+    if path is None:
+        return None
+    with open(path, 'rb') as source:
+        content = source.read(32769)
+    try:
+        if len(content) > 32768:
+            raise ValueError
+        data = json.loads(content.decode('utf-8'), object_pairs_hook=_unique_json_object,
+                          parse_constant=_invalid_plan_constant)
+    except (ValueError, UnicodeError, RecursionError, ProbeError):
+        raise ProbeError('Invalid or oversized criterion map JSON.') from None
+    if (not isinstance(data, dict) or set(data) != {'version', 'criteria'}
+            or type(data['version']) is not int or data['version'] != 1
+            or not isinstance(data['criteria'], dict)
+            or set(data['criteria']) != {str(i + 1) for i in range(len(plan['success_criteria']))}):
+        raise ProbeError('Criterion map must cover every success criterion exactly once.')
+    declared = {str(i + 1) + '.' + str(j + 1) for i, step in enumerate(plan['steps'])
+                for j in range(len(step['checks']))}
+    result = []
+    for number in range(1, len(plan['success_criteria']) + 1):
+        refs = data['criteria'][str(number)]
+        if (not isinstance(refs, list) or not refs or len(refs) > 384
+                or any(not isinstance(ref, str) or ref not in declared for ref in refs)
+                or len(set(refs)) != len(refs)):
+            raise ProbeError('Criterion references must name unique declared STEP.CHECK entries.')
+        result.append(str(number) + '=' + ','.join(refs))
+    return result
+
+
 def workflow_role_bindings(bindings):
     policy = {}
     for binding in bindings:
@@ -5453,9 +5492,11 @@ def workflow_role_bindings(bindings):
 def run_workflow_file(path, bindings, mode, execute, input_stream, output, checks_path=None, resume_id=None,
                       experimental_rechecks=False, suggest_models=False, measure_quota=False, metrics_jsonl=None,
                       check_catalog=False, shared_rechecks=False, experimental_tool_approvals=False,
-                      clarifications=(), source_results=(), automatic_workflow=False, expected_goal=None):
+                      clarifications=(), source_results=(), automatic_workflow=False, expected_goal=None, criterion_map=None):
     """Explicit-plan preview is offline; live execution requires flag plus interactive confirmation."""
     started_at = time.monotonic()
+    if criterion_map is not None and not automatic_workflow:
+        raise ProbeError('Criterion mapping requires experimental Auto advancement.')
     if automatic_workflow and resume_id is not None:
         raise ProbeError('Experimental automatic advancement requires a new Auto workflow.')
     if clarifications and resume_id is not None:
@@ -5537,6 +5578,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
     if suggest_models and not plan['clarifications']:
         raw = json.dumps(suggest_workflow_models(plan), ensure_ascii=False)
         plan = validate_plan(raw)
+    finish_references = load_criterion_map(criterion_map, plan)
     commands = load_check_commands(checks_path, plan, os.getcwd())
     policy = workflow_role_bindings(bindings)
     needed = {'standard'} | {step['role'] for step in plan['steps']}
@@ -5567,9 +5609,11 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         preview.write('/recheck แสดงแผน; /confirm-recheck TOKEN ใช้โควตาเพิ่มหนึ่ง verification turn')
         if shared_rechecks:
             preview.write('Private recheck server · /recover-recheck และ /stop-recheck TOKEN ใช้ใน session นี้')
+    if finish_references is not None:
+        preview.write('User criterion map · ' + json.dumps(finish_references) + ' · resolve accepted evidence only after all steps')
     if automatic_workflow:
         preview.write('Experimental Auto advancement · START อนุญาตเริ่ม attempts และตรวจ test/lint ด้วย trusted host evidence ในแผนนี้')
-        preview.write('ไม่ restore opt-in · quota/permission unknown พัก · initial + 2 corrections ต่อขั้น; ไม่จบงานแทน /finish')
+        preview.write('ไม่ restore opt-in · quota/permission unknown พัก · initial + 2 corrections ต่อขั้น; ใช้ mapping ที่ยืนยัน ถ้าไม่มีต้อง /finish')
     if experimental_tool_approvals:
         preview.write('Experimental tool approvals · exact command/diff · accept once only · no session grants')
     if not execute and not check_catalog:
@@ -5636,7 +5680,7 @@ def run_workflow_file(path, bindings, mode, execute, input_stream, output, check
         return run_chat(input_stream, output, backend=backend, workflow=controller,
                         workflow_action=host, catalog=snapshot['catalog'], role_policy=policy,
                         recheck_commands=commands if experimental_rechecks else None,
-                        automatic_workflow=automatic_workflow)
+                        automatic_workflow=automatic_workflow, finish_references=finish_references)
     finally:
         elapsed_end = time.monotonic()
         measurements = {}
@@ -6178,6 +6222,8 @@ def main():
     parser.add_argument('--search-json', action='store_true',
                         help='with a search mode, write confirmed results as JSON to stdout and prompts to stderr')
     parser.add_argument('--workflow-mode', choices=('auto', 'ask_to_escalate', 'approve_plan'), help='workflow model policy (default: ask_to_escalate)')
+    parser.add_argument('--criterion-map', metavar='MAP_JSON',
+                        help='user-owned success-criterion to STEP.CHECK map; requires experimental Auto advancement')
     parser.add_argument('--check-commands', metavar='CHECKS_JSON', help='user-owned command/cwd bindings for workflow test/lint checks')
     parser.add_argument('--measure-quota', action='store_true',
                         help='include matching quota window observations in the live workflow summary')
@@ -6217,6 +6263,8 @@ def main():
         parser.error('--suggest-models requires a new --workflow plan')
     if args.experimental_rechecks and not args.resume_workflow:
         parser.error('--experimental-rechecks requires --resume-workflow')
+    if args.criterion_map and not args.experimental_auto_advance:
+        parser.error('--criterion-map requires --experimental-auto-advance')
     if args.experimental_auto_advance and (not new_workflow or args.workflow_mode != 'auto'):
         parser.error('--experimental-auto-advance requires a new --workflow with --workflow-mode auto')
     if args.experimental_tool_approvals and not (new_workflow or args.resume_workflow):
@@ -6303,7 +6351,7 @@ def main():
                                      experimental_tool_approvals=args.experimental_tool_approvals,
                                      clarifications=args.clarification, source_results=args.source_result,
                                      automatic_workflow=args.experimental_auto_advance,
-                                     expected_goal=args.prompt if args.plan_workflow else None)
+                                     expected_goal=args.prompt if args.plan_workflow else None, criterion_map=args.criterion_map)
         except KeyboardInterrupt:
             return 130
         except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

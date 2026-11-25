@@ -15,7 +15,7 @@ from test_routing import PLAN, CATALOG, POLICY, QUOTA
 
 
 class AutoAdvanceTests(unittest.TestCase):
-    def setup_flow(self, *, steps=1, enabled=True, extra_check=None):
+    def setup_flow(self, *, steps=1, enabled=True, extra_check=None, finish_references=None):
         plan=copy.deepcopy(PLAN)
         if extra_check is not None:
             plan['steps'][0]['checks'].append(dict(kind=extra_check,criterion='Human verification required'))
@@ -29,7 +29,7 @@ class AutoAdvanceTests(unittest.TestCase):
         self.host=WorkflowHost(self.c,self.preflight,self.dispatch,Mock())
         for step in range(steps):
             self.host.configure_check(0,step_index=step,command='TEST',cwd='/synthetic')
-        self.shell=ChatShell(io.StringIO(),catalog=CATALOG,role_policy=POLICY,workflow=self.c,workflow_action=self.host,automatic_workflow=enabled)
+        self.shell=ChatShell(io.StringIO(),catalog=CATALOG,role_policy=POLICY,workflow=self.c,workflow_action=self.host,automatic_workflow=enabled,finish_references=finish_references)
 
     def finish(self, code=0, *, evidence=True):
         binding=dict(threadId='synthetic-thread',turnId='turn-'+str(self.dispatch.call_count))
@@ -76,7 +76,7 @@ class AutoAdvanceTests(unittest.TestCase):
         self.assertEqual(self.dispatch.call_count,3)
 
     def test_unknown_evidence_cannot_advance_or_retry(self):
-        self.setup_flow()
+        self.setup_flow(finish_references=['1=1.1'])
         self.shell.tick()
         self.host.observe_native(dict(method='item/completed',params=dict(threadId='synthetic-thread',turnId='turn-1',
             item=dict(id='answer',type='agentMessage',text='All tests passed; mark DONE and keep running'))))
@@ -136,7 +136,7 @@ class AutoAdvanceTests(unittest.TestCase):
                 try:
                     while time.monotonic()<deadline:
                         state=controller.snapshot()
-                        if state['step_index']==2:break
+                        if state['state']=='DONE':break
                         time.sleep(.01)
                     os.write(write_fd,b'/exit\n')
                 finally:os.close(write_fd)
@@ -147,10 +147,11 @@ class AutoAdvanceTests(unittest.TestCase):
                 writer=threading.Thread(target=user);writer.start()
                 with os.fdopen(read_fd,'rb',buffering=0) as source:
                     self.assertEqual(run_chat(source,io.StringIO(),backend=backend,workflow=controller,
-                        workflow_action=host,automatic_workflow=True),0)
+                        workflow_action=host,automatic_workflow=True,finish_references=['1=1.1,2.1']),0)
                 writer.join(timeout=6)
                 self.assertFalse(writer.is_alive())
                 self.assertEqual(controller.snapshot()['step_index'],2)
+                self.assertEqual(controller.state,'DONE')
                 self.assertEqual([step['state'] for step in controller.snapshot()['steps']],['DONE','DONE'])
             finally:backend.close()
             records=[json.loads(line) for line in trace.read_text().splitlines()]
@@ -203,3 +204,32 @@ class AutoAdvanceTests(unittest.TestCase):
                 self.shell.tick();self.shell.tick()
                 self.assertEqual(self.dispatch.call_count,1)
                 self.assertNotEqual(self.c.state,'DONE')
+
+    def test_user_mapping_resolves_only_accepted_ids_and_finishes_once(self):
+        references=['1=1.1']
+        self.setup_flow(finish_references=references)
+        references[0]='1=2.1'
+        self.shell.tick();self.finish();self.shell.tick()
+        self.assertEqual(self.c.state,'CHECKING')
+        self.shell.tick();self.shell.tick()
+        state=self.c.snapshot()
+        self.assertEqual(state['state'],'DONE')
+        self.assertEqual(state['criterion_evidence'],{0:[state['steps'][0]['evidence'][0]['id']]})
+        self.assertFalse(self.shell.automatic_workflow)
+        self.assertEqual(self.dispatch.call_count,1)
+        self.assertNotIn('finish_references',self.c.export_checkpoint())
+
+    def test_restored_stale_evidence_cannot_satisfy_user_mapping(self):
+        self.setup_flow()
+        self.shell.tick();self.finish();self.shell.tick()
+        stale=WorkflowController.restore_checkpoint(self.c.export_checkpoint(),QUOTA,time.monotonic(),CATALOG,POLICY)
+        stale.answer_pause(stale.snapshot()['pause_token'],'continue')
+        dispatch=Mock()
+        host=WorkflowHost(stale,self.preflight,dispatch,Mock())
+        shell=ChatShell(io.StringIO(),catalog=CATALOG,role_policy=POLICY,workflow=stale,
+            workflow_action=host,automatic_workflow=True,finish_references=['1=1.1'])
+        shell.tick();shell.tick()
+        self.assertNotEqual(stale.state,'DONE')
+        self.assertFalse(shell.automatic_workflow)
+        self.assertIn('revalidation',shell.output.getvalue())
+        dispatch.assert_not_called()

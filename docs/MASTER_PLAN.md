@@ -481,6 +481,18 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 
 ### P10 — Workflow และ correction budget
 
+User-approved Auto completion increment: --criterion-map MAP_JSON is accepted
+only with new explicit Auto advancement. Its bounded version-1 schema maps every
+success criterion to unique declared STEP.CHECK references, is previewed before
+START and grants no tool/model/counter permission. After all steps are accepted,
+the shell resolves this immutable mapping through the existing /finish path;
+controller.finish_task still rejects missing/stale/unresolved evidence. Application
+is once-only; rejection disables Auto without retry. Without a map, final mapping
+remains manual. Mapping/opt-in is not restored. Fifteen Auto tests and seven map
+validation/entry tests pass, including two native-fake steps reaching DONE without
+/next, /check or /finish and stale/unknown evidence refusing completion. This is
+offline-only and does not prove broader live automation/release gates.
+
 Automatic tool-check evaluation increment: the same opt-in now evaluates a
 confirmed completed attempt when every declared check is test/lint, through the
 existing host check action. It does not run commands or create evidence itself.

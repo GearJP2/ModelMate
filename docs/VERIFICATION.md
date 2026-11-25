@@ -4415,3 +4415,63 @@ release readiness remains unproven.
 Full offline verification passed all 745 tests in 142.340 seconds with no skips.
 Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
 `8810870f3bb33525ffe5e57c251e809f56005597d073eb42f83be4d120902467`.
+
+
+### P10 user-approved criterion mapping for automatic completion (2026-11-25)
+
+--criterion-map MAP_JSON is opt-in with experimental Auto advancement on a new
+Auto workflow. Its 32 KiB version-1 JSON contains only version and criteria;
+criteria must cover every declared success criterion exactly once, with nonempty
+lists of unique canonical STEP.CHECK references. The loader rejects duplicate or
+nonfinite JSON, invalid encoding, unknown fields/criteria, undeclared checks,
+non-string refs and caller-supplied evidence IDs. No command, grant, verdict or
+counter can be supplied. File errors stop before work backend construction.
+
+The mapping is shown alongside the existing criterion/check preview before START
+and frozen as immutable reference strings for the shell. This is the user's
+assertion about which check covers each criterion, not model-inferred semantic
+coverage. Later mutation of the caller's list or config file does not revise the
+loaded mapping. Once all steps are accepted with no active attempt, an eligible
+Auto tick disables further advancement and applies the existing /finish handler
+once. That handler resolves current accepted check evidence IDs, and unchanged
+controller.finish_task validates completeness, pass verdicts, staleness and
+unresolved rechecks. The model creates no verdict or accepted evidence through
+this mapping. Rejection cannot start a model/tool turn, replay work or loop retry.
+Default/no-map behavior still waits for explicit /finish.
+
+Mapping does not make human checks automatic, change permission/model grants or
+extend correction budgets. It is not a checkpoint field or restored opt-in; normal
+accepted criterion_evidence is persisted through the existing controller path.
+Resume still cannot enable experimental Auto. The same option works for planned
+workflow handoff only after draft validation and the separate execution preview/
+START. Unknown/failed/missing/stale observations cannot satisfy the map.
+
+Fifteen targeted Auto tests passed, including real selector/fake-native completion
+of two steps with exactly two turns and no /next, /check or /finish input, once-only
+mapping, immutable caller refs, missing evidence and forced restored/stale evidence
+rejection. Seven criterion-map tests passed: strict schema/completeness/canonical
+refs/JSON bounds, preview before backend access, option gating, forwarding through
+actual workflow entry and invalid-map refusal before input/backend. All thirty
+workflow-entry tests also passed. Runtime/diagnostic compile and diff checks pass.
+No connected account, live model or quota was used.
+
+This adds controller-validated automatic acceptance of an explicitly approved
+criterion mapping. It does not establish that the chosen checks semantically
+prove a real task, replace human source/rubric judgments, demonstrate live Auto
+permission/recovery behavior or pass G5 evaluation. Broader live gates, default
+plain-prompt automation and release readiness remain unproven.
+
+
+The first full run exposed an existing cleanup-test race: reading an owned
+exiting descendant's /proc stat can raise ESRCH (ProcessLookupError), not only
+ENOENT (FileNotFoundError). That nested test helper now treats both genuine
+absence errors as not running. Permission/parse failures remain failures, and
+assertions requiring the child alive before cleanup and stopped afterwards are
+unchanged. Runtime process cleanup was not modified. All fifteen real local
+socket transport tests passed separately after this correction; the restricted
+sandbox run that skipped them is not counted as verification.
+
+Final-source full offline verification passed all 754 tests in 145.259 seconds,
+with no skips. Seven map/preview tests also passed against the final wording.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`8f157b77d23ca36bea8ac1f5c42e8444293853161aea43060ae7e4b2c9877646`.

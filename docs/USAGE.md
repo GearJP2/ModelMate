@@ -505,14 +505,43 @@ account/quota/catalog/model gates ใหม่ทุก attempt ไม่อน�
 เมื่อ fail ที่ทราบผลจะเริ่ม correction ภายใน budget เดิม ส่วน missing/unknown
 จะเป็น UNVERIFIED และหยุด หากมี manual/rubric/source check แม้เพียงข้อเดียว
 ยังต้องให้ผู้ใช้ตรวจและสั่ง `/check` เอง pending approval, การพัก และขั้นที่รอ
-mapping เกณฑ์สำเร็จจะไม่เดินต่อเอง ยังต้องใช้ `/finish` กับ accepted evidence
-เพื่อรับรองเกณฑ์งาน ไม่ใช้ข้อความโมเดลว่า tests passed แทนหลักฐาน
+mapping เกณฑ์สำเร็จจะไม่เดินต่อเอง หากไม่ระบุ --criterion-map ยังต้องใช้ `/finish`
+กับ accepted evidence เพื่อรับรองเกณฑ์งาน ไม่ใช้ข้อความโมเดลว่า tests passed แทนหลักฐาน
 
 `/cancel`, `/exit` และ EOF ไม่อนุญาตงานเพิ่ม การส่งงานที่ล้มเหลว/ผลไม่แน่ชัด
 จะปิด automatic advancement ใน process นี้โดยไม่ replay ต้องตรวจสถานะก่อนทำต่อ
 flag นี้ไม่ถูกบันทึกหรือ restore และใช้ร่วมกับ `--resume-workflow` ไม่ได้
 โหมดอื่นและการไม่ใส่ flag ยังทำงานแบบเดิม ส่วน prompt ธรรมดายังไม่สร้างแผนอัตโนมัติ
 มีหลักฐาน offline/fake-native เท่านั้น ยังไม่ผ่าน live automation/release gates
+
+### ระบุ criterion mapping สำหรับ Auto completion
+
+หากต้องการให้ Auto จบ task โดยไม่ต้อง /finish ให้เตรียม mapping ของผู้ใช้ เช่น:
+
+```json
+{"version": 1, "criteria": {"1": ["1.1"]}}
+```
+
+ตัวอย่างนี้ระบุว่า success criterion 1 ใช้ evidence จาก step 1 check 1
+ต้องครอบคลุมทุก criterion ด้วยเลขเริ่มที่ 1 และอ้างเฉพาะ check ที่ประกาศไว้
+ใส่ --criterion-map criteria.json ร่วมกับ --workflow-mode auto และ
+--experimental-auto-advance เช่น preview offline:
+
+```sh
+sr --workflow plan.json --role-model standard=MODEL --workflow-mode auto \
+  --experimental-auto-advance --criterion-map criteria.json
+```
+
+อ่าน criteria/checks และ mapping ใน preview ก่อนเพิ่ม --execute-workflow/ยืนยัน START
+นี่คือการระบุโดยผู้ใช้ว่า check ใดครอบคลุมเกณฑ์ใด ไม่ใช่ semantic verification จากโมเดล
+ระบบ resolve เป็น accepted evidence IDs ปัจจุบันหลังทุกขั้นผ่าน แล้วเรียก controller
+ตัวเดิมที่ /finish ใช้ unknown, missing, failed, stale หรือ unresolved recheck ไม่ทำให้ DONE
+การ apply mapping ทำครั้งเดียว หากปฏิเสธจะหยุด auto และรอผู้ใช้ตรวจ ไม่ retry หรือเรียกโมเดลเพิ่ม
+
+Mapping ไม่อนุมัติ tools ไม่เปลี่ยน budget และไม่ถูก restore เป็น opt-in ของ session
+ไฟล์ผิด schema/เกิน 32 KiB/อ้าง UUID เอง/อ้าง check ที่ไม่มีจะถูกปฏิเสธก่อน backend
+หากมี human checks ยังต้องตรวจและ /check ตามเดิมก่อน completion เกิดได้
+ใช้กับ --plan-workflow ได้ โดยตรวจ mapping เทียบ draft และ preview ก่อน START ของ work
 
 ### เลือกโมเดลเองใน workflow
 
