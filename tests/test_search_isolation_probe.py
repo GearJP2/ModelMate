@@ -24,7 +24,9 @@ class IsolationProbeTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_bad_worker_reports_never_pass_or_leak(self):
-        for output in (b'private diagnostic', b'{}', json.dumps(dict.fromkeys(isolation.KEYS, 1)).encode()):
+        for output in (b'private diagnostic', b'{}', b'x' * 65537, b'[' * 1500,
+                       b'{"checks":{},"checks":{}}',
+                       json.dumps(dict(checks=dict.fromkeys(isolation.KEYS, 1), response='{}')).encode()):
             with self.subTest(output=output), patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'private stderr')):
                 report = isolation.probe()
                 self.assertEqual(report, {'status': 'unverified', 'reason': 'invalid_worker_report'})
@@ -71,9 +73,17 @@ class IsolationProbeTests(unittest.TestCase):
     def test_false_worker_check_is_not_promoted_to_capability_verified(self):
         checks = dict.fromkeys(isolation.KEYS, True)
         checks['injectionRemainsData'] = False
-        result = subprocess.CompletedProcess([], 0, json.dumps(checks).encode(), b'')
+        response = dict(version=1, source='Wikipedia', host='en.wikipedia.org', query='synthetic public query', results=[])
+        result = subprocess.CompletedProcess([], 0, json.dumps(dict(checks=checks, response=json.dumps(response))).encode(), b'')
         with patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation.subprocess, 'run', return_value=result):
             report = isolation.probe()
         self.assertEqual(report['status'], 'unverified')
         self.assertFalse(report['checks']['injectionRemainsData'])
         self.assertFalse(report['g3Passed'])
+
+    def test_mismatched_child_response_is_rejected_by_parent(self):
+        response = dict(version=1, source='Wikipedia', host='en.wikipedia.org', query='different query', results=[])
+        report = dict(checks=dict.fromkeys(isolation.KEYS, True), response=json.dumps(response))
+        result = subprocess.CompletedProcess([], 0, json.dumps(report).encode(), b'')
+        with patch.object(isolation.shutil, 'which', return_value='/usr/bin/bwrap'), patch.object(isolation.subprocess, 'run', return_value=result):
+            self.assertEqual(isolation.probe(), {'status': 'unverified', 'reason': 'invalid_worker_response'})

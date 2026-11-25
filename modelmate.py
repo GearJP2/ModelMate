@@ -5762,6 +5762,23 @@ def validate_search_packet(packet):
     return packet
 
 
+def validate_search_worker_response(content, request):
+    """Bind one bounded worker response to the exact caller-owned public request."""
+    if not isinstance(request, dict) or set(request) != {'version', 'source', 'host', 'query'}:
+        raise ProbeError('Invalid expected search worker request.')
+    expected = validate_search_packet(dict(request, results=[]))
+    try:
+        if not isinstance(content, bytes) or len(content) > 32768:
+            raise ValueError
+        packet = validate_search_packet(json.loads(content.decode('utf-8'),
+            object_pairs_hook=_unique_json_object, parse_constant=_invalid_plan_constant))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ProbeError('Invalid search worker response.') from exc
+    if any(packet[key] != expected[key] for key in request):
+        raise ProbeError('Search worker response does not match the request.')
+    return packet
+
+
 def run_search_worker(input_stream, output):
     """Internal binary protocol for an already-approved query; caller owns isolation/consent."""
     content = input_stream.read(8193)

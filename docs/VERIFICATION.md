@@ -3839,3 +3839,41 @@ account or network request was made by this increment's verification.
 
 The full offline suite passed all 679 tests in 117.570 seconds, with no skips.
 Runtime/probe compile checks and `git diff --check` passed.
+
+
+### P13 parent-side response binding (2026-11-25)
+
+`validate_search_worker_response` validates a caller-owned public request and a
+binary worker packet of at most 32768 bytes. It rejects malformed/duplicate-key/
+nonfinite/deep JSON, invalid UTF-8 and unsupported packet fields, using existing
+strict source metadata validation. Version, source, host and query must all match
+the caller's request exactly. A valid result for a different query/host/source
+cannot be accepted for this request. The validator grants no permission/evidence
+and makes no network/model call.
+
+The namespace probe now transfers the actual result as a response string alongside
+its boolean diagnostic checks. The parent separately applies response validation
+against its own fixture request before accepting any successful capability report.
+It rejects malformed/duplicate/oversized diagnostic envelopes (64 KiB ceiling),
+wrong-type booleans and unexpected envelope fields. Returned response text is not
+printed in the sanitized report. A test supplies all-true child booleans but a
+mismatched query; the parent still returns unverified/invalid_worker_response.
+
+The real namespace run passed eighteen checks with the unchanged host profile.
+Runtime SHA-256:
+`84c61762934745f43af30ee4a47f75e9e02198a258bca3e5f75a4043043c2a72`;
+probe SHA-256:
+`76c2c3f9b4e6d1b9062dae3ea09bfd9555446e6195e195992a70cea9e4071f51`.
+Nine worker-protocol tests and ten isolation-probe tests passed. Compile/diff
+checks passed. No HTTP/DNS/model/account call was made.
+
+The exact field comparison binds request content, not freshness across two
+identical requests. A production launcher must use one owned process per request,
+accept results only from that process's successful completion, enforce collection
+limits/deadlines and never replay unknown outcomes. This increment does not yet
+implement that launcher or CLI activation. Diagnostic capture_output still trusts
+the fixed test child to keep stdout bounded before the envelope length check;
+it is not a hostile-worker streaming output limit. G3 remains open.
+
+Full offline verification passed all 683 tests in 119.191 seconds with no skips.
+The expanded ten-test diagnostic boundary set also passed separately.

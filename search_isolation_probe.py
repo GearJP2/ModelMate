@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import tempfile
 
+from modelmate import ProbeError, _unique_json_object, validate_search_worker_response
+
 
 CHILD = r"""
 import json, os, sys, ssl, http.client
@@ -92,7 +94,7 @@ try:
     checks['packetAuthorityRejected'] = False
 except runtime['ProbeError']:
     checks['packetAuthorityRejected'] = True
-print(json.dumps(checks))
+print(json.dumps(dict(checks=checks, response=worker_output.getvalue().decode("utf-8"))))
 """
 KEYS = {'runtimeSearchParsed', 'runtimeQueryOnly', 'injectionRemainsData', 'packetAuthorityRejected', 'tlsTrustLoaded', 'unmountedToolsHidden', 'queryOnly', 'privateFileHidden', 'oldCwdHidden', 'homeHidden',
         'cwdIsolated', 'environmentCleared', 'privateFdClosed',
@@ -153,12 +155,25 @@ def probe(timeout=10):
         if result.returncode:
             return {'status': 'unverified', 'reason': 'namespace_or_worker_failed'}
         try:
-            checks = json.loads(result.stdout)
-        except (ValueError, UnicodeError):
-            checks = None
-        if (not isinstance(checks, dict) or set(checks) != KEYS
-                or any(type(value) is not bool for value in checks.values())):
+            if len(result.stdout) > 65536:
+                raise ValueError
+            report = json.loads(result.stdout, object_pairs_hook=_unique_json_object)
+            if not isinstance(report, dict) or set(report) != {'checks', 'response'}:
+                raise ValueError
+            checks = report['checks']
+            if (not isinstance(checks, dict) or set(checks) != KEYS
+                    or any(type(value) is not bool for value in checks.values())
+                    or not isinstance(report['response'], str)):
+                raise ValueError
+        except (ValueError, UnicodeError, RecursionError, ProbeError):
             return {'status': 'unverified', 'reason': 'invalid_worker_report'}
+        try:
+            validate_search_worker_response(report['response'].encode('utf-8'),
+                dict(version=1, source='Wikipedia', host='en.wikipedia.org',
+                     query=json.loads(public_bytes)['query']))
+        except (ProbeError, UnicodeError):
+            return {'status': 'unverified', 'reason': 'invalid_worker_response'}
+        checks['parentResponseBound'] = True
         checks['hostWriteContained'] = not marker.exists()
         checks['hostInputsUnchanged'] = (secret.read_bytes() == private_bytes
                                         and public.read_bytes() == public_bytes

@@ -576,7 +576,7 @@ Host capability increment: `python3 search_isolation_probe.py` runs a fixed,
 synthetic local worker in installed bubblewrap without Codex, inference or HTTP.
 On the tested host it demonstrated hidden private fixture/cwd/home, closed private
 FD, explicit public environment, read-only query input and contained temporary
-writes. Nine diagnostic tests pass. The probe now uses an explicit Debian-style
+writes. Ten diagnostic tests pass. The probe now uses an explicit Debian-style
 x86-64 CPython 3.11 / OpenSSL 3 profile (interpreter, stdlib, selected shared
 libraries and one CA bundle), with no broad /usr, /lib or /etc mount. TLS trust
 loads without a network request. This remains a host-specific capability spike:
@@ -596,7 +596,11 @@ source, host and query (8 KiB maximum); strict validated result packets are
 limited to 32 KiB before output. Extra authority/history fields, duplicate JSON
 keys and malformed inputs fail before transport. Six protocol tests pass. This
 is not a CLI entry point or consent/isolation enforcement; the future approved
-parent launcher must provide those before enabling this path.
+parent launcher must provide those before enabling this path. Parent response
+validation now rejects malformed/oversized/duplicate-key results and binds all
+version/source/host/query fields to the caller-owned request. The namespace
+probe transfers the result across the process boundary and applies this check
+independently of child-reported booleans; mismatched responses never pass.
 
 Search URL validation is shared between SearXNG candidate filtering and packet
 import/export. Invalid, zero or out-of-range ports are skipped before candidates
