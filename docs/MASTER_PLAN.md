@@ -339,6 +339,29 @@ created files are never replaced. No automatic retry, local session or resume is
 added for this ephemeral planning turn. Ten fake-native/CLI/publication tests pass.
 Plain default prompt auto entry and live draft evidence remain open; combined handoff is described above.
 
+P06/P10 completion-conflict fix (2026-11-26), MOCK_VERIFIED: the shared native
+backend rejects changed completed assistant text for the same bound item ID
+before turn termination. Exact duplicates remain deduplicated and IDs may be
+reused in later turns. A fake-server regression reproduced silent draft
+publication before the fix and now verifies no publication or retry. Planning
+and native-workflow targeted tests: 34 passed. No live gate is advanced.
+
+P06/P12 planning Ctrl+C increment (2026-11-26), MOCK_VERIFIED: a KeyboardInterrupt
+uses the existing host cancellation path before closing the planning backend.
+A known active bound turn receives one interrupt request; completed/unbound turns
+are not targeted and failed stop requests do not replace cancellation or retry.
+No unpublished draft or work handoff follows cancellation, even after an observed
+completion. Forty planning/handoff/metrics tests passed. Missing turn IDs and
+actual remote stopping remain unverified; no live gate is advanced.
+
+P06/P12 bounded planning stop observation (2026-11-26), MOCK_VERIFIED: after a
+successful cancel request the planning backend drains matching native events
+for at most five additional seconds. Acknowledgement/foreign terminal events
+cannot confirm termination; timeout or observation failure reports unknown.
+Known terminal status is reported separately from proposal publication and work
+verification. Forty-three planning/handoff/metrics tests passed. This closes the
+local observation gap, not the live remote-stop or lost-binding gate.
+
 ไฟล์: modelmate.py, tests/test_routing.py, synthetic plan fixtures
 อัปเดตตามผู้ใช้ 2026-11-18: ไม่ทำ decision model/classifier แยก
 ใช้ validator ตาม section 5 กับ explicit plan/role bindings และ controller policy
@@ -480,6 +503,16 @@ unknown tool และ malformed approval หยุด, stronger managed policy 
 ไม่รวม: acceptForSession โดย default หรือใช้ shellCommand ที่ข้าม sandbox แทน executor
 
 ### P10 — Workflow และ correction budget
+
+Auto stop/late-completion correction (2026-11-26): shared workflow cancel now
+revokes the process-local automatic advancement opt-in before requesting native
+stop. Exit/EOF/KeyboardInterrupt share that path. Valid negative model/tool/pause
+choices also revoke Auto after UI token validation. A late native completed event
+is still recorded truthfully, but cannot reauthorize auto checks, corrections,
+next-step dispatch or criterion-map completion. Manual commands remain available
+under existing gates; no automatic reenabling or checkpoint/schema change exists.
+Twenty Auto, twenty-seven workflow UI and nine native-permission tests pass.
+This is offline race evidence, not a new live cancellation gate pass.
 
 User-approved Auto completion increment: --criterion-map MAP_JSON is accepted
 only with new explicit Auto advancement. Its bounded version-1 schema maps every
@@ -646,11 +679,21 @@ resume missing thread/account mismatch, duplicate delete, partial delete failure
 
 ### P13 — Private-context web search
 
+2026-11-26 scoped live attempt: user authorized one isolated English Wikipedia
+fixture lookup with no model/account call or retry. It returned unverified /
+isolated_lookup_failed (exit 1), not a G3 pass. Separate no-connect local probes
+observed TCP/UDP socket creation denied with EPERM in this execution profile.
+The verifier now checks socket creation only after confirmation and stops before
+worker launch if neither tested address family has TCP/UDP capability. It never
+connects/sends/resolves during that preflight, widens policy or retries a lookup.
+Twenty-three diagnostic tests pass. Current-profile isolated DNS/TLS evidence
+remains unavailable; other normal-Terminal/live and integration gates stay open.
+
 Host capability increment: `python3 search_isolation_probe.py` runs a fixed,
 synthetic local worker in installed bubblewrap without Codex, inference or HTTP.
 On the tested host it demonstrated hidden private fixture/cwd/home, closed private
 FD, explicit public environment, read-only query input and contained temporary
-writes. Twenty diagnostic tests pass. The probe now uses an explicit Debian-style
+writes. Twenty-three diagnostic tests pass. The probe now uses an explicit Debian-style
 x86-64 CPython 3.11 / OpenSSL 3 profile (interpreter, stdlib, selected shared
 libraries and one CA bundle), with no broad /usr, /lib or /etc mount. TLS trust
 loads without a network request. This remains a host-specific capability spike:
@@ -756,6 +799,16 @@ public query เดินได้และแสดงแหล่งอ้า�
 
 ### P14 — Metrics
 
+Planning telemetry increment (2026-11-26): one-shot drafting now emits a separate
+planning_turn summary from existing matching native observations: requested
+selection, observed token snapshot/reroutes and measured turn elapsed time.
+proposalSaved is controller-owned and distinct from native completed status.
+Missing telemetry stays unknown; no planning/workflow total, quota/cost conversion
+or actual-model inference is added. Measurement collection explicitly disables
+account/quota reads, including when a saved quota window exists. Report I/O
+failure cannot change publication/error results. Fourteen draft tests, thirteen
+metrics tests and seven planned-workflow tests pass; live telemetry remains open.
+
 Planned-command wall timing increment: --plan-workflow reports observed monotonic
 planningWallSeconds, workflowWallSeconds and totalWallSeconds, including both
 START waits, clarification and cleanup. Ending before handoff leaves workflow
@@ -800,6 +853,12 @@ evidence remain pending.
 ไม่รวม: package registry publish, auto updater หรือติดตั้ง dependencies เงียบ ๆ
 
 ### P16 — Release candidate และ evaluation
+
+2026-11-26 capability revalidation, IN_PROGRESS: the requirement/release checklist
+was checked at `e28be63` (780 offline tests). Codex is still 0.172.0; Docker WSL
+integration is unavailable, so no independent clean environment was tested.
+The prepared bounded G2 command-approval probe awaits explicit live authorization.
+No release gate, live compatibility claim or evaluation result was advanced.
 
 C2 authoring fixture increment: `routing-pilot.py prepare --case cli` prepares
 two identical row-printing CLI projects and a hash-bound frozen checker. The

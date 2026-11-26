@@ -20,13 +20,41 @@ class PlanDraftTests(unittest.TestCase):
         self.destination=self.root/'new plan.json'
         self.trace=self.root/'trace'
 
-    def draft(self, answer, *, mode='text', confirmation='START\n', prompt=None):
+    def draft(self, answer, *, mode='text', confirmation='START\n', prompt=None, output=None):
         server=SERVER.replace("'SYNTHETIC_ANSWER all tests passed DONE'",repr(answer))
+        server=server.replace("if mode=='metrics':", "if mode in ('metrics','text-metrics'):")
+        server=server.replace("if mode in ('text','text-only','text-only-fail'):",
+                              "if mode in ('text','text-only','text-only-fail','text-metrics','changed-answer','text-until-interrupt'):")
+        server=server.replace("elif mode not in ('text-only','text-only-fail'):",
+                              "elif mode not in ('text-only','text-only-fail','text-until-interrupt'):")
+        server=server.replace(" elif method=='turn/interrupt':result={}",
+            " elif method=='turn/interrupt':\n"
+            "  emit({'method':'turn/completed','params':{'threadId':'foreign',"
+            "'turn':{'id':str(turn),'status':'interrupted'}}})\n"
+            "  if mode=='text-until-interrupt':\n"
+            "   emit({'method':'turn/completed','params':{'threadId':'thread',"
+            "'turn':{'id':str(turn),'status':'interrupted'}}})\n"
+            "  result={}")
+        server=server.replace("  if mode in ('metrics','text-metrics'):",
+            "  if mode=='changed-answer':\n"
+            "   emit({'method':'item/completed','params':{'threadId':'thread','turnId':str(turn),"
+            "'item':{'id':'answer','type':'agentMessage','text':'different completed text'}}})\n"
+            "  if mode in ('metrics','text-metrics'):")
         def backend(command):
             return NativeWorkflowConnection([sys.executable,'-u','-c',server,str(self.trace),mode],1)
         with tempfile.TemporaryFile('w+') as source,patch('modelmate.NativeWorkflowConnection',side_effect=backend):
             source.write(confirmation);source.seek(0)
-            return run_plan_draft(prompt or PLAN['goal'],'synthetic-standard','low',self.destination,source,io.StringIO())
+            output=io.StringIO() if output is None else output
+            try:
+                return run_plan_draft(prompt or PLAN['goal'],'synthetic-standard','low',self.destination,source,output)
+            finally:
+                self.output=output.getvalue()
+
+    def metrics(self):
+        rows=[line.removeprefix('Planning metrics: ') for line in self.output.splitlines()
+              if line.startswith('Planning metrics: ')]
+        self.assertEqual(len(rows),1)
+        return json.loads(rows[0])
 
     def records(self):
         return [json.loads(line) for line in self.trace.read_text().splitlines()]
@@ -108,4 +136,136 @@ class PlanDraftTests(unittest.TestCase):
     def test_disconnect_does_not_publish_or_replay(self):
         with self.assertRaises(ProbeError):self.draft(json.dumps(PLAN),mode='disconnect')
         self.assertFalse(self.destination.exists())
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)
+
+    def test_conflicting_completed_item_does_not_publish_or_replay(self):
+        with self.assertRaisesRegex(ProbeError,'changed after completion'):
+            self.draft(json.dumps(PLAN),mode='changed-answer')
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)
+
+    def test_interrupt_after_dispatch_requests_native_stop_without_publication(self):
+        with patch.object(NativeWorkflowConnection,'drain',side_effect=KeyboardInterrupt),self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN))
+        records=self.records()
+        turns=[row for row in records if row.get('method')=='turn/start']
+        stops=[row for row in records if row.get('method')=='turn/interrupt']
+        self.assertEqual(len(turns),1)
+        self.assertEqual(len(stops),1)
+        self.assertEqual(stops[0]['params'],dict(threadId='thread',turnId='1'))
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+
+    def test_stop_failure_does_not_replace_keyboard_interrupt_or_retry(self):
+        with patch.object(NativeWorkflowConnection,'drain',side_effect=KeyboardInterrupt),patch.object(
+                NativeWorkflowConnection,'interrupt',side_effect=ProbeError('synthetic disconnect')) as stop:
+            with self.assertRaises(KeyboardInterrupt):self.draft(json.dumps(PLAN))
+        stop.assert_called_once()
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)
+
+    def test_interrupt_before_connection_has_no_turn_to_stop(self):
+        with patch.object(NativeWorkflowConnection,'connect',side_effect=KeyboardInterrupt),patch.object(
+                NativeWorkflowConnection,'interrupt') as stop,self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN))
+        stop.assert_not_called()
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+        self.assertFalse(self.trace.exists())
+
+    def test_interrupt_after_completed_observation_still_does_not_publish(self):
+        drain=NativeWorkflowConnection.drain
+        def completed_then_interrupt(backend):
+            drain(backend)
+            raise KeyboardInterrupt
+        with patch.object(NativeWorkflowConnection,'drain',completed_then_interrupt),self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN))
+        self.assertFalse(self.destination.exists())
+        report=self.metrics()
+        self.assertFalse(report['proposalSaved'])
+        self.assertEqual(report['planningTurnMeasurements'][0]['terminalStatus'],'completed')
+        records=self.records()
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in records),1)
+        self.assertFalse(any(row.get('method')=='turn/interrupt' for row in records))
+
+    def test_cancellation_observes_terminal_event_after_interrupt(self):
+        self.cancel_during_wait('text-until-interrupt')
+        self.assertEqual(self.metrics()['planningTurnMeasurements'][0]['terminalStatus'],'interrupted')
+        self.assertIn('Planning cancellation: native terminal interrupted observed',self.output)
+
+    def test_interrupt_acknowledgement_without_matching_terminal_remains_unknown(self):
+        self.cancel_during_wait('text-only')
+        self.assertIsNone(self.metrics()['planningTurnMeasurements'][0]['terminalStatus'])
+        self.assertIn('Planning cancellation: native outcome unknown',self.output)
+
+    def test_stop_observation_error_does_not_claim_confirmed_termination(self):
+        drain=NativeWorkflowConnection.drain
+        calls=0
+        def invalid_observation(backend):
+            nonlocal calls
+            calls+=1
+            if calls==1:raise KeyboardInterrupt
+            drain(backend)
+            raise ProbeError('synthetic invalid stop observation')
+        with patch.object(NativeWorkflowConnection,'drain',invalid_observation),self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN))
+        self.assertIn('Planning cancellation: native outcome unknown',self.output)
+        self.assertNotIn('synthetic invalid stop observation',self.output)
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+
+    def cancel_during_wait(self, mode):
+        drain=NativeWorkflowConnection.drain
+        calls=0
+        def interrupt_once(backend):
+            nonlocal calls
+            calls+=1
+            if calls==1:raise KeyboardInterrupt
+            drain(backend)
+        with patch.object(NativeWorkflowConnection,'drain',interrupt_once),self.assertRaises(KeyboardInterrupt):
+            self.draft(json.dumps(PLAN),mode=mode)
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(self.metrics()['proposalSaved'])
+        records=self.records()
+        self.assertEqual(sum(row.get('method')=='turn/start' for row in records),1)
+        self.assertEqual(sum(row.get('method')=='turn/interrupt' for row in records),1)
+
+    def test_missing_usage_stays_unknown_without_prompt_or_native_ids(self):
+        self.assertEqual(self.draft(json.dumps(PLAN)),0)
+        report=self.metrics()
+        self.assertTrue(report['proposalSaved'])
+        self.assertIsNone(report['tokenUsage'])
+        self.assertIsNone(report['tokenUsageScope'])
+        self.assertNotIn(PLAN['goal'],json.dumps(report,ensure_ascii=False))
+        self.assertNotIn('threadId',json.dumps(report))
+        self.assertNotIn('accountId',json.dumps(report))
+        self.assertEqual(report['planningTurnMeasurements'][0]['terminalStatus'],'completed')
+
+    def test_observed_usage_and_reroute_are_not_requested_model_guesses(self):
+        self.assertEqual(self.draft(json.dumps(PLAN),mode='text-metrics'),0)
+        report=self.metrics()
+        self.assertEqual(report['tokenUsage']['last']['totalTokens'],11)
+        self.assertEqual(report['tokenUsage']['last']['cachedInputTokens'],3)
+        self.assertEqual(report['requestedSelection']['model'],'synthetic-standard')
+        self.assertEqual(report['planningTurnMeasurements'][0]['modelReroutes'],[
+            dict(fromModel='synthetic-standard',toModel='synthetic-fallback')])
+        records=self.records();start=next(i for i,row in enumerate(records) if row.get('method')=='turn/start')
+        self.assertFalse(any(row.get('method') in ('account/read','account/rateLimits/read') for row in records[start+1:]))
+
+    def test_invalid_proposal_is_distinct_from_native_completed_status(self):
+        with self.assertRaises(ProbeError):self.draft('not JSON')
+        report=self.metrics()
+        self.assertFalse(report['proposalSaved'])
+        self.assertEqual(report['planningTurnMeasurements'][0]['terminalStatus'],'completed')
+        self.assertFalse(self.destination.exists())
+
+    def test_metrics_write_error_does_not_lose_published_draft(self):
+        class BrokenMetrics(io.StringIO):
+            def write(self,text):
+                if text.startswith('Planning metrics: '):raise OSError('synthetic output failure')
+                return super().write(text)
+        self.assertEqual(self.draft(json.dumps(PLAN),output=BrokenMetrics()),0)
+        self.assertEqual(json.loads(self.destination.read_text()),PLAN)
         self.assertEqual(sum(row.get('method')=='turn/start' for row in self.records()),1)

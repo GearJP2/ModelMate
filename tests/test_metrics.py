@@ -179,3 +179,16 @@ class PlannedTimingTests(unittest.TestCase):
         from modelmate import report_planned_workflow_timing
         output=Mock();output.write.side_effect=OSError('closed output')
         self.assertEqual(report_planned_workflow_timing(output,10,14,22)['totalWallSeconds'],12)
+
+
+class MetadataFreeMeasurementsTests(unittest.TestCase):
+    def test_explicit_no_quota_mode_never_reads_account_even_with_saved_window(self):
+        backend=NativeWorkflowConnection.__new__(NativeWorkflowConnection)
+        backend._quota_first={'synthetic-window':(10,60,100)}
+        backend._work_turn_measurements=[]
+        backend._latest_usage=None
+        backend.request=Mock(side_effect=AssertionError('no account/metadata reads'))
+        report=backend.workflow_measurements(include_quota=False)
+        self.assertIsNone(report['quotaWindowChanges'])
+        self.assertIsNone(report['tokenUsage'])
+        backend.request.assert_not_called()

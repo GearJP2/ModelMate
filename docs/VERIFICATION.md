@@ -4516,3 +4516,252 @@ implemented/offline-tested local clock reporting, not new live evidence.
 Full offline verification passed all 758 tests in 143.964 seconds, with no skips.
 Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
 `3300379db176436587e0f163c95e05abdc5fcc747b1372d3af85a2d8dc9407a8`.
+
+
+### P13 authorized isolated Wikipedia smoke, unverified (2026-11-26)
+
+The user explicitly authorized the prepared one-shot command and entering its
+fresh confirmation token:
+
+```sh
+python3 search_isolation_probe.py --live-wikipedia en
+```
+
+It ran once with the fixed public fixture query, exited 1 and reported
+status=unverified, reason=isolated_lookup_failed, searchLaunches=1,
+modelTurnsRequested=0 and g3Passed=false. No retry occurred. This is not a passed
+DNS/TLS, result or isolation gate. The original generic worker failure does not
+identify its exact failing layer, and is not proof of a completed remote request.
+No account/model call was made, and no private prompt or source result is stored.
+
+Exact attempted runtime SHA-256:
+`3300379db176436587e0f163c95e05abdc5fcc747b1372d3af85a2d8dc9407a8`;
+verifier SHA-256:
+`85335a4c726e6da149f94e934ac5b606fa6adaa40886c1da8df869002409f05d`.
+Observed local versions: bubblewrap 0.8.0, parent Python 3.12.0, worker Python
+3.11.2. No live Codex CLI/version compatibility is inferred from this HTTP mode.
+
+Separate local socket-creation probes made no bind/connect/DNS/send call and
+observed PermissionError errno 1 (EPERM) for IPv4 stream and datagram sockets in
+the current tool execution profile. This establishes a missing host capability
+in that profile, not the exact original worker exception or a service outage.
+Host/organization restrictions were not widened and no proxy/privileged fallback
+was attempted. A normal Terminal may have different capabilities; its outcome
+would need a separately scoped real run, not reuse of this failed result.
+
+The updated diagnostic performs a no-connect TCP/UDP creation preflight after
+exact confirmation. If neither tested IPv4/IPv6 family has both socket types, it
+returns unverified/host_socket_capability_unavailable with zero search launches.
+Every created descriptor is closed. A successful creation check alone cannot
+verify routing, DNS, TLS or G3; the real lookup would still have to succeed.
+
+All twenty-three diagnostic tests passed, including refusal before search launch,
+no connect/bind/send/resolve in the capability test and explicit socket denial.
+A separate direct call of only that local capability helper returned false with
+zero network requests; it was not another lookup or invocation of live mode.
+Updated verifier SHA-256:
+`63eaaca040b610a3afedf0258fb390753468f6cc50ea595593f9b93f983f467d`.
+Compile and diff checks passed. Runtime was untouched; full suite was not rerun
+for this diagnostic-only increment (last full runtime suite: 758 tests passed).
+
+Remaining P13 capability/evidence: an authorized environment allowing the
+required socket creation and endpoint access, real isolated DNS/TLS/result
+verification, live SearXNG and automatic query-provenance/handoff integration.
+Neither the failed authorized smoke nor these offline checks satisfy full G3 or
+release readiness. Hosted web/automatic private-context search remain disabled.
+
+
+### P14 observed planning-turn usage without extra account reads (2026-11-26)
+
+Drafting previously discarded native planning measurements even when the matching
+turn had supplied token/reroute/terminal observations. The planning path now emits
+a separate planning_turn report using the existing bounded native measurement
+collector. Requested model/effort remains labeled requested; actual model is not
+inferred from that selection. Reroutes and token snapshots are retained only when
+matched to the native binding by the existing observer, with foreign/duplicate
+observations filtered as before. Missing usage/terminal/elapsed observations stay
+unknown rather than fabricated zero or success.
+
+proposalSaved is set only after validated exclusive file publication and is
+separate from native terminalStatus. A completed generation with invalid JSON can
+therefore report completed plus proposalSaved false, with no task/grant created.
+The report includes no goal, answer text, local path, account ID, native binding,
+quota window or raw error. Native per-turn tokens are not summed across planning
+and workflow, cached/reasoning fields are not added again, and no quota/cost or
+savings estimate is made. Workflow JSONL and its existing scope remain unchanged;
+planning metrics are Terminal output only.
+
+The shared measurement method retains its previous default but accepts an explicit
+include_quota=False path. Planning always uses that path after closing its native
+transport: even a saved quota window cannot cause a reporting-time account read.
+No extra metadata/model call or replay is introduced. Report serialization/write
+failures cannot replace the original publication or failure result.
+
+All fourteen draft tests, thirteen metrics tests and seven planned-workflow tests
+passed. New fake-native cases cover absent usage, matching usage/reroute telemetry,
+duplicate/foreign observation filtering, requested-versus-reported model distinction,
+completed-but-invalid proposals, report I/O failure preserving the published file
+and no account/rate-limit reads after the planning turn. A direct measurement test
+also supplies a saved quota window while forbidding all RPC calls in no-quota mode.
+Compile/diff checks passed. No live inference/account/quota call was made for this
+increment; the prior authorized HTTP smoke was not repeated.
+
+This reports available planning observations, not complete actual-dispatch proof,
+combined task-token attribution, quota savings or live service compatibility.
+G1/G4/G5 and broader live/release gates remain open.
+
+Full offline verification passed all 766 tests in 121.080 seconds, with no skips.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`a903c53a6371a44d6ecfca0702ab63fd097d4871f7fc741f9bd7318d66ce2d7f`.
+
+
+### P10 cancel revokes Auto despite late native completion (2026-11-26)
+
+A new regression reproduced a stop race in the experimental Auto scheduler:
+/cancel requested interruption and set UI stopping, but a subsequent native
+completed event cleared stopping and moved the attempt into CHECKING. The old
+process Auto opt-in then permitted evaluation and a following attempt, contrary
+to the user's stop. The controller's completed observation itself was valid;
+rewriting it to interrupted or discarding known results would be incorrect.
+
+The shared ChatShell workflow cancellation path now revokes automatic advancement
+immediately. Exit, EOF and the selector's KeyboardInterrupt cancellation use the
+same path. Valid UI-token negative tool/model/pause choices also revoke the
+process opt-in before their existing response handlers. Invalid/stale tokens still
+fail validation before any new opt-in mutation. This changes no native tool grant,
+model policy, retry counter, controller terminal semantics or persistence schema.
+Known completion/evidence remain available for explicit manual check/next/finish;
+mode changes or ordinary continue do not silently restore the revoked opt-in.
+
+Twenty Auto tests passed. New cases cover cancel while running followed by a
+completed native turn, stopping before the first dispatch, stopping after accepted
+steps but before criterion mapping, exit/EOF with late completion, invalid versus
+valid pause tokens and declining a model escalation. The former race test failed
+before the change and now observes only one dispatch, no step advancement and no
+DONE after late completion. Existing quota-continue, correction-limit, unknown
+and stale-evidence behavior remains covered. Twenty-seven workflow UI and nine
+native-permission tests passed separately. Compile/diff checks passed; no live
+model/account/quota or HTTP request was used.
+
+This fixes process-local Auto continuation after explicit user stop. It does not
+prove the native command was prevented from completing, roll back side effects,
+implement planning-turn textual cancellation after START, or close the broader
+live stop/process-loss/permission gates. The separate planning inspection exposed
+this Auto race; planning proposal publication behavior was not changed.
+
+Full offline verification passed all 771 tests in 119.391 seconds, with no skips.
+Runtime/diagnostic compile and diff checks passed. Tested runtime SHA-256:
+`79e1d9ee5f2994565f6970f04622c69c30771aa659cd220cda7f781ce008b76d`.
+
+### P06/P10 conflicting completed assistant item (2026-11-26)
+
+A fake native server emitted a valid planning JSON completion, then different
+completed text with the same bound item ID before the turn terminal event.
+The new regression failed before the fix: the backend silently discarded the
+changed completion and published the first proposal. The shared backend now
+stores a SHA-256 digest per displayed item and rejects a changed completion.
+Exact duplicates still display once; the digest table is cleared per turn, so
+reused IDs in later turns remain valid. Foreign bindings and post-terminal text
+retain their existing filtering. No raw answer is added to error messages or
+telemetry, and no grant, retry counter or completion verdict is inferred.
+
+`PYTHONPATH=tests python3 -m unittest test_plan_draft test_native_workflow -q`
+passed 34 tests. The regression verifies no draft publication, proposalSaved
+false and only one turn/start. Existing tests cover exact duplicate filtering
+and item ID reuse across turns. Runtime/diagnostic compilation and diff checks
+passed. This is offline protocol validation, not live server evidence; no model,
+account, quota or HTTP request was used. Runtime SHA-256:
+`274a1ae81e0569c68c33b0750071d5203bfcd87774c7917824db4cd99bba5121`.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 772 tests in 121.004 seconds, with no skips.
+
+### P06/P12 planning KeyboardInterrupt cancellation (2026-11-26)
+
+Inspection found that planning closed its owned backend on KeyboardInterrupt
+without requesting a native interrupt for an already bound active turn. Two
+regressions failed before the change: no interrupt RPC was traced, and the
+existing native stop method was never called. The planning entry now calls the
+existing host cancel action before its existing cleanup, then re-raises the
+original KeyboardInterrupt. CLI cancellation remains exit 130. A stop-request
+failure cannot replace the cancellation or cause automatic replay.
+
+`PYTHONPATH=tests python3 -m unittest test_plan_draft test_planned_workflow
+test_metrics -q` passed 40 tests. New fake-server cases cover cancellation before
+connect (no turn/interrupt), after a bound dispatch (one exact turn/interrupt),
+failed interrupt (one attempt, original KeyboardInterrupt), and after an already
+observed completion (no extra interrupt, no draft publication). The combined
+CLI case verifies exit 130, no work handoff, no saved draft, null workflow timing
+and preservation of the next phase's unread START. No asynchronous input reader
+or command parser was added to planning, so handoff confirmations remain intact.
+
+This is MOCK_VERIFIED only. Interrupt acknowledgement is not proof of remote
+termination, and a lost/unreturned turn/start ID cannot be targeted by guessing.
+Cancellation before publication prevents a new draft; an already published file
+is not rolled back. There is no planning resume, textual cancellation after START,
+or live stop evidence in this increment. No model/account/quota/HTTP request was
+used. Compile/diff checks passed. Tested runtime SHA-256:
+`c70fe79fa2e650ec1a5d74cef12ca386219d976d6b2e474399e16b3e0a63d1ca`.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 777 tests in 125.278 seconds, with no skips.
+
+### P06/P12 bounded planning cancellation observation (2026-11-26)
+
+The previous cancellation increment requested an interrupt but closed without
+draining the resulting native terminal events. Two new regressions failed before
+this change: a matching interrupted terminal event remained unobserved, and an
+acknowledgement-only cancellation had no explicit unknown-outcome report.
+After a successful host cancel request, planning now uses its existing native
+reader and selector to wait up to five additional seconds for a matching terminal
+event. The existing host validates thread/turn identity; no new inference,
+recovery connection, retry, grant or persistence format is introduced.
+
+`PYTHONPATH=tests python3 -m unittest test_plan_draft test_planned_workflow
+test_metrics -q` passed 43 tests. A real fake-server subprocess emits a foreign
+terminal event followed by the matching interrupted event only after interrupt;
+the latter is observed and reported without publishing the draft. A second case
+emits only the foreign event and an interrupt acknowledgement: the bounded wait
+expires, native terminal telemetry remains null and cancellation reports unknown.
+Both retain one turn/start and one interrupt request. An observation error after
+draining also reports unknown rather than treating partial observations as a
+confirmed stop, and the original KeyboardInterrupt remains the result. Existing
+tests cover failed stop requests, repeated interruption, prior completion and
+no work handoff. Compile/diff checks passed.
+
+This is offline protocol evidence only. The reported terminal status is not a
+work check verdict, and completed is not a claim that cancellation prevented
+side effects. Missing/unreturned turn IDs, actual remote stopping and live loss
+recovery remain unverified. No model/account/quota or HTTP request was used.
+Tested runtime SHA-256:
+`27f3568ed35d617a0fc7c04f0b0b79ee40ba1e8a320cee443e4274ea897b72f1`.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 780 tests in 120.884 seconds, with no skips.
+
+### P16 release capability revalidation (2026-11-26)
+
+At feature commit `e28be63`, `git status -sb` was clean and synchronized with
+its remote branch. `codex --version` returned `codex-cli 0.172.0` (with a
+read-only PATH-alias warning); no App Server or model was started. The runtime
+SHA-256 remains `27f3568ed35d617a0fc7c04f0b0b79ee40ba1e8a320cee443e4274ea897b72f1`;
+verifier SHA-256 is `9da8763da620333778ea00c579b814ba4ce902943933e6c5702e6ed7acbe429e`.
+
+The Docker command resolves to a Desktop WSL wrapper, but
+`docker version --format '{{.Server.Version}}'` exited 1 and reported that WSL
+integration is not enabled for this distro. It returned no engine version.
+This establishes an unavailable local route to a clean container test, not an
+installation failure of ModelMate or proof that every possible external
+environment is unavailable. No image was pulled, container launched, dependency
+installed or host setting changed. Existing two-Python same-host installation
+evidence remains scoped to that host; independent second-environment evidence
+is still missing.
+
+The current requirement checklist was reread against the actual CLI paths and
+prepared probes. Default plain-prompt workflow entry and automatic search are
+still unimplemented/gated; comparative model policy, live permission/loss/quota
+evidence and real/held-out evaluation remain open. Offline planning cancellation
+improvements do not close these release requirements. The prepared bounded
+command approval probe is awaiting explicit authorization; no inference or HTTP
+request was made. Documentation-only revalidation does not rerun the full suite
+or alter the previous 780-test result.

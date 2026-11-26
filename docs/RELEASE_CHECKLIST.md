@@ -8,7 +8,7 @@ for the particular path, client version and platform being shipped. See
 | --- | --- | --- |
 | G1 account and dispatch | Live metadata-only catalog preview, requested-model paths, context recall and scoped resume | Reported dispatch telemetry is incomplete. |
 | G2 permissions and lifecycle | Scoped live native workflow denial, interruption, metadata inspection, recheck recovery, scoped deletion and attached runtime-owned STOP after recheck client loss. Experimental workflow accept-once and its bounded verifier have offline evidence only. | Obtain the scoped command accept/decline verifier result, then separately verify patch approvals, live cancellation/failure paths, server/process-loss recovery and interactive CLI timing. |
-| G3 private search | Live Thai Wikipedia lookup and offline general search through a configured SearXNG endpoint | Live SearXNG instance validation. Hosted search remains disabled in work threads. |
+| G3 private search | Scoped legacy live Thai Wikipedia lookup; internal isolated launcher, bounded protocol, proc/lifecycle leak controls and fake-peer validation have offline evidence | The 2026-11-26 isolated English smoke was unverified; separate socket-creation probes found EPERM in the current execution profile. Real isolated DNS/TLS, live SearXNG, query-provenance/automatic integration and full G3 remain open. Hosted search stays disabled in work threads. |
 | G4 quota and billing | Offline admission and explicit recovery from exhausted or unknown quota. Live telemetry with observed account windows | Live exhausted/unknown admission paths and version-specific billing guarantees. |
 | G5 evaluation | Scored C1, C3, A1 and the two-step economy pilot. Three checkpoint display pairs graded with original and format-repaired outcomes. C2 CLI authoring fixture/checker is prepared with offline evidence only. | Run the C2 pair with independent patch review, expand real/held-out task coverage and establish a defensible quota signal before estimating savings or enabling the trial rule by default. |
 | R13 installation | Standalone runtime on WSL2 with Python 3.11 and 3.12, including installation into a path containing spaces | Independent clean installation on a second environment and release packaging after required gates pass. |
@@ -21,6 +21,18 @@ must be read with its exact version and limitations in VERIFICATION.md. Recent
 source-check changes have offline evidence only. No new live test was run for
 this audit.
 
+2026-11-26 revalidation at `e28be63`: installed Codex reports 0.172.0. The
+current planning cancellation path requests one known-turn interrupt, waits up
+to five additional seconds for a matching terminal event, and reports unknown
+on missing/invalid observations; its evidence is offline only (780 tests passed
+at the recorded runtime hash). This does not transfer legacy live evidence to
+the current source. Docker's WSL integration is unavailable in this distro, so
+`docker version --format '{{.Server.Version}}'` exited 1 without reaching an
+engine. No second clean environment was provisioned or tested. Enabling host
+integration, installing dependencies or widening native permissions was not
+attempted. The next prepared permission probe still needs explicit live-command
+authorization; no subscription turn was requested by this revalidation.
+
 | Requirement | Current implementation / offline evidence | Missing implementation or release proof |
 | --- | --- | --- |
 | R01 subscription only | ChatGPT/provider validation and quota admission; test_doctor.py, test_quota.py, test_live.py | G4 account/billing limitations remain; preflight is not a service spending cap. |
@@ -32,9 +44,9 @@ this audit.
 | R07 correction budget | Controller owns initial attempt plus two corrections, explicit extensions and durable counters; test_workflow.py, test_workflow_persistence.py, test_recheck_ledger.py | Broader live correction/recovery paths; no model-generated counter or test claim can satisfy the controller. |
 | R08 strong review only where needed | Risk/review validation, role bindings and scoped escalation; test_routing.py, test_workflow.py, test_modes.py | Comparative quality evidence for the bound roles and complex/high-risk real tasks. |
 | R09 local sessions / resume / delete | Atomic project-local storage, locks, native bindings, terminal work-turn correlation after a lost start binding, unknown-check retirement as UNVERIFIED, reconciliation and scoped deletion; test_sessions.py, test_lifecycle.py, test_native_resume.py, test_recheck_recovery.py | Work-turn correlation and missing/unknown-check resume have offline evidence only. Live runtime/server-loss and interactive shared-recheck recovery evidence remain open; missing native thread ID discovery remains unsupported. |
-| R10 private web search / citations | Separate confirmed-query Wikipedia/SearXNG commands, selectable JSON result handoff into a new workflow goal, and explicit human source verdicts; test_web_policy.py, test_workflow_entry.py | Result handoff has offline evidence only; search is not an automatic workflow step. Live SearXNG and the full G3 isolation/injection evidence remain open; hosted search stays disabled. Imported candidates and human source verification are not automatic fact checking. |
+| R10 private web search / citations | Separate confirmed-query Wikipedia/SearXNG commands, internal fixed-profile isolated launcher with local boundary evidence, selectable JSON result handoff into a new workflow goal, and explicit human source verdicts; test_web_policy.py, test_workflow_entry.py | Result handoff has offline evidence only; search is not an automatic workflow step. Real isolated DNS/TLS was not verified in the current restricted profile; live SearXNG and the full G3 isolation/injection/integration evidence remain open; hosted search stays disabled. Imported candidates and human source verification are not automatic fact checking. |
 | R11 quota pause / fresh reset check | Fresh admission per controller turn, unknown/exhausted pause and explicit recovery; test_quota.py, test_native_workflow.py | Live exhausted/unknown paths and account-specific applicable bucket evidence. No timed automatic restart or bypass is implemented. |
-| R12 honest time / actual model / usage | Local timing, separate/combined planning-workflow wall time, requested selections, observed telemetry and unknown fields; test_metrics.py, test_native_workflow.py | Actual dispatch telemetry remains incomplete; quota observations cannot establish savings without attributable paired measurements. |
+| R12 honest time / actual model / usage | Local timing, separate/combined planning-workflow wall time, separate observed planning-turn usage/reroutes, requested selections and unknown fields; test_metrics.py, test_native_workflow.py | Actual dispatch telemetry remains incomplete; quota observations cannot establish savings without attributable paired measurements. |
 | R13 one-file Linux/WSL2 runtime | Standalone install/help/offline preview/missing-Codex/quoted alias checks; test_standalone.py | Complete target-environment release verification after G1–G4 and relevant failure gates pass. |
 
 Next work must close these gaps or obtain the specific missing live evidence.

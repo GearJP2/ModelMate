@@ -276,6 +276,19 @@ def probe(timeout=10):
                 'runtimeSha256': hashlib.sha256(runtime_bytes).hexdigest()}
 
 
+def probe_socket_creation():
+    """No connect, bind, DNS or send: only test local TCP/UDP socket creation."""
+    import socket
+
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM), socket.socket(family, socket.SOCK_DGRAM):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def live_wikipedia(language, input_stream, output):
     host = {'en': 'en.wikipedia.org', 'th': 'th.wikipedia.org'}[language]
     query = {'en': 'Python programming language', 'th': 'ภาษาไพทอน'}[language]
@@ -293,6 +306,8 @@ def live_wikipedia(language, input_stream, output):
         report.update(
             runtimeSha256=hashlib.sha256(Path(__file__).with_name('modelmate.py').read_bytes()).hexdigest(),
             probeSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        if not probe_socket_creation():
+            return dict(report, status='unverified', reason='host_socket_capability_unavailable')
         report['searchLaunches'] = 1
         results = run_isolated_search(query, host, 'Wikipedia')
         validate_search_packet(dict(version=1, source='Wikipedia', host=host, query=query, results=results))

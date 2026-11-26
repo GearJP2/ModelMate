@@ -2225,6 +2225,7 @@ class ChatShell:
     def cancel(self, exit_after=False):
         self.recheck_stop_pending = None
         if self.workflow is not None:
+            self.automatic_workflow = False
             self.recheck_pending = None
             self._workflow_check_attempt = None
             self.exiting = self.exiting or exit_after
@@ -2693,6 +2694,9 @@ class ChatShell:
                 if ((len(values) != 1 and not start_now) or self.pending is None
                         or values[0] != self.pending['token']):
                     raise ProbeError('Invalid or stale workflow choice token.')
+                if ((self.pending['kind'] in ('workflow_tool', 'workflow_model') and cmd in ('/decline', '/pause'))
+                        or (self.pending['kind'] == 'workflow_pause' and cmd == '/pause')):
+                    self.automatic_workflow = False
                 if self.pending['kind'] == 'workflow_tool' and cmd in ('/approve', '/decline', '/pause'):
                     if start_now:
                         raise ProbeError('Tool approval accepts once only; --next is a model-approval option.')
@@ -3832,7 +3836,7 @@ class NativeWorkflowConnection(Connection):
         self._events = []
         self._event_bytes = 0
         self._sent_attempts = set()
-        self._displayed = set()
+        self._displayed = {}
         self.store = self.session_id = self._attachment = self.controller = None
         self.shared_rechecks = False
         self.experimental_tool_approvals = False
@@ -3845,9 +3849,9 @@ class NativeWorkflowConnection(Connection):
         self._measured_turns = {}
         self._work_turn_measurements = []
 
-    def workflow_measurements(self):
+    def workflow_measurements(self, *, include_quota=True):
         changes = None
-        if self._quota_first:
+        if include_quota and self._quota_first:
             try:
                 account = self.request('account/read', {'refreshToken': False}).get('account')
                 if isinstance(account, dict) and account.get('type') == 'chatgpt':
@@ -4278,11 +4282,16 @@ class NativeWorkflowConnection(Connection):
         if (not isinstance(item_id, str) or not item_id or len(item_id) > 256
                 or not isinstance(text, str) or len(text.encode()) > 4 * 1024 * 1024):
             raise ProbeError('Invalid workflow assistant text.')
-        if item_id in self._displayed or self.host.on_change is None:
+        digest = hashlib.sha256(text.encode()).digest()
+        if item_id in self._displayed:
+            if self._displayed[item_id] != digest:
+                raise ProbeError('Workflow assistant item changed after completion.')
+            return
+        if self.host.on_change is None:
             return
         if len(self._displayed) >= 10000:
             raise ProbeError('Too many workflow assistant messages.')
-        self._displayed.add(item_id)
+        self._displayed[item_id] = digest
         # Display completed text only: deltas never become evidence or duplicate the final answer.
         self.host.on_change({'type': 'text', 'text': text})
 
@@ -5421,6 +5430,7 @@ def run_plan_draft(prompt, model, effort, destination, input_stream, output):
     backend = NativeWorkflowConnection(['codex', 'app-server', '--stdio',
         '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'])
     answers = []
+    proposal_saved = False
     def capture(event):
         if event.get('type') == 'text':
             text = event['text']
@@ -5458,11 +5468,53 @@ def run_plan_draft(prompt, model, effort, destination, input_stream, output):
             with os.fdopen(fd, 'wb') as source:
                 source.write(encoded);source.flush();os.fsync(source.fileno())
             os.link(snapshot, destination)
+            proposal_saved = True
         output.write('Validated draft saved · ' + str(len(plan['steps'])) + ' steps · '
             + str(len(plan['clarifications'])) + ' clarifications · no execution or verification grant\n')
         return 0
+    except KeyboardInterrupt:
+        terminal = None
+        if backend.host is not None:
+            try:
+                backend.host({'action': 'cancel', 'task_id': controller.task_id})
+                deadline = time.monotonic() + 5
+                with selectors.DefaultSelector() as selector:
+                    for stream in backend.read_streams():
+                        selector.register(stream, selectors.EVENT_READ)
+                    while backend.host._binding is not None and backend.host._terminal is None:
+                        backend.drain()
+                        remaining = deadline - time.monotonic()
+                        if backend.host._terminal is not None or remaining <= 0:
+                            break
+                        for key, _ in selector.select(min(.1, remaining)):
+                            if not backend.read_ready(key.fileobj):
+                                selector.unregister(key.fileobj)
+                terminal = backend.host._terminal
+            except (Exception, KeyboardInterrupt):
+                pass  # A failed stop request must not replace the user's cancellation.
+        try:
+            observed = 'native terminal ' + terminal + ' observed' if terminal else 'native outcome unknown'
+            output.write('Planning cancellation: ' + observed + '; no workflow handoff\n');output.flush()
+        except (OSError, ValueError):
+            pass
+        raise
     finally:
-        backend.close()
+        try:
+            backend.close()
+        finally:
+            try:
+                measured = backend.workflow_measurements(include_quota=False)
+                report = {'scope': 'planning_turn', 'proposalSaved': proposal_saved,
+                    'requestedSelection': {'model': model, 'effort': effort},
+                    'tokenUsage': measured['tokenUsage'],
+                    'tokenUsageScope': 'last_observed_planning_thread_update' if measured['tokenUsage'] else None,
+                    'turnElapsedSeconds': measured['turnElapsedSeconds'],
+                    'planningTurnMeasurements': measured['workTurnMeasurements']}
+                output.write('Planning metrics: ' + json.dumps(report, ensure_ascii=True, allow_nan=False) + '\n')
+                output.flush()
+            except (OSError, ValueError, ProbeError):
+                pass  # Observed metrics must not replace publication/error results.
+
 
 
 def load_criterion_map(path, plan):

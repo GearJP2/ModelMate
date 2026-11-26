@@ -451,10 +451,23 @@ invalid/missing/multiple output, permission/quota unknown หรือ disconnec
 โดยไม่ retry หรือเริ่มงานตามข้อเสนอ การได้ draft ไม่ได้แปลว่าเกณฑ์งานผ่าน
 planning turn นี้เป็น ephemeral และยังไม่มี resume
 
+ระหว่าง planning ใช้ Ctrl+C เพื่อยกเลิก ถ้าทราบ active turn แล้วจะขอ
+native interrupt หนึ่งครั้ง แล้วรอ matching terminal event ไม่เกิน 5 วินาที
+หลังคำขอ interrupt สำเร็จ ก่อนปิด connection; ไม่ retry และไม่ส่งต่อไป work
+หากยกเลิกก่อน publish จะไม่สร้าง draft แม้รับ completed event มาแล้ว
+รายงาน Planning cancellation แยก terminal status ที่สังเกตได้จาก outcome unknown
+interrupt acknowledgement หรือ terminal ของ thread อื่นไม่ยืนยันว่าหยุด
+หาก timeout, disconnect หรืออ่าน event ไม่สำเร็จจะรายงาน unknown ถ้า turn/start ยังไม่คืน
+turn ID จะส่ง interrupt แบบเจาะจงไม่ได้และผลอาจไม่ทราบ ไฟล์ที่ publish
+สำเร็จก่อน Ctrl+C ยังคงอยู่ `CANCEL` ใช้ที่คำถามยืนยันก่อน START เท่านั้น
+
 อ่าน goal/criteria/steps/reasons ในไฟล์ก่อนใช้ `--workflow new-plan.json` พร้อม
 bindings ของทุก role ที่แผนใช้ หากมี clarifications ให้ตอบผ่าน `--clarification`
 ให้ครบ หรือใช้ --execute-workflow เพื่อตอบแบบ interactive ก่อน START การ execute ยังต้อง opt-in/START และผ่าน model/tool gates
 ของ workflow อีกครั้ง คำสั่งนี้ยังไม่เชื่อม plain prompt ไปเป็น workflow อัตโนมัติ
+รายงาน Planning metrics แสดง requested selection, usage/reroute และเวลา turn ที่สังเกตได้
+แยก proposalSaved ออกจาก native terminal status เมื่อไม่มี telemetry ค่ายังคง unknown
+ไม่อ่านบัญชีเพิ่มเพื่อสรุปรายงาน และไม่รวมเป็น token/quota/cost ของทั้งคำสั่ง
 มีหลักฐาน fake-server/offline เท่านั้น ยังไม่ได้ทดสอบ live ด้วย quota จริง
 
 ### จาก prompt ไป draft และ workflow ในคำสั่งเดียว
@@ -509,6 +522,12 @@ account/quota/catalog/model gates ใหม่ทุก attempt ไม่อน�
 ยังต้องให้ผู้ใช้ตรวจและสั่ง `/check` เอง pending approval, การพัก และขั้นที่รอ
 mapping เกณฑ์สำเร็จจะไม่เดินต่อเอง หากไม่ระบุ --criterion-map ยังต้องใช้ `/finish`
 กับ accepted evidence เพื่อรับรองเกณฑ์งาน ไม่ใช้ข้อความโมเดลว่า tests passed แทนหลักฐาน
+
+`/cancel`, `/exit` และ EOF ปิด automatic advancement ใน process นี้ทันที
+แม้ native จะส่ง completed ตามมาภายหลัง จะไม่ auto-check/correct/dispatch หรือ apply
+criterion map ต่อเอง ผล native ที่ทราบยังเก็บตามจริง และผู้ใช้ตรวจ/เดินต่อด้วยคำสั่งเดิมได้
+negative choice `/decline` หรือ `/pause` ที่ตรงกับ token/request ปัจจุบันก็ปิด Auto เช่นกัน
+การ /continue หรือเปลี่ยน model mode ไม่เปิด process opt-in กลับเอง token เก่ายังถูกปฏิเสธ
 
 `/cancel`, `/exit` และ EOF ไม่อนุญาตงานเพิ่ม การส่งงานที่ล้มเหลว/ผลไม่แน่ชัด
 จะปิด automatic advancement ใน process นี้โดยไม่ replay ต้องตรวจสถานะก่อนทำต่อ
