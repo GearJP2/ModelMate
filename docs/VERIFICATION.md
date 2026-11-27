@@ -5182,3 +5182,23 @@ held-out quality, savings and release gates remain open.
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 841 tests in 112.506 seconds, with no skips.
+
+### Post-pilot completion audit (2026-11-27)
+
+At `db20887`, checked MASTER_PLAN's task/dependency table, P13/P15/P16 criteria,
+the release requirement map and CLI dispatch. `codex --version` reports
+`codex-cli 0.172.0`; `python3 --version` reports Python 3.12.0. Codex emitted a
+read-only PATH-alias warning but returned its version; no permission change was
+attempted. Runtime and verifier hashes remain `cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`
+and `b57bbc6f3a9b98008834b0795b8f59826c57cbe8828acbfd427a84d408b4c423`.
+
+The audit records remaining default automatic entry/private-search integration,
+current native permission/lifecycle and quota/billing proof, independent real
+and held-out evaluation, A4's G3 dependency and second-environment installation.
+It does not mark any requirement or release gate passed. Eleven prepared/scoped
+synthetic cases are not twelve completed paired evaluations. The pending scope
+report is needed to diagnose the rejected command request without weakening
+policy. No inference, HTTP, account request, probe replay or new test run was
+performed; this is documentation-only follow-up to the recorded 841-test run.
+`git diff --check` passes. See RELEASE_CHECKLIST.md for the concrete remaining
+work and dependency/evidence boundaries.

@@ -899,6 +899,15 @@ example bytes; a separate trusted rubric covers prerequisite/setup/output prose.
 Thirty-five targeted installation/shared-pilot tests pass. No live model pair,
 second-environment ModelMate installation, quality or release pass is claimed.
 
+Completion audit after the A3 milestone (`db20887`): eleven named synthetic
+cases have prepared pilots or scoped results; none of the newly prepared cases
+is a live paired evaluation. A4 still depends on G3 real isolation/provenance
+and integration evidence. The R01–R13 and dependency audit in
+RELEASE_CHECKLIST.md separates remaining implementation (default automatic entry
+and automatic private search) from missing live/held-out/second-environment
+proof. P16 stays IN_PROGRESS. The next P09 diagnosis awaits the user-run
+`unsupportedApprovalScopes` report; no live probe was replayed for this audit.
+
 A2 project-planning fixture increment (2026-11-27), MOCK_VERIFIED:
 `examples/routing-pilot.py prepare --case planning` freezes a three-option,
 four-constraint reporting pilot requiring an actual plan, trade-offs and rollback.
