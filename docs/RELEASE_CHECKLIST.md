@@ -73,6 +73,14 @@ change has offline evidence only. A new run uses subscription quota again and
 must be explicitly chosen; the original attempt is not replayed automatically.
 
 The next prepared P09 check is
+now updated for two experimental optional command fields found in the installed
+0.172.0 schema. Only null additionalPermissions is supported; non-null overlays
+remain gated. Explicit availableDecisions must offer plain accept and decline;
+session/policy alternatives are not selected. This compatibility fix has offline
+evidence only. The second user-run attempt located the previous unknown-field
+rejection but did not pass any of the seven live checks.
+
+Run the scoped check as
 `python3 verify.py --run-live --probe-workflow-approvals MODEL` from a normal
 authenticated Terminal. It uses at most two subscription turns and may accept
 one bounded synthetic marker write, then declines the second case. Record the

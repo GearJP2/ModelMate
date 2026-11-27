@@ -4802,3 +4802,47 @@ and no second case after failure. The full offline suite passed 782 tests in
 SHA-256: `3ee3e27c75db2d37c6cfa39f8c24a3c8c7cc9e9989927e8544db24166b15d5e9`.
 Runtime hash is unchanged. A further live run must be explicitly chosen and
 consumes subscription quota again; no live retry was performed here.
+
+### P09 experimental command metadata compatibility (2026-11-27)
+
+The user independently ran the command approval probe again. Its runtime hash
+was `27f3568ed35d617a0fc7c04f0b0b79ee40ba1e8a320cee443e4274ea897b72f1`
+and verifier hash was
+`3ee3e27c75db2d37c6cfa39f8c24a3c8c7cc9e9989927e8544db24166b15d5e9`.
+All seven checks remained unverified in phase approve; probeStage was
+await_approval. The new diagnosticLocation identified modelmate.py,
+native_tool_request, line 3151: rejection of unknown approval fields. This is
+stronger failure evidence, not a permission-gate pass. The report did not retain
+the actual extra field names or values; those cannot be claimed from this JSON.
+
+An offline export with installed Codex CLI 0.172.0,
+`codex app-server generate-json-schema --experimental --out SCRATCH`, exposes
+additionalPermissions and availableDecisions on CommandExecutionRequestApprovalParams.
+The earlier non-experimental export omitted both. Their schema describes an
+optional permission overlay and an optional ordered list of offered decisions.
+No App Server inference, account call or live retry was used for this export.
+
+The shared manual/workflow parser now recognizes these two command fields.
+additionalPermissions must be null/absent; even an empty non-null object remains
+unsupported. When availableDecisions is non-null, it must be a bounded list of
+string/object alternatives containing plain accept and decline. Other offered
+alternatives are inert: the client never selects acceptForSession or policy
+amendments. Unknown fields, malformed lists, missing plain choices, callbacks,
+stdin, managed-network, environment and session-root scopes remain rejected.
+File-change requests gain no new fields. This fixes a demonstrated compatibility
+gap; it does not prove that these were the only extra fields in the live request.
+
+A fake-server regression with the schema's null overlay and mixed decision
+alternatives failed before the fix at the same native_tool_request line as the
+user's result. After the fix it completes the scoped accept and decline cases,
+with responses exactly accept then decline. Manual tests also cover null metadata,
+non-null overlays, missing choices, malformed/oversized lists and an unknown null
+field, while preserving read-only UI state. `PYTHONPATH=tests python3 -m unittest
+test_live test_native_permissions test_workflow_approval_probe -q` passed 46 tests.
+Compile/diff checks passed. Runtime SHA-256 is now
+`bbf5a71155e6e7863b9b3507dbdc5533e9946e11c391fdc7bc23a0871eedcc18`;
+verifier hash is unchanged. No scratch deletion, native replay or live gate pass
+is claimed. Any new live run is a separately chosen quota-consuming attempt.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 783 tests in 51.632 seconds, with no skips.

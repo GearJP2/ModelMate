@@ -111,6 +111,15 @@ class WorkflowApprovalProbeTests(unittest.TestCase):
         self.assertEqual(result['safeRequestObserved'], 'unverified')
         self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 1)
 
+    def test_experimental_optional_metadata_keeps_accept_once_and_decline(self):
+        source=PROBE_SERVER.replace('  emit(request)',
+            "  params.update(additionalPermissions=None,availableDecisions=['accept','decline',"
+            "'acceptForSession',{'acceptWithExecpolicyAmendment':{'execpolicy_amendment':['printf']}}])\n"
+            "  emit(request)")
+        result=self.probe(source)
+        self.assertTrue(all(result[key]=='passed' for key in WORKFLOW_APPROVAL_KEYS),result)
+        self.assertEqual([r['result']['decision'] for r in self.records() if 'result' in r],['accept','decline'])
+
     def test_unexpected_command_is_never_approved_or_retried(self):
         result = self.probe(PROBE_SERVER.replace("'command':spec_command", "'command':spec_command+' && printf extra'"))
         self.assertEqual(result['failureReason'], 'unexpected_or_undisplayed_action')

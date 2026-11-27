@@ -222,6 +222,12 @@ class LiveBackendTests(unittest.TestCase):
                              ('approvalId', 'callback'), ('environmentId', 'remote'),
                              ('networkApprovalContext', {'host': 'example.org'}), ('grantRoot', '/tmp'),
                              ('additionalPermissions', {'fileSystem': {'write': ['/tmp']}}),
+                             ('additionalPermissions', {}),
+                             ('availableDecisions', 'accept'), ('availableDecisions', ['accept']),
+                             ('availableDecisions', ['decline']),
+                             ('availableDecisions', ['accept', 'decline', False]),
+                             ('availableDecisions', ['accept', 'decline'] * 33),
+                             ('unexpectedField', None),
                              ('reason', {'unexpected': 'object'}), ('startedAtMs', True),
                              ('commandActions', {'unexpected': 'object'})]:
             with self.subTest(field=field):
@@ -242,7 +248,9 @@ class LiveBackendTests(unittest.TestCase):
                   'command': 'printf synthetic', 'cwd': '/tmp', 'kind': 'command', 'reason': 'synthetic check',
                   'startedAtMs': 1, 'approvalId': None, 'environmentId': None, 'networkApprovalContext': None,
                   'commandActions': [], 'proposedExecpolicyAmendment': ['printf'],
-                  'proposedNetworkPolicyAmendments': []}
+                  'proposedNetworkPolicyAmendments': [], 'additionalPermissions': None,
+                  'availableDecisions': ['accept', 'decline', 'acceptForSession', 'cancel',
+                      {'acceptWithExecpolicyAmendment': {'execpolicy_amendment': ['printf']}}]}
         c.handle_event({'id': 'request', 'method': 'item/commandExecution/requestApproval', 'params': params})
         c.send.assert_not_called()
         c.shell.line('/approve ' + c.shell.pending['token'])

@@ -3146,6 +3146,7 @@ def native_tool_request(message, thread_id, turn_id, previews):
     command_request = method == 'item/commandExecution/requestApproval'
     allowed = {'threadId', 'turnId', 'itemId', 'reason', 'startedAtMs'} | (
         {'approvalId', 'command', 'commandActions', 'cwd', 'environmentId', 'kind', 'networkApprovalContext',
+         'additionalPermissions', 'availableDecisions',
          'proposedExecpolicyAmendment', 'proposedNetworkPolicyAmendments'} if command_request else {'grantRoot'})
     if set(params) - allowed:
         raise ProbeError('Unsupported approval fields; nothing approved.')
@@ -3158,9 +3159,15 @@ def native_tool_request(message, thread_id, turn_id, previews):
         raise ProbeError('Malformed approval metadata; nothing approved.')
     if (params.get('kind', 'command') != 'command' or params.get('approvalId') is not None
             or params.get('environmentId') is not None or params.get('networkApprovalContext') is not None
-            or params.get('grantRoot') is not None):
+            or params.get('grantRoot') is not None or params.get('additionalPermissions') is not None):
         raise ProbeError('Unsupported approval scope; nothing approved.')
     if command_request:
+        # Other offered decisions stay inert; this client only sends plain accept/decline.
+        decisions = params.get('availableDecisions')
+        if decisions is not None and (not isinstance(decisions, list) or len(decisions) > 64
+                or any(not isinstance(option, (str, dict)) for option in decisions)
+                or 'accept' not in decisions or 'decline' not in decisions):
+            raise ProbeError('Command approval does not offer accept-once and decline; nothing approved.')
         command, cwd = params.get('command'), params.get('cwd')
         if not isinstance(command, str) or not command.strip() or not isinstance(cwd, str) or not os.path.isabs(cwd):
             raise ProbeError('Cannot display the exact command; nothing approved.')

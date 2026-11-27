@@ -487,6 +487,17 @@ a fixed probe stage and a source-only exception location, without raw messages,
 payloads, paths or IDs. Forty-one targeted and 782 full offline tests passed;
 this diagnostic change was not live-retried and does not relax approval policy.
 
+P09 experimental command metadata compatibility (2026-11-27), MOCK_VERIFIED:
+the user's next probe located rejection at native_tool_request's unknown-field
+check. A fresh Codex 0.172.0 schema export with --experimental reveals optional
+additionalPermissions and availableDecisions, absent from the earlier default
+schema review. The shared parser now accepts a null permission overlay and
+requires plain accept/decline when decisions are supplied; other offered choices
+are never selected. Non-null overlays, unknown fields and unsupported scopes
+remain declined. The synthetic reproduction failed at the same old source line
+and now completes both cases; 46 targeted tests passed. No live retry/pass is
+claimed, and the original request's exact extra fields were not retained.
+
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
 declines the pending request and expires the token, even if the old diff returns.
