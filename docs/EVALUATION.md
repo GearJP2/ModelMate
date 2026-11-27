@@ -16,7 +16,7 @@ before requesting subscription turns.
 | C5 | [Migrate a local JSON schema](#c5-json-migration-pilot) | Old data loads, repeat migration is safe and failed writes preserve originals; Strong/human review checks publication design. |
 | C6 | [Repair a concurrent local writer](#c6-concurrent-writer-pilot) | Contention and controlled process-crash fixtures preserve the last committed checkpoint, stable lock identity and other writers' snapshots. |
 | C7 | [Review a file cleanup change](#c7-cleanup-review-pilot) | Correctly identify seeded scope and confirmation bugs with file evidence. |
-| C8 | Implement behavior from an ambiguous request | Pause for the missing requirement before dispatch. Both arms then receive the same clarification. |
+| C8 | [Implement behavior from an ambiguous request](#c8-clarification-pilot) | Pause for the missing requirement before dispatch. Both arms then receive the same clarification. |
 | A1 | Summarize a synthetic incident timeline | Timestamps, causal claims and uncertainties match the supplied record. |
 | A2 | Compare options for a short project plan | Use the supplied constraints, identify trade-offs and cover every rubric item. |
 | A3 | Edit installation instructions | A reviewer can install and run the example from a fresh directory with spaces in its path. |
@@ -34,6 +34,44 @@ All critical checks must pass and routed quality must meet the baseline before
 claiming equivalent quality. Report any observed consumption difference with
 its denominator, paired sample count and scope. The table defines planned
 cases. The C1 pilot result is recorded below. Quota savings remain unmeasured.
+
+## C8 clarification pilot
+
+`python3 examples/routing-pilot.py prepare --case ambiguous` prepares two
+identical CLI projects. The initial question task contains the request and
+source, without supplying the missing policy. A trusted reviewer must observe
+an explicit question about whether blank rows count toward `--limit N`, before
+implementation, guessed behavior, edits or tool effects. Other questions alone
+do not pass. Record that finding through the existing manual rubric and accept
+the task with its criterion evidence; exit the question workflow afterward.
+
+Preview either arm using the existing `run SCRATCH routed|baseline --standard
+MODEL --strong MODEL --economy MODEL` arguments. The default selects the question
+phase. Only an explicitly added `--execute` enables native inference/START.
+The question phase rejects the authoring tool-approval flag. Its prompt requests
+no tools, but native read-only/on-request is still the enforced boundary;
+this is not a hard no-tools isolation claim.
+
+For the second phase, add `--use-frozen-clarification`. This explicitly adopts
+the same answer for both arms: count every physical row, including blank rows,
+in input order; zero prints nothing. A preview remains offline. Execution also
+requires `--execute --experimental-tool-approvals`, three distinct model bindings,
+and exactly one completed, independently accepted, native-bound question session
+for this arm. The helper validates its frozen task and core evidence, and holds
+the session writer lock through the launch. Missing, busy, mismatched, multiple
+or incomplete receipts cannot authorize implementation. Each phase has separate
+state and START/model/tool approvals; question evidence supplies no grants.
+Started phases cannot be silently replayed. Source, plans and the shared C2
+checker must still match their frozen initial copies at handoff.
+
+Implementation uses C2's hash-bound checks, including blank-row behavior, with
+the clarified acceptance policy. Record failed question phases as failures,
+not successful implementations. Report question and implementation metrics
+separately and include both phases when discussing total C8 cost; the existing
+single-row comparison does not aggregate them. Public calibration files expose
+the answer if inspected, so record tool contamination and do not treat these
+fixtures as held-out evaluation. Offline references and synthetic receipts only
+verify the harness; C8 model quality, paired outcomes and savings remain unknown.
 
 ## Run the C1 pilot
 

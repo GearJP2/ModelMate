@@ -5073,3 +5073,36 @@ remain open; no G2/P12 live recovery gate is advanced by this fixture.
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 819 tests in 107.008 seconds, with no skips.
+
+### P16 C8 clarification handoff (2026-11-27)
+
+`examples/routing-pilot.py prepare --case ambiguous` freezes question and
+implementation tasks separately. The question objective supplies the original
+request/source without the missing blank-row policy. Trusted manual rubric
+evidence must accept the necessary question before implementation, assumptions
+or edits. An explicit `--use-frozen-clarification` adopts the same physical-row
+answer for both arms; implementation reuses C2's hash-bound checker.
+
+Live implementation requires exactly one valid DONE question session, native
+thread/turn binding, matching frozen task and core-validated acceptance evidence.
+Its writer lock stays held during launch. No approval, counter or session is
+resumed into the separate implementation workflow. Existing native permission,
+START, explicit execution, frozen-artifact and no-replay rules remain in effect.
+The question phase cannot enable authoring approvals; prompt-only no-tools
+instructions do not replace native policy. A trusted human still judges the
+semantic question/no-edit rubric. Public calibration inputs are not held-out.
+
+`python3 -m unittest discover -s tests -p '*pilot*.py' -v` passed all 61 tests
+in 60.874 seconds. Nine new C8 tests cover paired inputs/offline previews,
+missing/incomplete/unbound/mismatched/multiple/busy receipts, a forged DONE
+without evidence, receipt locking through launch, separate state/no resume,
+frozen input/replay/tool-opt-in guards and the clarified checker against a
+developer reference and a nonempty-row mutant. Launch assertions use mocks;
+no live model/account/search request was made. Compilation and diff checks pass.
+
+Pilot SHA-256: `8a4966fcafab6510852a382842a7167246f4d30e7c59458dee4a2aa4c3317216`.
+Runtime remains `cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`.
+No C8 model pair, G5 quality/savings claim or release gate is advanced.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 828 tests in 117.962 seconds, with no skips.

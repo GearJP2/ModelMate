@@ -890,6 +890,16 @@ integration is unavailable, so no independent clean environment was tested.
 The prepared bounded G2 command-approval probe awaits explicit live authorization.
 No release gate, live compatibility claim or evaluation result was advanced.
 
+C8 clarification fixture increment (2026-11-27), MOCK_VERIFIED:
+`examples/routing-pilot.py prepare --case ambiguous` separates a question-only
+task from dependent CLI implementation. A trusted reviewer must accept the
+missing blank-row policy question before the helper admits live implementation;
+both arms then explicitly adopt the same frozen answer. Existing core evidence,
+writer locking, frozen artifacts, native approval and no-replay guards are reused.
+Question and implementation states/approvals remain separate. All 61 targeted
+pilot tests pass, including invalid receipts and the clarified blank-row checker.
+No live pair, quality, savings or release pass is claimed.
+
 C6 concurrent-writer fixture increment (2026-11-27), MOCK_VERIFIED:
 `examples/routing-pilot.py prepare --case writer` prepares the same broken
 counter writer, sample and hash-bound checker for both arms. Owned process

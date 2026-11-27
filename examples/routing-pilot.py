@@ -2,6 +2,7 @@
 """Prepare, preview, and score paired synthetic routing evaluations."""
 
 import argparse
+from contextlib import ExitStack, contextmanager, nullcontext
 import hashlib
 import json
 import math
@@ -23,6 +24,9 @@ CHOICES = {
     'D': lambda size: range(1, size),
 }
 CRITERION = 'The chosen loop expression returns the first matching index, including the last element, or -1.'
+AUTHORING_CASES = ('cli', 'parser', 'migration', 'writer', 'ambiguous')
+ROW_QUESTION = 'Should --limit N count every physical row including blank rows, or only nonempty rows?'
+ROW_ANSWER = 'Count every physical row including blank rows. Preserve the first N rows in input order; zero prints nothing.'
 
 DEDUPE_CRITERION = 'Return the first occurrence of each distinct nonempty row in original order.'
 DEDUPE_GOAL = 'Choose a stable de-duplication fix for the importer'
@@ -113,8 +117,9 @@ def prepare(case):
     (scratch / 'case.txt').write_text(case + '\n', encoding='utf-8')
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'modelmate.py', runtime)
     checker = scratch / ('check-' + case + '.py')
-    if case in ('cli', 'parser', 'migration', 'writer'):
-        shutil.copyfile(Path(__file__).with_name(case + '-pilot-check.py'), checker)
+    if case in AUTHORING_CASES:
+        checker_case = 'cli' if case == 'ambiguous' else case
+        shutil.copyfile(Path(__file__).with_name(checker_case + '-pilot-check.py'), checker)
     objective = (
         'Choose the repair for this Python function and answer with exactly one letter A, B, C or D. '
         'Use only the code in this prompt. Do not call tools or read or modify files.\n'
@@ -153,6 +158,8 @@ def prepare(case):
             plan = prepare_migration(project, role, checker)
         elif case == 'writer':
             plan = prepare_writer(project, role, checker)
+        elif case == 'ambiguous':
+            plan = prepare_ambiguous(project, role, checker)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
@@ -361,13 +368,71 @@ def prepare_writer(project, role, checker):
         }]}
 
 
+def prepare_ambiguous(project, role, checker):
+    plan = prepare_cli(project, role, checker)
+    criterion = 'A trusted reviewer confirms necessary clarification is requested before implementation, without guessed behavior or edits.'
+    questions = {'version': 1, 'goal': plan['goal'], 'clarifications': [],
+        'success_criteria': [criterion], 'steps': [{
+            'kind': 'plan', 'objective': 'Request: add optional --limit N to this CLI, preserving default '
+            'output, help and error behavior. N is a nonnegative integer; zero prints nothing and a limit '
+            'beyond the input prints everything. Before implementation, assess whether the requirement '
+            'is complete and ask any necessary clarification. Do not guess unspecified behavior, provide '
+            'implementation code, use tools or edit files. All existing code is supplied here:\n'
+            + (project / 'rows.py').read_text(encoding='utf-8'),
+            'role': role, 'effort': 'low', 'risk': 'normal',
+            'reason': 'Resolve missing behavior before dependent implementation.',
+            'checks': [{'kind': 'rubric', 'criterion': criterion}],
+        }]}
+    (project / 'question-plan.json').write_text(json.dumps(questions, indent=2) + '\n', encoding='utf-8')
+    plan['clarifications'] = [ROW_QUESTION]
+    criterion = 'Frozen CLI checks pass for the confirmed row-count policy; default/help/error behavior and input remain unchanged.'
+    plan['success_criteria'] = [criterion]
+    step = plan['steps'][0]
+    step['objective'] = ('Edit only rows.py to implement optional --limit N using the clarification answer '
+        'in the effective goal. N is a nonnegative integer; zero prints nothing and a limit beyond input '
+        'prints everything. Preserve default output, help, description and error exit code 2. '
+        'Do not infer unanswered row-count behavior. Do not modify inputs, plans, commands or frozen checker. '
+        'Use native tool approval when needed without widening permissions. Run the registered check once '
+        'and report the outcome. No network or unrelated commands.')
+    step['checks'] = [{'kind': 'test', 'criterion': criterion}]
+    return plan
+
+
+@contextmanager
+def accepted_question(runtime, project, state_home, expected, routed):
+    module = runpy.run_path(str(runtime))
+    store_type, probe_error = module['SessionStore'], module['ProbeError']
+    with ExitStack() as stack:
+        try:
+            reader = stack.enter_context(store_type(project, state_home, read_only=True))
+            records = reader.list_sessions()
+            if len(records) != 1:
+                raise ValueError('Clarification phase requires exactly one completed, accepted session.')
+            store = stack.enter_context(store_type(project, state_home))
+            stack.enter_context(store._lock(records[0]['id']))
+            record = store.read(records[0]['id'])
+            flow = record.get('workflow')
+            if (record['deletion_state'] != 'none' or not record['thread_id'] or not record['turn_id']
+                    or flow is None or flow['state'] != 'DONE'):
+                raise ValueError('Complete and exit the independently accepted clarification phase before implementation.')
+            actual = module['validate_plan'](flow['plan'])
+            if routed and len(actual['steps']) == 1:
+                actual['steps'][0]['role'] = expected['steps'][0]['role']
+                actual['steps'][0]['reason'] = expected['steps'][0]['reason']
+            if actual != expected:
+                raise ValueError('Accepted clarification session does not match the frozen question task.')
+        except (probe_error, FileNotFoundError):
+            raise ValueError('Clarification session is missing, invalid or still in use; inspect it before implementation.') from None
+        yield
+
+
 def frozen_file_matches(path, expected):
     with path.open('rb') as source:
         return source.read(len(expected) + 1) == expected
 
 
 def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=False, metrics_jsonl=None,
-        tool_approvals=False):
+        tool_approvals=False, use_frozen_clarification=False):
     if standard == strong or not standard.strip() or not strong.strip():
         raise ValueError('Choose two distinct model IDs that support low effort.')
     scratch = scratch.resolve(strict=True)
@@ -380,9 +445,18 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     plan_path = project / 'plan.json'
     case_file = scratch / 'case.txt'
     case = case_file.read_text(encoding='utf-8').strip() if case_file.is_file() else 'c1'
-    if tool_approvals and case not in ('cli', 'parser', 'migration', 'writer'):
-        raise ValueError('Experimental tool approvals are scoped to the CLI, parser, migration and writer authoring pilots.')
-    if execute and case in ('cli', 'parser', 'migration', 'writer') and not tool_approvals:
+    if use_frozen_clarification and case != 'ambiguous':
+        raise ValueError('Frozen clarification is scoped to the ambiguous C8 pilot.')
+    question_phase = case == 'ambiguous' and not use_frozen_clarification
+    if question_phase:
+        if state.exists():
+            raise ValueError('Implementation arm already has state; do not replay the question phase.')
+        state = scratch / arm / 'question-state'
+    if tool_approvals and question_phase:
+        raise ValueError('Question phase cannot enable authoring tool approvals.')
+    if tool_approvals and case not in AUTHORING_CASES:
+        raise ValueError('Experimental tool approvals are scoped to the CLI/parser/migration/writer/ambiguous authoring pilots.')
+    if execute and case in AUTHORING_CASES and not question_phase and not tool_approvals:
         raise ValueError('Executing authoring pilots requires explicit --experimental-tool-approvals.')
     if case == 'cleanup':
         if state.exists():
@@ -392,35 +466,42 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
                 or not frozen_file_matches(plan_path, expected)
                 or not frozen_file_matches(project / 'cleanup.py', (CLEANUP_SOURCE + '\n').encode('utf-8'))):
             raise ValueError('Frozen cleanup review inputs changed; do not start this arm.')
-    if case in ('cli', 'parser', 'migration', 'writer'):
+    if case in AUTHORING_CASES:
         if state.exists():
             raise ValueError('Authoring arm already has state; inspect/resume it or prepare a new pair, never replay it.')
         checker = scratch / ('check-' + case + '.py')
-        if not frozen_file_matches(checker, Path(__file__).with_name(case + '-pilot-check.py').read_bytes()):
+        checker_case = 'cli' if case == 'ambiguous' else case
+        if not frozen_file_matches(checker, Path(__file__).with_name(checker_case + '-pilot-check.py').read_bytes()):
             raise ValueError('Frozen authoring checker changed; do not start this arm.')
         with tempfile.TemporaryDirectory(prefix='modelmate-authoring-reference-') as directory:
             reference = Path(directory)
             prepare_case = {'cli': prepare_cli, 'parser': prepare_parser,
-                            'migration': prepare_migration, 'writer': prepare_writer}[case]
+                            'migration': prepare_migration, 'writer': prepare_writer,
+                            'ambiguous': prepare_ambiguous}[case]
             expected = prepare_case(reference, 'standard' if arm == 'routed' else 'strong', checker)
             (reference / 'plan.json').write_text(json.dumps(expected, indent=2) + '\n', encoding='utf-8')
             names = {path.name for path in reference.iterdir()}
             if ({path.name for path in project.iterdir()} != names or any(
                     not frozen_file_matches(project / name, (reference / name).read_bytes()) for name in names)):
                 raise ValueError('Frozen authoring inputs changed; do not start this arm.')
+    if question_phase:
+        plan_path = project / 'question-plan.json'
+    command_checks = checks.is_file() and not question_phase
     measured_pair = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() in ('dedupe', 'incident', 'cleanup')
     mode = 'approve_plan'
-    if checks.is_file():
+    if command_checks:
         mode = 'ask_to_escalate'
     elif measured_pair:
         mode = 'auto'
     args = [sys.executable, str(runtime), '--workflow', str(plan_path),
             '--workflow-mode', mode, '--role-model', 'standard=' + standard,
             '--role-model', 'strong=' + strong]
-    if checks.is_file():
+    if command_checks:
         if not economy or economy in (standard, strong) or not economy.strip():
             raise ValueError('Command-check pilots require a third distinct model ID supporting low effort.')
         args.extend(['--check-commands', str(checks), '--role-model', 'economy=' + economy])
+    if use_frozen_clarification:
+        args.extend(['--clarification', '1=' + ROW_ANSWER])
     if arm == 'routed':
         args.append('--suggest-models')
     if execute:
@@ -432,7 +513,12 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     if metrics_jsonl is not None:
         args.extend(['--metrics-jsonl', os.path.abspath(metrics_jsonl)])
     print('Runtime SHA-256 ' + hashlib.sha256(runtime.read_bytes()).hexdigest(), flush=True)
-    return subprocess.run(args, cwd=project, env=dict(os.environ, XDG_STATE_HOME=str(state))).returncode
+    gate = nullcontext()
+    if execute and use_frozen_clarification:
+        expected = json.loads((project / 'question-plan.json').read_text(encoding='utf-8'))
+        gate = accepted_question(runtime, project, scratch / arm / 'question-state', expected, arm == 'routed')
+    with gate:
+        return subprocess.run(args, cwd=project, env=dict(os.environ, XDG_STATE_HOME=str(state))).returncode
 
 
 def score(answer):
@@ -588,7 +674,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup', 'parser', 'migration', 'writer'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup', 'parser', 'migration', 'writer', 'ambiguous'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -599,7 +685,9 @@ def main():
     launch.add_argument('--measure-quota', action='store_true', help='include observed live quota-window changes')
     launch.add_argument('--metrics-jsonl', help='append a private metrics report without account quota data')
     launch.add_argument('--experimental-tool-approvals', action='store_true',
-                        help='explicit native approval UI for CLI/parser/migration/writer authoring pilots')
+                        help='explicit native approval UI for authoring pilots')
+    launch.add_argument('--use-frozen-clarification', action='store_true',
+                        help='C8 only: adopt the same frozen answer and select implementation after accepted question phase')
     grade = actions.add_parser('score', help='score a turn answer with the case rubric')
     grade.add_argument('answer')
     grade.add_argument('--case', choices=('c1', 'dedupe', 'incident', 'cleanup'), default='c1')
@@ -615,7 +703,8 @@ def main():
             return 0
         if args.action == 'run':
             return run(args.scratch, args.arm, args.standard, args.strong, args.execute, args.economy,
-                       args.measure_quota, args.metrics_jsonl, args.experimental_tool_approvals)
+                       args.measure_quota, args.metrics_jsonl, args.experimental_tool_approvals,
+                       args.use_frozen_clarification)
         if args.action == 'compare':
             return compare(args.baseline, args.routed, args.baseline_row, args.routed_row)
         scorers = {'c1': score, 'dedupe': score_dedupe, 'incident': score_incident, 'cleanup': score_cleanup}
