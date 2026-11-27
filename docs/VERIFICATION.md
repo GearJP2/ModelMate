@@ -5024,3 +5024,52 @@ Runtime SHA-256 remains
 `cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`.
 The final full offline suite passed 808 tests in 91.391 seconds with no skips. C5
 live paired quality, independent candidate review and G5 remain open.
+
+### P16 C6 concurrent writer and controlled process-crash checks (2026-11-27)
+
+`examples/routing-pilot.py prepare --case writer` prepares identical broken
+writer.py and sample checkpoints, an external hash-bound checker and the same
+criteria for both arms. The high-risk task uses a stable private sidecar flock
+across read/modify/atomic publish, unique private snapshots, and no adoption or
+deletion of other writers' orphans. Existing authoring opt-in, artifact integrity
+and started-arm no-replay guards are reused. The runtime/permission policy is
+unchanged; model execution was not requested.
+
+The six machine checks cover frozen input, sequential read/increment behavior,
+two writers coordinated at provided read/publish hooks, process loss before and
+after publication, and invalid-input preservation. Kernel shared-lock probes
+confirm exclusive locking and stable inode identity. The checker uses actual
+owned Popen handles and requires liveness alongside ready markers. It sends
+SIGKILL only to its own worker groups, validates committed files and lock release,
+then starts a distinct declared operation only after known-state proof. Poisoned
+orphan snapshots and a bystander file must remain untouched. Results are compared
+with actual file data/metadata and fixed observations, not a candidate's verdict.
+
+This demonstrates controlled local process-crash behavior of developer-written
+references. It does not exercise real native App Server session loss, missing
+turn identity, exactly-once request reconciliation or hardware power loss.
+A no-fsync mutant passes the finite machine checks; a following Strong step and
+trusted human rubric explicitly require source review of critical-section scope,
+exclusive snapshots, fsync/publication ordering, ownership and remaining limits.
+That rubric cannot be supplied by a model claim alone.
+
+`PYTHONPATH=tests python3 -m unittest test_writer_pilot test_migration_pilot
+test_parser_pilot test_cli_pilot test_routing_pilot -q` passed 48 tests. The final
+C6-only rerun passed 11 tests. New cases exercise the broken writer versus an
+audited reference; missing/shared/data-inode/early-released locks; sidecar unlink
+and repeated publication; non-atomic overwrite; orphan adoption/wildcard cleanup;
+the independent fsync review requirement; paired previews; artifact/state and
+execution opt-in guards; stale-marker rejection; timeout/private-error handling
+and stronger file limits. All candidates are developer-authored, and live-launch
+forwarding uses a mock. No live Codex/account/inference/search request was made.
+Compilation and diff checks passed.
+
+Pilot SHA-256: `e35d8e732c118e03272c0ea1d52fc4fadde928a15718f387fc9209f950e64343`.
+Checker SHA-256: `a15311d71b1d09d3228a7428f039f4224791519cea617971e568341578e4d0ce`.
+Runtime SHA-256 remains
+`cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`.
+C6 live model pairing, independent candidate review, held-out evaluation and G5
+remain open; no G2/P12 live recovery gate is advanced by this fixture.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 819 tests in 107.008 seconds, with no skips.

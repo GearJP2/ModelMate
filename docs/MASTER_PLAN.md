@@ -890,6 +890,16 @@ integration is unavailable, so no independent clean environment was tested.
 The prepared bounded G2 command-approval probe awaits explicit live authorization.
 No release gate, live compatibility claim or evaluation result was advanced.
 
+C6 concurrent-writer fixture increment (2026-11-27), MOCK_VERIFIED:
+`examples/routing-pilot.py prepare --case writer` prepares the same broken
+counter writer, sample and hash-bound checker for both arms. Owned process
+barriers, actual flock probes and pre/post-publication SIGKILL cases check
+serialization, stable lock identity, committed data, lock release and orphan
+preservation without replay. The high-risk implementation requires later
+Strong/trusted human review; finite process-crash tests do not prove fsync or
+power-loss durability. Forty-eight targeted pilot tests passed with developer
+references/mutants; no live model pair or native recovery gate is claimed.
+
 C5 migration fixture increment (2026-11-27), MOCK_VERIFIED:
 `examples/routing-pilot.py prepare --case migration` freezes v1/v2 schema
 requirements, legacy input, a broken loader/migrator and a hash-bound checker.

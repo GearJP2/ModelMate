@@ -14,7 +14,7 @@ before requesting subscription turns.
 | C3 | Add stable de-duplication to an importer | Order and handling of blank and duplicate rows match fixtures. |
 | C4 | [Refactor a parser across modules](#c4-parser-refactor-pilot) | Existing API and error cases pass the same fixture suite; an independent reviewer confirms shared parsing. |
 | C5 | [Migrate a local JSON schema](#c5-json-migration-pilot) | Old data loads, repeat migration is safe and failed writes preserve originals; Strong/human review checks publication design. |
-| C6 | Repair a concurrent local writer | Contention and crash fixtures preserve the last valid checkpoint. |
+| C6 | [Repair a concurrent local writer](#c6-concurrent-writer-pilot) | Contention and controlled process-crash fixtures preserve the last committed checkpoint, stable lock identity and other writers' snapshots. |
 | C7 | [Review a file cleanup change](#c7-cleanup-review-pilot) | Correctly identify seeded scope and confirmation bugs with file evidence. |
 | C8 | Implement behavior from an ambiguous request | Pause for the missing requirement before dispatch. Both arms then receive the same clarification. |
 | A1 | Summarize a synthetic incident timeline | Timestamps, causal claims and uncertainties match the supplied record. |
@@ -659,6 +659,60 @@ to step 2/check 1. Both success criteria must be completed through normal eviden
 validation; a model's claim is not a review verdict. Pin all versions and record
 delivery, corrections, actual routing and available usage for both arms. No C5
 model pair, held-out quality or savings has been measured.
+
+## C6 concurrent-writer pilot
+
+`examples/routing-pilot.py prepare --case writer` freezes a broken writer.py,
+a checkpoint sample and the same external checker for both arms. increment(path)
+must serialize the entire read/modify/publish sequence with an exclusive flock
+on a private persistent str(path)+".lock" sidecar. The sidecar keeps its inode;
+each write uses a unique private same-directory snapshot and the provided atomic
+_publish hook. Only the current operation's snapshot may be cleaned up.
+
+Six machine checks cover frozen-input integrity, sequential APIs, a two-writer
+contention case, crashes before and after publication, and invalid-input
+preservation. The provided _before_read and _publish hooks expose fixed barriers.
+The checker confirms live owned workers, probes the actual kernel lock, checks
+file contents/metadata and coordinates the second writer without assuming that
+a marker file alone proves a running operation.
+
+The crash cases send SIGKILL only to groups created by the checker. A crash
+before publish must leave the old checkpoint intact; a crash after publish must
+retain the new committed checkpoint even though the call did not return. The
+checker validates that state and lock release before a distinct declared next
+increment. A deliberately poisoned orphan must stay untouched and cannot become
+the checkpoint. This is controlled process-crash evidence; it does not implement
+exactly-once operation IDs or prove ModelMate's native unknown-turn recovery.
+
+Prepare and preview without subscription turns:
+
+```bash
+PILOT="$PWD/examples/routing-pilot.py"
+PAIR="$(python3 "$PILOT" prepare --case writer)"
+python3 "$PILOT" run "$PAIR" routed \
+  --standard STANDARD_MODEL --strong STRONG_MODEL --economy ECONOMY_MODEL
+python3 "$PILOT" run "$PAIR" baseline \
+  --standard STANDARD_MODEL --strong STRONG_MODEL --economy ECONOMY_MODEL
+```
+
+Use the same three distinct supported low-effort bindings. Record actual routing;
+the high-risk implementation can select Strong in both arms. Changed artifacts
+or an already-started arm refuse a fresh launch. Future live execution requires
+separately chosen --execute and --experimental-tool-approvals, START and the
+normal model/native permission choices, and consumes quota. Model-authored
+candidates use approved native execution; worker supervision supplies test
+bounds rather than a new filesystem/network isolation boundary. Timeout or
+unexpected I/O remains unverified, with no automatic retry to obtain a pass.
+
+The implementation has a following Strong review step and a separate trusted
+human rubric. Review must inspect the full critical section, stable lock
+identity, exclusive snapshots, fsync/publication ordering, ownership and orphan
+handling. A no-fsync mutant passes these process-crash checks, so machine success
+alone cannot complete the task or establish power-loss durability. Record the
+machine result at step 1/check 1 and the trusted review at step 2/check 1. Pin all
+versions and record deliveries, corrections, actual model use and available
+measurements. C6 has developer reference/mutant evidence only; model pairing,
+held-out quality and savings remain unmeasured.
 
 ## C7 cleanup-review pilot
 

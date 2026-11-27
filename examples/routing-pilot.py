@@ -113,7 +113,7 @@ def prepare(case):
     (scratch / 'case.txt').write_text(case + '\n', encoding='utf-8')
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'modelmate.py', runtime)
     checker = scratch / ('check-' + case + '.py')
-    if case in ('cli', 'parser', 'migration'):
+    if case in ('cli', 'parser', 'migration', 'writer'):
         shutil.copyfile(Path(__file__).with_name(case + '-pilot-check.py'), checker)
     objective = (
         'Choose the repair for this Python function and answer with exactly one letter A, B, C or D. '
@@ -151,6 +151,8 @@ def prepare(case):
             plan = prepare_parser(project, role, checker)
         elif case == 'migration':
             plan = prepare_migration(project, role, checker)
+        elif case == 'writer':
+            plan = prepare_writer(project, role, checker)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
@@ -314,6 +316,51 @@ def prepare_migration(project, role, checker):
         }]}
 
 
+def prepare_writer(project, role, checker):
+    source_checker = Path(__file__).with_name('writer-pilot-check.py')
+    fixture = runpy.run_path(str(source_checker))
+    (project / fixture['INPUT_NAME']).write_bytes(fixture['INPUT_BYTES'])
+    (project / 'writer.py').write_text('import json\nimport os\nfrom pathlib import Path\n\n'
+        'def load(path):\n    value = json.loads(Path(path).read_text(encoding="utf-8"))\n'
+        '    if (not isinstance(value, dict) or set(value) != {"version", "count"}\n'
+        '            or type(value["version"]) is not int or value["version"] != 1\n'
+        '            or type(value["count"]) is not int or value["count"] < 0):\n'
+        '        raise ValueError("invalid checkpoint")\n    return value\n\n'
+        'def _before_read():\n    pass\n\n'
+        'def _publish(snapshot, destination):\n    os.replace(snapshot, destination)\n\n'
+        'def increment(path):\n    path = Path(path)\n    _before_read()\n    value = load(path)\n'
+        '    value["count"] += 1\n    path.write_text(json.dumps(value), encoding="utf-8")\n'
+        '    return value\n', encoding='utf-8')
+    write_frozen_checks(project, source_checker, checker)
+    behavior = 'Frozen writer checks pass: no lost increments, stable exclusive locking, last committed checkpoint survives controlled crashes, no orphan replay/deletion.'
+    review = 'Trusted source review confirms lock scope/identity, atomic private fsynced publication, owned cleanup and explicit limits on crash durability/replay.'
+    return {'version': 1, 'goal': 'Repair a concurrent checkpoint counter writer without losing committed data',
+        'clarifications': [], 'success_criteria': [behavior, review], 'steps': [{
+            'kind': 'implement', 'objective': 'Edit only writer.py. Keep load(path) read-only with its existing '
+            'v1/count schema and errors. increment(path) returns the new checkpoint after exactly one increment. '
+            'Use a private persistent sidecar at str(path)+".lock", with an exclusive fcntl.flock held from '
+            'before reading until publication returns. Never unlink or replace the lock file. Call the existing '
+            '_before_read hook exactly once immediately before load, inside that lock. Create a unique exclusive '
+            'private 0600 snapshot in the same directory, flush/fsync it, then call the existing '
+            '_publish(snapshot,destination) hook exactly once, preserving its os.replace behavior. '
+            'Clean only the current operation\'s snapshot on ordinary exit/failure. Ignore other writers\' '
+            'snapshots, including crash orphans; never adopt/replay/delete them. Propagate errors without '
+            'hidden retries. Preserve bystander files and the last committed checkpoint under process loss. '
+            'Do not edit sample inputs, plans, commands or checker. Run the registered check once. '
+            'Use native tool approval when needed without widening permissions; no network/unrelated commands.',
+            'role': role, 'effort': 'low', 'risk': 'high', 'reason': 'Concurrent writes and process loss can destroy checkpoint data.',
+            'checks': [{'kind': 'test', 'criterion': behavior}]}, {
+            'kind': 'review', 'objective': 'Review writer.py with read-only tools as needed and inspect actual '
+            'checker evidence. Check stable lock identity and the entire read/modify/publish critical section, '
+            'exclusive private snapshots, fsync before atomic publication, owned cleanup and no orphan adoption '
+            'or hidden retries. Cite source evidence and remaining power-loss/concurrency limits. '
+            'Do not edit files, rerun checks or run unrelated commands. A trusted human must inspect the '
+            'source/evidence before recording this review rubric.', 'role': 'strong', 'effort': 'low',
+            'risk': 'normal', 'reason': 'Independent review is required after checkpoint data-loss-risk changes.',
+            'checks': [{'kind': 'rubric', 'criterion': review}],
+        }]}
+
+
 def frozen_file_matches(path, expected):
     with path.open('rb') as source:
         return source.read(len(expected) + 1) == expected
@@ -333,9 +380,9 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     plan_path = project / 'plan.json'
     case_file = scratch / 'case.txt'
     case = case_file.read_text(encoding='utf-8').strip() if case_file.is_file() else 'c1'
-    if tool_approvals and case not in ('cli', 'parser', 'migration'):
-        raise ValueError('Experimental tool approvals are scoped to the CLI, parser and migration authoring pilots.')
-    if execute and case in ('cli', 'parser', 'migration') and not tool_approvals:
+    if tool_approvals and case not in ('cli', 'parser', 'migration', 'writer'):
+        raise ValueError('Experimental tool approvals are scoped to the CLI, parser, migration and writer authoring pilots.')
+    if execute and case in ('cli', 'parser', 'migration', 'writer') and not tool_approvals:
         raise ValueError('Executing authoring pilots requires explicit --experimental-tool-approvals.')
     if case == 'cleanup':
         if state.exists():
@@ -345,7 +392,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
                 or not frozen_file_matches(plan_path, expected)
                 or not frozen_file_matches(project / 'cleanup.py', (CLEANUP_SOURCE + '\n').encode('utf-8'))):
             raise ValueError('Frozen cleanup review inputs changed; do not start this arm.')
-    if case in ('cli', 'parser', 'migration'):
+    if case in ('cli', 'parser', 'migration', 'writer'):
         if state.exists():
             raise ValueError('Authoring arm already has state; inspect/resume it or prepare a new pair, never replay it.')
         checker = scratch / ('check-' + case + '.py')
@@ -353,7 +400,8 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
             raise ValueError('Frozen authoring checker changed; do not start this arm.')
         with tempfile.TemporaryDirectory(prefix='modelmate-authoring-reference-') as directory:
             reference = Path(directory)
-            prepare_case = {'cli': prepare_cli, 'parser': prepare_parser, 'migration': prepare_migration}[case]
+            prepare_case = {'cli': prepare_cli, 'parser': prepare_parser,
+                            'migration': prepare_migration, 'writer': prepare_writer}[case]
             expected = prepare_case(reference, 'standard' if arm == 'routed' else 'strong', checker)
             (reference / 'plan.json').write_text(json.dumps(expected, indent=2) + '\n', encoding='utf-8')
             names = {path.name for path in reference.iterdir()}
@@ -540,7 +588,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup', 'parser', 'migration'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup', 'parser', 'migration', 'writer'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -551,7 +599,7 @@ def main():
     launch.add_argument('--measure-quota', action='store_true', help='include observed live quota-window changes')
     launch.add_argument('--metrics-jsonl', help='append a private metrics report without account quota data')
     launch.add_argument('--experimental-tool-approvals', action='store_true',
-                        help='explicit native approval UI for the CLI/parser/migration authoring pilots')
+                        help='explicit native approval UI for CLI/parser/migration/writer authoring pilots')
     grade = actions.add_parser('score', help='score a turn answer with the case rubric')
     grade.add_argument('answer')
     grade.add_argument('--case', choices=('c1', 'dedupe', 'incident', 'cleanup'), default='c1')
