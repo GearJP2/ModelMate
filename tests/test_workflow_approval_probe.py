@@ -64,6 +64,7 @@ class WorkflowApprovalProbeTests(unittest.TestCase):
 
     def test_observed_accept_and_decline_are_durable_scoped_and_redacted(self):
         result = self.probe()
+        self.assertEqual(result['probeStage'], 'finished')
         self.assertTrue(all(result[key] == 'passed' for key in WORKFLOW_APPROVAL_KEYS), result)
         self.assertEqual(len(result['cases']), 2)
         self.assertEqual(sum(r.get('method') == 'turn/start' for r in self.records()), 2)
@@ -74,6 +75,33 @@ class WorkflowApprovalProbeTests(unittest.TestCase):
         self.assertNotIn('MM-', json.dumps(result))
         self.assertNotIn('printf', json.dumps(result))
         self.assertIsNone(result['reportedModels'])
+
+    def test_connect_error_reports_source_location_without_private_message(self):
+        private='PRIVATE /private/account/path MM-secret'
+        with patch.object(ApprovalVerificationConnection,'connect',side_effect=ProbeError(private)):
+            result=self.probe()
+        self.assertEqual(result['probeStage'],'connect')
+        self.assertEqual(result['diagnostic'],'ProbeError')
+        self.assertEqual(result['diagnosticLocation']['file'],'verify.py')
+        self.assertEqual(result['diagnosticLocation']['function'],'probe_workflow_approvals')
+        self.assertGreater(result['diagnosticLocation']['line'],0)
+        self.assertEqual(self.count,1)
+        self.assertNotIn(private,json.dumps(result))
+        self.assertNotIn(str(self.scratch),json.dumps(result))
+        self.assertFalse((self.scratch/'decline').exists())
+
+    def test_unsupported_scope_reports_origin_without_acceptance_or_payload(self):
+        source=PROBE_SERVER.replace('  emit(request)',
+            "  params['additionalPermissions']={'private':'PRIVATE-SCOPE'}\n  emit(request)")
+        result=self.probe(source)
+        self.assertEqual(result['probeStage'],'await_approval')
+        self.assertEqual(result['diagnostic'],'ProbeError')
+        self.assertEqual(result['diagnosticLocation']['file'],'modelmate.py')
+        self.assertEqual(result['diagnosticLocation']['function'],'native_tool_request')
+        self.assertEqual(sum(r.get('method')=='turn/start' for r in self.records()),1)
+        self.assertNotIn('accept',[r['result']['decision'] for r in self.records() if 'result' in r])
+        self.assertNotIn('PRIVATE-SCOPE',json.dumps(result))
+        self.assertTrue(all(result[key]=='unverified' for key in WORKFLOW_APPROVAL_KEYS))
 
     def test_no_approval_event_cannot_pass_or_start_another_turn(self):
         source = PROBE_SERVER.replace('  emit(request)',

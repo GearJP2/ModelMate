@@ -65,6 +65,13 @@ authorize enabling gated workflow approvals, automatic search or a release.
 
 ## Live checks with explicit opt-in
 
+The 2026-11-27 user-run command probe on Codex 0.172.0 returned ProbeError in
+the approve phase with all seven checks unverified. Its original exception
+location was not captured; the cause is unresolved. The updated verifier now
+includes `probeStage` and source-only `diagnosticLocation` for errors. That
+change has offline evidence only. A new run uses subscription quota again and
+must be explicitly chosen; the original attempt is not replayed automatically.
+
 The next prepared P09 check is
 `python3 verify.py --run-live --probe-workflow-approvals MODEL` from a normal
 authenticated Terminal. It uses at most two subscription turns and may accept
@@ -72,7 +79,7 @@ one bounded synthetic marker write, then declines the second case. Record the
 CLI version, runtime/verifier hashes and all seven check results. Missing
 approval requests are inconclusive; do not widen permissions to obtain them.
 See the scoped verifier record in [VERIFICATION.md](VERIFICATION.md) before
-running it. This check has not yet supplied live evidence. Installed CLI
+running it. This check has not yet supplied passing live evidence. Installed CLI
 0.172.0 has matching inspected approval schemas, which does not carry forward
 the live compatibility evidence recorded for 0.171.0.
 

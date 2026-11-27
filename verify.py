@@ -736,6 +736,7 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
     policy = {role: model for role in ('economy', 'standard', 'strong')}
     try:
         for choice in ('approve', 'decline'):
+            result['probeStage'] = 'setup'
             project = directory / choice;project.mkdir(mode=0o700)
             (project / 'sentinel.txt').write_text('synthetic sentinel\n')
             nonce = 'MM-' + secrets.token_hex(16)
@@ -756,14 +757,18 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
                                 'criterion': 'Observe the registered marker outcome'}]}]})
             store = SessionStore(project, directory / ('state-' + choice))
             controller = WorkflowController(raw, catalog, policy)
+            result['probeStage'] = 'connect'
             connection = ApprovalVerificationConnection(command, timeout)
             connection.experimental_tool_approvals = True
             host = connection.connect(controller, project, policy, store=store);host.timeout = timeout
             if not patch:host.configure_check(0, command=spec, cwd=str(project))
             shell = ChatShell(io.StringIO(), workflow=controller, workflow_action=host)
+            result['probeStage'] = 'dispatch'
             shell.line('/next')
+            result['probeStage'] = 'await_approval'
             if wait_approval_phase(connection, timeout, pending=True) != 'pending':
                 result['failureReason'] = 'approval_not_observed';return result
+            result['probeStage'] = 'validate_preview'
             request = controller.snapshot()['tool_request']
             native = connection._native_tool
             matches = False
@@ -777,6 +782,7 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
             if (not matches
                     or host.tool_preview() not in shell.output.getvalue()):
                 result['failureReason'] = 'unexpected_or_undisplayed_action';return result
+            result['probeStage'] = 'check_before_consent'
             case['requestObserved'] = 'passed'
             try:
                 if host._observations or connection.patch_completions:
@@ -788,6 +794,7 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
             case['beforeConsent'] = 'passed'
             token = request['token']
             if choice == 'approve':connection.armed = (request['binding']['request_id'], request['action_digest'])
+            result['probeStage'] = 'respond_once'
             shell.line('/' + choice + ' ' + token)
             expected = 'accept' if choice == 'approve' else 'decline'
             if connection.decisions != [expected]:return result
@@ -797,9 +804,11 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
             shell.line('/approve ' + token)
             case['singleUse'] = 'passed' if (connection.decisions == before and connection.blocked_accepts == blocked
                 and controller.export_checkpoint() == checkpoint) else 'failed'
+            result['probeStage'] = 'await_terminal'
             status = wait_approval_phase(connection, timeout, pending=False)
             case['terminalStatus'] = status
             if choice == 'approve' and status != 'completed':return result
+            result['probeStage'] = 'validate_effect'
             check_approval_files(project, nonce, allow_marker=choice == 'approve')
             if choice == 'approve' and not (project / 'approval-marker.txt').exists():return result
             observed = host._observations.get(0, {})
@@ -816,6 +825,7 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
                     result['failureReason'] = 'approved_patch_evidence_missing' if patch else 'approved_command_evidence_missing'
                     return result
             case['effect'] = 'passed'
+            result['probeStage'] = 'validate_checkpoint'
             saved = store.read(connection.session_id)['workflow']
             case['durableDecision'] = 'passed' if (saved == controller.export_checkpoint()
                 and saved['tool_request']['status'] == ('approved' if choice == 'approve' else 'declined')
@@ -828,9 +838,17 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
             declinedEffectAbsent=cases[1]['effect'], durableDecisions='passed' if all(
                 c['durableDecision'] == 'passed' for c in cases) else 'failed', singleUseConfirmation='passed' if all(
                 c['singleUse'] == 'passed' for c in cases) else 'failed', sentinelUnchanged='passed', phase='finished')
+        result['probeStage'] = 'finished'
         return result
     except (ProbeError, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         result['diagnostic'] = diagnostic_code(exc)
+        trace = exc.__traceback__
+        while trace is not None:
+            filename = Path(trace.tb_frame.f_code.co_filename).name
+            if filename in ('modelmate.py', 'verify.py'):
+                result['diagnosticLocation'] = {'file': filename,
+                    'function': trace.tb_frame.f_code.co_name, 'line': trace.tb_lineno}
+            trace = trace.tb_next
         return result
     finally:
         if connection is not None:

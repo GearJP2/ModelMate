@@ -4765,3 +4765,40 @@ improvements do not close these release requirements. The prepared bounded
 command approval probe is awaiting explicit authorization; no inference or HTTP
 request was made. Documentation-only revalidation does not rerun the full suite
 or alter the previous 780-test result.
+
+### P09 user-run approval probe and redacted failure location (2026-11-27)
+
+The user ran `python3 verify.py --run-live --probe-workflow-approvals gpt-6.1-sol`
+with Codex CLI 0.172.0. Runtime SHA-256 matched
+`27f3568ed35d617a0fc7c04f0b0b79ee40ba1e8a320cee443e4274ea897b72f1` and the
+tested verifier matched
+`9da8763da620333778ea00c579b814ba4ce902943933e6c5702e6ed7acbe429e`.
+The result reported phase approve, diagnostic ProbeError, reportedModels null,
+one approve case, and all seven WORKFLOW_APPROVAL_KEYS unverified. No decline
+case was started. This is an unsuccessful live attempt, not a G2 pass.
+
+Read-only inspection of the retained synthetic scratch found only the unchanged
+sentinel in the approve project and no marker. The saved metadata contains a
+native thread/turn binding, an interrupted history entry, no pending tool
+request and PAUSED/outcome_unknown state. These are post-cleanup observations;
+they do not identify the triggering exception, prove pre-consent isolation, or
+establish the full permission/remote-stop gate. Scratch and native threads were
+not deleted, resumed or replayed. No additional model, account or HTTP call was
+made while investigating this result.
+
+The verifier previously discarded the exception's source location and retained
+only its class. It now reports fixed `probeStage` labels and the last trusted
+modelmate.py/verify.py traceback frame as `diagnosticLocation` (file basename,
+function, line). Raw error messages, traceback text, local variables, native IDs,
+prompts and payloads remain excluded. The original failure location cannot be
+reconstructed from the old JSON report; this change does not claim a root-cause
+fix or alter permissions, decisions, turn limits or retries.
+
+`PYTHONPATH=tests python3 -m unittest test_workflow_approval_probe test_verify -q`
+passed 41 offline tests. New fake-server/connect-error cases prove stage/location
+reporting, private-message/payload redaction, no acceptance of unsupported scopes
+and no second case after failure. The full offline suite passed 782 tests in
+50.092 seconds with no skips. Compile/diff checks passed. Updated verifier
+SHA-256: `3ee3e27c75db2d37c6cfa39f8c24a3c8c7cc9e9989927e8544db24166b15d5e9`.
+Runtime hash is unchanged. A further live run must be explicitly chosen and
+consumes subscription quota again; no live retry was performed here.

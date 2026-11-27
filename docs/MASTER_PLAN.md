@@ -478,6 +478,15 @@ entries require a recognized change kind and valid rename metadata. Relevant
 generated schemas match between CLI 0.171.0 and installed 0.172.0; that comparison
 does not establish live 0.172.0 compatibility.
 
+P09 user-run command probe (2026-11-27), IN_PROGRESS: Codex 0.172.0 at runtime
+SHA-256 `27f3568ed35d617a0fc7c04f0b0b79ee40ba1e8a320cee443e4274ea897b72f1`
+returned all seven checks unverified, phase approve and diagnostic ProbeError.
+No G2 pass is claimed. The retained checkpoint has a bound turn and interrupted
+history, but does not identify the original exception. The verifier now reports
+a fixed probe stage and a source-only exception location, without raw messages,
+payloads, paths or IDs. Forty-one targeted and 782 full offline tests passed;
+this diagnostic change was not live-retried and does not relax approval policy.
+
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
 declines the pending request and expires the token, even if the old diff returns.
