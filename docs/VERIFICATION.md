@@ -4928,3 +4928,54 @@ pairing, held-out quality, independent review and G5 remain open.
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 789 tests in 52.473 seconds, with no skips.
+
+### P16 C4 parser-refactor fixture and frozen API checks (2026-11-27)
+
+The planned C4 evaluation now has an offline preparer: `examples/routing-pilot.py
+prepare --case parser` generates identical records.py/totals.py inputs with
+duplicated parsing, separate routed/baseline plans and a frozen checker outside
+the candidate project. The task extracts record_fields.parse_fields and keeps
+the original tuple/dict APIs and error behavior. The same input/version/check
+and independent-review criteria apply to both arms.
+
+The registered command uses the existing hash-bound bootstrap, now shared by
+the CLI and parser cases. A changed checker cannot substitute a self-reported
+pass. Initial files, plan, command specification and runtime are revalidated
+before launch; an existing arm state cannot start a fresh attempt. Actual live
+authoring still requires --execute plus explicit native tool-approval opt-in.
+Other pilot cases gain no tool-approval capability. No runtime/provider/native
+permission or grant logic was changed.
+
+The frozen checker validates the extracted module and 29 child observations for
+normal/Unicode/whitespace/signed/zero counts, wrong input, missing/extra colons,
+empty names, negative/fraction/noninteger counts, aggregation/order, iterable
+rows and unchanged list inputs. It compares exact trusted JSON encodings of
+observed types/values/errors against fixed expectations, without accepting a
+candidate verdict or exposing raw stdout/stderr. Each child is supervised with
+a two-second deadline, bounded output and owned process-group cleanup while
+preserving stronger host file limits. These are execution bounds, not a new
+filesystem/network security boundary. Timeout/failed children stop unverified.
+
+A separate rubric and task criterion require independent confirmation of shared
+delegation, removed duplicate validation and no circular imports. A deliberate
+unused-helper mutant passes the machine API checks and still needs that review;
+API equality alone is not proof that a refactor happened. No model-generated
+review or self-reported tests can supply that trusted rubric verdict.
+
+`PYTHONPATH=tests python3 -m unittest test_parser_pilot test_cli_pilot
+test_routing_pilot -q` passed 27 tests. Nine new C4 tests cover original behavior
+versus extracted module, audited reference, tuple/list and int/float mutants,
+wrong ordering/aggregation/input mutation, mandatory independent review, paired
+previews, checker/fixture/state integrity, explicit execution flags, timeout,
+failed-child/private-error handling and stronger resource limits. All candidate
+programs are developer-authored; execute-path forwarding uses a mock. No model,
+account, HTTP or subscription quota was requested. Compile/diff checks passed.
+
+Pilot SHA-256: `f22c0f252be50b50abb495d26b662a6a7c1bc8362c0a8d142841eac40cc29bad`.
+Checker SHA-256: `a2e50c928ac55c9c47595ec22aa83beff6d8532f4e4b41235b67f2192d0b8f3b`.
+Runtime SHA-256 remains
+`cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`.
+C4 live pairing, independent candidate review, held-out quality and G5 remain open.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 798 tests in 93.212 seconds, with no skips.

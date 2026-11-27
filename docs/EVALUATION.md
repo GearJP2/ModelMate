@@ -12,7 +12,7 @@ before requesting subscription turns.
 | C1 | Fix an off-by-one boundary in a list helper | Empty, singleton and end-index regression tests pass. |
 | C2 | [Implement an option in a small CLI](#c2-cli-authoring-pilot) | Added option works and existing input, help and exit codes stay compatible. |
 | C3 | Add stable de-duplication to an importer | Order and handling of blank and duplicate rows match fixtures. |
-| C4 | Refactor a parser across modules | Existing API and error cases pass the same fixture suite. |
+| C4 | [Refactor a parser across modules](#c4-parser-refactor-pilot) | Existing API and error cases pass the same fixture suite; an independent reviewer confirms shared parsing. |
 | C5 | Migrate a local JSON schema | Old data loads, repeat migration is safe and failed writes preserve originals. |
 | C6 | Repair a concurrent local writer | Contention and crash fixtures preserve the last valid checkpoint. |
 | C7 | [Review a file cleanup change](#c7-cleanup-review-pilot) | Correctly identify seeded scope and confirmation bugs with file evidence. |
@@ -539,6 +539,61 @@ with no paired subscription quota measurements. Together with the earlier
 pairs, this supports keeping format repair ahead of escalation and keeping
 the display-only routing rule experimental. These cases cover one narrow
 area of one codebase.
+
+## C4 parser-refactor pilot
+
+`examples/routing-pilot.py prepare --case parser` freezes two projects with the
+same duplicated parsing in records.py and totals.py. The task extracts it into
+record_fields.parse_fields while preserving parse_record and sum_counts. Both
+arms receive the same source, criteria and hash-bound checker. Their requested
+roles differ; the existing suggestion policy decides the routed selection.
+
+Acceptance has two independent parts:
+
+- The frozen machine check verifies the extracted module and 29 observations:
+  tuple/dict return types, integer/Unicode/whitespace behavior, error classes,
+  ordered aggregation, iterable inputs and preservation of input lists.
+- A trusted reviewer must confirm that both callers actually delegate to the
+  helper, duplicated validation is removed and no circular imports are added.
+
+The second check is a rubric and has its own success criterion. An unused helper
+can pass the API checks, so a green machine result alone cannot complete this
+refactor. The offline tests explicitly demonstrate this limitation. The grader
+compares observations with fixed expected bytes; a candidate's claimed verdict
+is never interpreted as a pass.
+
+Prepare and preview without subscription turns:
+
+```bash
+PILOT="$PWD/examples/routing-pilot.py"
+PAIR="$(python3 "$PILOT" prepare --case parser)"
+python3 "$PILOT" run "$PAIR" routed \
+  --standard STANDARD_MODEL --strong STRONG_MODEL --economy ECONOMY_MODEL
+python3 "$PILOT" run "$PAIR" baseline \
+  --standard STANDARD_MODEL --strong STRONG_MODEL --economy ECONOMY_MODEL
+```
+
+Use the same three distinct supported low-effort bindings for both arms. Changes
+to the prepared sources, plan, command specification, checker or runtime refuse
+launch, as does an existing arm state. Retain partial/failed arm evidence and
+use explicit recovery rather than starting that arm again.
+
+A future live run requires separately chosen `--execute` and
+`--experimental-tool-approvals`, followed by START and the normal workflow/model
+and native permission choices. It consumes quota and remains subject to the
+open permission gates. The registered check executes the edited Python; run
+actual model-authored candidates through approved native execution. Each child
+observation has a two-second deadline and bounded output, and keeps stronger
+existing resource limits. Timeout or failed-child observation is unverified and
+stops the check; a known output mismatch is a failed API case. These controls
+do not provide a filesystem/network isolation boundary beyond native policy.
+
+Inspect the actual recorded machine result and perform the independent source
+review before recording the rubric verdict. Complete both criteria through the
+normal evidence flow. Record versions, actual selection, corrections, review
+outcome, time and available usage for each arm; include quota measurements only
+when attributable. C4 has offline reference/mutant evidence only. Live paired
+results, broader held-out quality and savings remain unmeasured.
 
 ## C7 cleanup-review pilot
 

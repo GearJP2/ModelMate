@@ -890,6 +890,15 @@ integration is unavailable, so no independent clean environment was tested.
 The prepared bounded G2 command-approval probe awaits explicit live authorization.
 No release gate, live compatibility claim or evaluation result was advanced.
 
+C4 parser-refactor fixture increment (2026-11-27), MOCK_VERIFIED:
+`examples/routing-pilot.py prepare --case parser` freezes two duplicated-parser
+projects, an external hash-bound API checker and the same acceptance criteria.
+Machine checks cover existing APIs/errors and an extracted module; an independent
+rubric separately requires actual delegation/removal of duplication. The existing
+CLI checker bootstrap/integrity path is shared, preserving explicit execution,
+tool-approval opt-in and no replay of started arms. Twenty-seven pilot tests pass
+with developer references/mutants only; no C4 live pair or quality claim exists.
+
 C7 review fixture increment (2026-11-27), MOCK_VERIFIED:
 `examples/routing-pilot.py prepare --case cleanup` creates the same numbered
 synthetic cleanup snippet for both arms. A bounded strict JSON scorer requires

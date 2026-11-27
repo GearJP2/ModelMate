@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 
 
 CHOICES = {
@@ -111,9 +112,9 @@ def prepare(case):
     runtime = scratch / 'modelmate.py'
     (scratch / 'case.txt').write_text(case + '\n', encoding='utf-8')
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'modelmate.py', runtime)
-    checker = scratch / 'check-cli.py'
-    if case == 'cli':
-        shutil.copyfile(Path(__file__).with_name('cli-pilot-check.py'), checker)
+    checker = scratch / ('check-' + case + '.py')
+    if case in ('cli', 'parser'):
+        shutil.copyfile(Path(__file__).with_name(case + '-pilot-check.py'), checker)
     objective = (
         'Choose the repair for this Python function and answer with exactly one letter A, B, C or D. '
         'Use only the code in this prompt. Do not call tools or read or modify files.\n'
@@ -146,6 +147,8 @@ def prepare(case):
             plan = cleanup_plan(role)
         elif case == 'cli':
             plan = prepare_cli(project, role, checker)
+        elif case == 'parser':
+            plan = prepare_parser(project, role, checker)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
@@ -190,6 +193,20 @@ def prepare_economy(project, role):
             ]}
 
 
+def write_frozen_checks(project, source_checker, checker):
+    checker_code = source_checker.read_bytes()
+    digest = hashlib.sha256(checker_code).hexdigest()
+    bootstrap = ("import hashlib,pathlib,sys; p=" + repr(str(checker)) + "; "
+        "source=open(p,'rb'); code=source.read(" + str(len(checker_code) + 1) + "); source.close(); "
+        "valid=hashlib.sha256(code).hexdigest()==" + repr(digest) + "; "
+        "print('{\"checkerIntegrity\":false}') if not valid else None; "
+        "sys.exit(2) if not valid else None; "
+        "exec(compile(code,p,'exec'),{'__name__':'__main__','__file__':p})")
+    checks = {'version': 1, 'checks': [{'step': 1, 'check': 1, 'cwd': '.',
+        'command': 'python3 -I -B -c ' + shlex.quote(bootstrap)}]}
+    (project / 'checks.json').write_text(json.dumps(checks, indent=2) + '\n', encoding='utf-8')
+
+
 def prepare_cli(project, role, checker):
     source_checker = Path(__file__).with_name('cli-pilot-check.py')
     fixture = runpy.run_path(str(source_checker))
@@ -206,17 +223,7 @@ def prepare_cli(project, role, checker):
         "        parser.error('Cannot read input rows.')\n"
         "    sys.stdout.buffer.write(''.join(row + '\\n' for row in rows).encode('utf-8'))\n\n"
         "if __name__ == '__main__':\n    main()\n", encoding='utf-8')
-    checker_code = source_checker.read_bytes()
-    digest = hashlib.sha256(checker_code).hexdigest()
-    bootstrap = ("import hashlib,pathlib,sys; p=" + repr(str(checker)) + "; "
-        "source=open(p,'rb'); code=source.read(" + str(len(checker_code) + 1) + "); source.close(); "
-        "valid=hashlib.sha256(code).hexdigest()==" + repr(digest) + "; "
-        "print('{\"checkerIntegrity\":false}') if not valid else None; "
-        "sys.exit(2) if not valid else None; "
-        "exec(compile(code,p,'exec'),{'__name__':'__main__','__file__':p})")
-    checks = {'version': 1, 'checks': [{'step': 1, 'check': 1, 'cwd': '.',
-        'command': 'python3 -I -B -c ' + shlex.quote(bootstrap)}]}
-    (project / 'checks.json').write_text(json.dumps(checks, indent=2) + '\n', encoding='utf-8')
+    write_frozen_checks(project, source_checker, checker)
     criterion = 'Frozen CLI checks pass: default/blank rows, nonnegative limit, help and compatible error exits; input remains unchanged.'
     return {'version': 1, 'goal': 'Add --limit N to the row-printing CLI without changing existing behavior',
         'clarifications': [], 'success_criteria': [criterion], 'steps': [{
@@ -230,6 +237,36 @@ def prepare_cli(project, role, checker):
             'role': role, 'effort': 'low', 'risk': 'normal',
             'reason': 'A bounded single-file option with independent frozen CLI checks.',
             'checks': [{'kind': 'test', 'criterion': criterion}],
+        }]}
+
+
+def prepare_parser(project, role, checker):
+    validation = ("if not isinstance(text, str):\n    raise TypeError('text must be str')\n"
+        "parts = text.split(':')\nif len(parts) != 2:\n    raise ValueError('one colon required')\n"
+        "name = parts[0].strip()\nif not name:\n    raise ValueError('name required')\n"
+        "count = int(parts[1])\nif count < 0:\n    raise ValueError('negative count')\n")
+    (project / 'records.py').write_text('def parse_record(text):\n'
+        + textwrap.indent(validation + 'return name, count\n', '    '), encoding='utf-8')
+    (project / 'totals.py').write_text('def sum_counts(rows):\n    result = {}\n    for text in rows:\n'
+        + textwrap.indent(validation + 'result[name] = result.get(name, 0) + count\n', '        ')
+        + '    return result\n', encoding='utf-8')
+    write_frozen_checks(project, Path(__file__).with_name('parser-pilot-check.py'), checker)
+    behavior = 'Frozen parser checks pass: existing tuple/dict APIs, Unicode/whitespace, integer conversion, errors, order and unchanged inputs.'
+    structure = 'Independent reviewer confirms both callers delegate to record_fields.parse_fields without duplicated validation or circular imports.'
+    return {'version': 1, 'goal': 'Extract duplicated record parsing across two modules without changing public behavior',
+        'clarifications': [], 'success_criteria': [behavior, structure], 'steps': [{
+            'kind': 'implement', 'objective': 'Refactor records.py and totals.py. Add record_fields.py exposing '
+            'parse_fields(text), and make both parse_record(text) and sum_counts(rows) delegate parsing to it. '
+            'Preserve the existing public APIs: a tuple (trimmed name, integer count), and a dict of totals '
+            'in first-name order for any iterable of rows. Preserve inputs and TypeError/ValueError behavior; '
+            'exception messages may vary. Keep int-string semantics including plus signs and leading zeros. '
+            'Do not duplicate validation or create circular imports. Edit only these three source files; '
+            'do not modify plans, commands or the frozen checker. Use native tool approval when required '
+            'without widening permissions. Run the registered check once and report its result. '
+            'A separate human review must verify extraction/delegation; passing API tests alone is insufficient. '
+            'No network or unrelated commands.', 'role': role, 'effort': 'low', 'risk': 'normal',
+            'reason': 'A small multi-file refactor with frozen API checks and independent structural review.',
+            'checks': [{'kind': 'test', 'criterion': behavior}, {'kind': 'rubric', 'criterion': structure}],
         }]}
 
 
@@ -252,10 +289,10 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     plan_path = project / 'plan.json'
     case_file = scratch / 'case.txt'
     case = case_file.read_text(encoding='utf-8').strip() if case_file.is_file() else 'c1'
-    if tool_approvals and case != 'cli':
-        raise ValueError('Experimental tool approvals are scoped to the CLI authoring pilot.')
-    if execute and case == 'cli' and not tool_approvals:
-        raise ValueError('Executing the CLI authoring pilot requires explicit --experimental-tool-approvals.')
+    if tool_approvals and case not in ('cli', 'parser'):
+        raise ValueError('Experimental tool approvals are scoped to the CLI and parser authoring pilots.')
+    if execute and case in ('cli', 'parser') and not tool_approvals:
+        raise ValueError('Executing authoring pilots requires explicit --experimental-tool-approvals.')
     if case == 'cleanup':
         if state.exists():
             raise ValueError('Review arm already has state; inspect/resume it or prepare a new pair, never replay it.')
@@ -264,20 +301,21 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
                 or not frozen_file_matches(plan_path, expected)
                 or not frozen_file_matches(project / 'cleanup.py', (CLEANUP_SOURCE + '\n').encode('utf-8'))):
             raise ValueError('Frozen cleanup review inputs changed; do not start this arm.')
-    if case == 'cli':
+    if case in ('cli', 'parser'):
         if state.exists():
-            raise ValueError('CLI arm already has state; inspect/resume it or prepare a new pair, never replay it.')
-        checker = scratch / 'check-cli.py'
-        if not frozen_file_matches(checker, Path(__file__).with_name('cli-pilot-check.py').read_bytes()):
-            raise ValueError('Frozen CLI checker changed; do not start this arm.')
-        with tempfile.TemporaryDirectory(prefix='modelmate-cli-reference-') as directory:
+            raise ValueError('Authoring arm already has state; inspect/resume it or prepare a new pair, never replay it.')
+        checker = scratch / ('check-' + case + '.py')
+        if not frozen_file_matches(checker, Path(__file__).with_name(case + '-pilot-check.py').read_bytes()):
+            raise ValueError('Frozen authoring checker changed; do not start this arm.')
+        with tempfile.TemporaryDirectory(prefix='modelmate-authoring-reference-') as directory:
             reference = Path(directory)
-            expected = prepare_cli(reference, 'standard' if arm == 'routed' else 'strong', checker)
+            prepare_case = prepare_cli if case == 'cli' else prepare_parser
+            expected = prepare_case(reference, 'standard' if arm == 'routed' else 'strong', checker)
             (reference / 'plan.json').write_text(json.dumps(expected, indent=2) + '\n', encoding='utf-8')
             names = {path.name for path in reference.iterdir()}
             if ({path.name for path in project.iterdir()} != names or any(
                     not frozen_file_matches(project / name, (reference / name).read_bytes()) for name in names)):
-                raise ValueError('Frozen CLI inputs changed; do not start this arm.')
+                raise ValueError('Frozen authoring inputs changed; do not start this arm.')
     measured_pair = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() in ('dedupe', 'incident', 'cleanup')
     mode = 'approve_plan'
     if checks.is_file():
@@ -458,7 +496,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup', 'parser'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -469,7 +507,7 @@ def main():
     launch.add_argument('--measure-quota', action='store_true', help='include observed live quota-window changes')
     launch.add_argument('--metrics-jsonl', help='append a private metrics report without account quota data')
     launch.add_argument('--experimental-tool-approvals', action='store_true',
-                        help='explicit native patch/command approval UI for the CLI authoring pilot')
+                        help='explicit native patch/command approval UI for the CLI/parser authoring pilots')
     grade = actions.add_parser('score', help='score a turn answer with the case rubric')
     grade.add_argument('answer')
     grade.add_argument('--case', choices=('c1', 'dedupe', 'incident', 'cleanup'), default='c1')
