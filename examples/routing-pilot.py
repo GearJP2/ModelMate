@@ -73,6 +73,39 @@ def incident_plan(role):
             }]}
 
 
+CLEANUP_SOURCE = ('def delete_session(project, session, token, expected_token):\n'
+                  '    target = project / session["id"]\n'
+                  '    if session["state"] == "RUNNING":\n'
+                  '        return "blocked"\n'
+                  '    if token:\n'
+                  '        shutil.rmtree(target)\n'
+                  '    if token != expected_token:\n'
+                  '        return "denied"\n'
+                  '    return "deleted"')
+
+
+def cleanup_plan(role):
+    criterion = 'Identify path escape and late confirmation with exact line evidence, without mislabeling the RUNNING guard.'
+    objective = ('Review only the synthetic cleanup.py fixture reproduced below. Do not execute it, call tools or access files. '
+        'Assume project is a pathlib.Path, shutil is imported, session id and token are untrusted strings, '
+        'expected_token is a trusted nonempty string, and session state is controller-owned. '
+        'Evaluate these three properties: scope_contained (the deletion stays inside project for every id), '
+        'confirmation_before_delete (the token is compared with expected_token before any deletion), '
+        'active_blocked (RUNNING sessions cannot reach deletion). '
+        'Return exactly one JSON object with those three keys. Each value must contain exactly '
+        'safe (boolean) and lines (ascending unique integer line numbers). For scope_contained cite the '
+        'target construction and deletion; for confirmation_before_delete cite the token condition, '
+        'deletion, comparison and denied return; for active_blocked cite the state condition, blocked '
+        'return and deletion. Include no Markdown or extra findings.\n'
+        + '\n'.join(str(i) + ': ' + line for i, line in enumerate(CLEANUP_SOURCE.splitlines(), 1)))
+    return {'version': 1, 'goal': 'Review scope and confirmation safety of synthetic session cleanup',
+        'clarifications': [], 'success_criteria': [criterion], 'steps': [{
+            'kind': 'review', 'objective': objective, 'role': role, 'effort': 'low',
+            'risk': 'normal', 'reason': 'A read-only bounded review graded against frozen facts and line evidence.',
+            'checks': [{'kind': 'rubric', 'criterion': criterion}],
+        }]}
+
+
 def prepare(case):
     scratch = Path(tempfile.mkdtemp(prefix='modelmate-routing-pilot-'))
     runtime = scratch / 'modelmate.py'
@@ -108,6 +141,9 @@ def prepare(case):
             plan = dedupe_plan(role)
         elif case == 'incident':
             plan = incident_plan(role)
+        elif case == 'cleanup':
+            (project / 'cleanup.py').write_text(CLEANUP_SOURCE + '\n', encoding='utf-8')
+            plan = cleanup_plan(role)
         elif case == 'cli':
             plan = prepare_cli(project, role, checker)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
@@ -220,6 +256,14 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
         raise ValueError('Experimental tool approvals are scoped to the CLI authoring pilot.')
     if execute and case == 'cli' and not tool_approvals:
         raise ValueError('Executing the CLI authoring pilot requires explicit --experimental-tool-approvals.')
+    if case == 'cleanup':
+        if state.exists():
+            raise ValueError('Review arm already has state; inspect/resume it or prepare a new pair, never replay it.')
+        expected = (json.dumps(cleanup_plan('standard' if arm == 'routed' else 'strong'), indent=2) + '\n').encode('utf-8')
+        if ({path.name for path in project.iterdir()} != {'plan.json', 'cleanup.py'}
+                or not frozen_file_matches(plan_path, expected)
+                or not frozen_file_matches(project / 'cleanup.py', (CLEANUP_SOURCE + '\n').encode('utf-8'))):
+            raise ValueError('Frozen cleanup review inputs changed; do not start this arm.')
     if case == 'cli':
         if state.exists():
             raise ValueError('CLI arm already has state; inspect/resume it or prepare a new pair, never replay it.')
@@ -234,7 +278,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
             if ({path.name for path in project.iterdir()} != names or any(
                     not frozen_file_matches(project / name, (reference / name).read_bytes()) for name in names)):
                 raise ValueError('Frozen CLI inputs changed; do not start this arm.')
-    measured_pair = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() in ('dedupe', 'incident')
+    measured_pair = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() in ('dedupe', 'incident', 'cleanup')
     mode = 'approve_plan'
     if checks.is_file():
         mode = 'ask_to_escalate'
@@ -302,16 +346,17 @@ def score_dedupe(answer):
     return 0 if all(results.values()) else 1
 
 
-def score_incident(answer):
-    def unique_fields(pairs):
-        fields = {}
-        for key, value in pairs:
-            if key in fields:
-                raise ValueError('Duplicate incident answer key.')
-            fields[key] = value
-        return fields
+def unique_answer_fields(pairs):
+    fields = {}
+    for key, value in pairs:
+        if key in fields:
+            raise ValueError('Duplicate answer key.')
+        fields[key] = value
+    return fields
 
-    result = json.loads(answer, object_pairs_hook=unique_fields)
+
+def score_incident(answer):
+    result = json.loads(answer, object_pairs_hook=unique_answer_fields)
     expected = {'timeline': ['A', 'B', 'C', 'D'], 'observed_impact_minutes': 13,
                 'root_cause': 'unconfirmed', 'competing_recovery_event': 'C'}
     if not isinstance(result, dict) or result.keys() != expected.keys():
@@ -319,6 +364,26 @@ def score_incident(answer):
     checks = {key: type(result[key]) is type(value) and result[key] == value
               for key, value in expected.items()}
     print(json.dumps(checks))
+    return 0 if all(checks.values()) else 1
+
+
+def score_cleanup(answer):
+    if len(answer.encode('utf-8')) > 16384:
+        raise ValueError('Cleanup answer exceeds 16 KiB.')
+    result = json.loads(answer, object_pairs_hook=unique_answer_fields)
+    expected = {'scope_contained': {'safe': False, 'lines': [2, 6]},
+                'confirmation_before_delete': {'safe': False, 'lines': [5, 6, 7, 8]},
+                'active_blocked': {'safe': True, 'lines': [3, 4, 6]}}
+    if not isinstance(result, dict) or result.keys() != expected.keys():
+        raise ValueError('Expected exactly the three cleanup properties.')
+    checks = {}
+    for name, fact in expected.items():
+        value = result[name]
+        checks[name] = (isinstance(value, dict) and value.keys() == fact.keys()
+            and type(value['safe']) is bool and value['safe'] == fact['safe']
+            and isinstance(value['lines'], list) and all(type(line) is int for line in value['lines'])
+            and value['lines'] == fact['lines'])
+    print(json.dumps(checks, sort_keys=True))
     return 0 if all(checks.values()) else 1
 
 
@@ -393,7 +458,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -407,7 +472,7 @@ def main():
                         help='explicit native patch/command approval UI for the CLI authoring pilot')
     grade = actions.add_parser('score', help='score a turn answer with the case rubric')
     grade.add_argument('answer')
-    grade.add_argument('--case', choices=('c1', 'dedupe', 'incident'), default='c1')
+    grade.add_argument('--case', choices=('c1', 'dedupe', 'incident', 'cleanup'), default='c1')
     analysis = actions.add_parser('compare', help='compare two private metrics records offline')
     analysis.add_argument('baseline', type=Path)
     analysis.add_argument('routed', type=Path)
@@ -423,7 +488,7 @@ def main():
                        args.measure_quota, args.metrics_jsonl, args.experimental_tool_approvals)
         if args.action == 'compare':
             return compare(args.baseline, args.routed, args.baseline_row, args.routed_row)
-        scorers = {'c1': score, 'dedupe': score_dedupe, 'incident': score_incident}
+        scorers = {'c1': score, 'dedupe': score_dedupe, 'incident': score_incident, 'cleanup': score_cleanup}
         return scorers[args.case](args.answer)
     except KeyboardInterrupt:
         return 130

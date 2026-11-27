@@ -4888,3 +4888,43 @@ names; any further live attempt is separately chosen and consumes quota again.
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 784 tests in 65.579 seconds, with no skips.
+
+### P16 C7 frozen cleanup-review fixture (2026-11-27)
+
+No approval-probe scratch directory newer than the current feature commit was
+present at the start of this increment. P09 still needs the requested rejected
+scope data. Independent offline work proceeded on the explicitly planned C7
+evaluation case rather than replaying a live probe or weakening its policy.
+
+`examples/routing-pilot.py prepare --case cleanup` prepares identical numbered
+review snippets and criteria for routed/baseline arms, differing only in their
+requested role. The snippet seeds path escape and late confirmation while
+retaining a correct early RUNNING guard. The scorer requires exact boolean
+verdicts and line evidence for all three properties. It rejects malformed,
+duplicate, missing, extra, oversized and falsely typed answers. No submitted
+Python or model text is executed by the grader. A shared duplicate-key hook
+retains strict incident scoring as well; its error text is now case-neutral.
+
+Each project also contains the same frozen cleanup.py source for file evidence.
+Launch revalidates the frozen C7 source/plan and refuses an existing arm state, so a
+changed fixture or partial prior attempt cannot silently start a fresh arm.
+Previews remain offline. Live execution still requires explicit --execute and
+the normal START/workflow actions, and the existing CLI-only native tool approval
+flag cannot be used for this review case. Prompt instructions do not replace
+native sandbox/permission enforcement. No runtime code or permission was changed.
+
+`PYTHONPATH=tests python3 -m unittest test_routing_pilot test_cli_pilot -q` passed
+18 tests. Five new C7 tests cover equivalent previews with no state, a trusted
+answer plus wrong-verdict/evidence mutants, strict malformed/duplicate/oversized
+rejection, execution/measurement flag forwarding, and frozen-plan/old-state
+launch tripwires. All candidate answers are developer-authored synthetic data;
+subprocess execution is mocked in the execute-path test. Compile/diff checks
+passed. Pilot SHA-256:
+`9ff558f766d9591c488fa52aed4c290802a9850e70320e348fd9c6390f848961`.
+Runtime SHA-256 is unchanged:
+`cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`.
+No model, account, quota, HTTP or actual cleanup command was requested. C7 live
+pairing, held-out quality, independent review and G5 remain open.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 789 tests in 52.473 seconds, with no skips.

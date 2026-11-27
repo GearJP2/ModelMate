@@ -1,14 +1,107 @@
 """Offline tests of the routing pilot's metrics reader and comparison."""
 import json
+import contextlib
+import io
+import runpy
 import shutil
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 
 PILOT = Path(__file__).resolve().parents[1] / 'examples' / 'routing-pilot.py'
+
+
+class CleanupPilotTests(unittest.TestCase):
+    answer = {'scope_contained': {'safe': False, 'lines': [2, 6]},
+              'confirmation_before_delete': {'safe': False, 'lines': [5, 6, 7, 8]},
+              'active_blocked': {'safe': True, 'lines': [3, 4, 6]}}
+
+    def prepare(self):
+        output = subprocess.check_output([sys.executable, str(PILOT), 'prepare', '--case', 'cleanup'],
+                                         text=True, timeout=5)
+        scratch = Path(output.strip())
+        self.addCleanup(shutil.rmtree, scratch)
+        return scratch
+
+    def score(self, answer):
+        return subprocess.run([sys.executable, str(PILOT), 'score', '--case', 'cleanup', answer],
+                              capture_output=True, text=True, timeout=5)
+
+    def test_same_numbered_review_fixture_previews_without_codex_or_state(self):
+        scratch = self.prepare()
+        plans = []
+        for arm, model in (('routed', 'synthetic-standard'), ('baseline', 'synthetic-strong')):
+            output = subprocess.check_output([sys.executable, str(PILOT), 'run', str(scratch), arm,
+                '--standard', 'synthetic-standard', '--strong', 'synthetic-strong'], text=True, timeout=5)
+            self.assertIn(model + '/low', output)
+            self.assertIn('6:         shutil.rmtree(target)', output)
+            project = scratch / arm / 'project'
+            self.assertEqual({p.name for p in project.iterdir()}, {'plan.json', 'cleanup.py'})
+            self.assertEqual((project / 'cleanup.py').read_bytes(),
+                             (scratch / 'routed' / 'project' / 'cleanup.py').read_bytes())
+            self.assertFalse((scratch / arm / 'state').exists())
+            plan = json.loads((project / 'plan.json').read_text())
+            self.assertEqual(plan['steps'][0]['kind'], 'review')
+            plan['steps'][0].pop('role');plans.append(plan)
+        self.assertEqual(*plans)
+
+    def test_scorer_requires_both_bugs_correct_guard_and_exact_evidence(self):
+        result = self.score(json.dumps(self.answer))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(json.loads(result.stdout).values()))
+        for property, field, value in (('scope_contained', 'safe', True),
+                ('confirmation_before_delete', 'safe', True), ('active_blocked', 'safe', False),
+                ('scope_contained', 'lines', [2]), ('active_blocked', 'lines', [6, 3, 4]),
+                ('scope_contained', 'safe', 0), ('scope_contained', 'lines', [2.0, 6])):
+            answer = json.loads(json.dumps(self.answer));answer[property][field] = value
+            with self.subTest(property=property, field=field, value=value):
+                result = self.score(json.dumps(answer))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertFalse(json.loads(result.stdout)[property])
+
+    def test_malformed_duplicate_extra_and_oversized_answers_cannot_pass(self):
+        valid = json.dumps(self.answer)
+        invalid = ['not JSON', '```json\n' + valid + '\n```', '[]', '{}',
+                   valid[:-1] + ',"active_blocked":{}}',
+                   json.dumps(dict(self.answer, approved=True)), valid + ' ' * 16385]
+        for answer in invalid:
+            with self.subTest(answer=answer[:30]):
+                self.assertEqual(self.score(answer).returncode, 2)
+
+    def test_execute_is_explicit_and_tool_approval_scope_is_not_expanded(self):
+        scratch = self.prepare()
+        run = runpy.run_path(str(PILOT))['run']
+        with patch('subprocess.run', return_value=Mock(returncode=0)) as launch, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(run(scratch, 'routed', 'standard', 'strong', False), 0)
+            self.assertNotIn('--execute-workflow', launch.call_args.args[0])
+            self.assertEqual(run(scratch, 'routed', 'standard', 'strong', True), 0)
+            self.assertIn('--execute-workflow', launch.call_args.args[0])
+            self.assertIn('--measure-quota', launch.call_args.args[0])
+            self.assertNotIn('--experimental-tool-approvals', launch.call_args.args[0])
+            launch.reset_mock()
+            with self.assertRaisesRegex(ValueError, 'scoped to the CLI'):
+                run(scratch, 'routed', 'standard', 'strong', True, tool_approvals=True)
+            launch.assert_not_called()
+
+    def test_changed_review_inputs_or_existing_state_prevents_launch(self):
+        scratch = self.prepare()
+        run = runpy.run_path(str(PILOT))['run']
+        plan = scratch / 'routed' / 'project' / 'plan.json'
+        with patch('subprocess.run') as launch:
+            for path in (plan, plan.with_name('cleanup.py')):
+                content = path.read_bytes();path.write_bytes(content + b'\n')
+                with self.subTest(file=path.name),self.assertRaisesRegex(ValueError, 'Frozen cleanup review inputs changed'):
+                    run(scratch, 'routed', 'standard', 'strong', True)
+                path.write_bytes(content)
+            (scratch / 'routed' / 'state').mkdir()
+            with self.assertRaisesRegex(ValueError, 'never replay'):
+                run(scratch, 'routed', 'standard', 'strong', True)
+            launch.assert_not_called()
 
 
 class PilotComparisonTests(unittest.TestCase):
@@ -117,4 +210,4 @@ class PilotComparisonTests(unittest.TestCase):
         duplicate = json.dumps(result)[:-1] + ', "root_cause": "unconfirmed"}'
         score = subprocess.run(command + [duplicate], capture_output=True, text=True, timeout=5)
         self.assertEqual(score.returncode, 2)
-        self.assertIn('Duplicate incident answer key', score.stderr)
+        self.assertIn('Duplicate answer key', score.stderr)

@@ -890,6 +890,16 @@ integration is unavailable, so no independent clean environment was tested.
 The prepared bounded G2 command-approval probe awaits explicit live authorization.
 No release gate, live compatibility claim or evaluation result was advanced.
 
+C7 review fixture increment (2026-11-27), MOCK_VERIFIED:
+`examples/routing-pilot.py prepare --case cleanup` creates the same numbered
+synthetic cleanup snippet for both arms. A bounded strict JSON scorer requires
+the two seeded safety failures and correct recognition of the early active-state
+guard, each with fixed line evidence. Reviewed/model code is not executed.
+Changed source/plan inputs or already-started arms cannot launch; execution remains explicit
+and native tool-approval scope is unchanged. Eighteen pilot/CLI tests passed,
+covering facts, false positives, malformed answers, frozen plans and opt-in flags.
+No C7 model pair, held-out result, live gate or savings claim is recorded.
+
 C2 authoring fixture increment: `routing-pilot.py prepare --case cli` prepares
 two identical row-printing CLI projects and a hash-bound frozen checker. The
 model must implement --limit N and retain default/help/error behavior; this is

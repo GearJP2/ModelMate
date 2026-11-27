@@ -15,7 +15,7 @@ before requesting subscription turns.
 | C4 | Refactor a parser across modules | Existing API and error cases pass the same fixture suite. |
 | C5 | Migrate a local JSON schema | Old data loads, repeat migration is safe and failed writes preserve originals. |
 | C6 | Repair a concurrent local writer | Contention and crash fixtures preserve the last valid checkpoint. |
-| C7 | Review a file cleanup change | Correctly identify seeded scope and confirmation bugs with file evidence. |
+| C7 | [Review a file cleanup change](#c7-cleanup-review-pilot) | Correctly identify seeded scope and confirmation bugs with file evidence. |
 | C8 | Implement behavior from an ambiguous request | Pause for the missing requirement before dispatch. Both arms then receive the same clarification. |
 | A1 | Summarize a synthetic incident timeline | Timestamps, causal claims and uncertainties match the supplied record. |
 | A2 | Compare options for a short project plan | Use the supplied constraints, identify trade-offs and cover every rubric item. |
@@ -539,3 +539,47 @@ with no paired subscription quota measurements. Together with the earlier
 pairs, this supports keeping format repair ahead of escalation and keeping
 the display-only routing rule experimental. These cases cover one narrow
 area of one codebase.
+
+## C7 cleanup-review pilot
+
+`examples/routing-pilot.py prepare --case cleanup` freezes a numbered synthetic
+cleanup snippet into identical routed/baseline plans. The same `cleanup.py`
+source is also frozen in each project for file evidence. The review must identify
+path escape and deletion before token validation, while correctly recognizing
+the early RUNNING guard. Each property requires a boolean verdict and exact
+line evidence. The scorer checks these facts independently and rejects missing
+properties, wrong evidence, false positives, extra fields and duplicate keys.
+It never executes the reviewed snippet or submitted model text.
+
+Prepare and preview both arms without Codex, account reads or subscription turns:
+
+```bash
+PILOT="$PWD/examples/routing-pilot.py"
+PAIR="$(python3 "$PILOT" prepare --case cleanup)"
+python3 "$PILOT" run "$PAIR" routed --standard STANDARD_MODEL --strong STRONG_MODEL
+python3 "$PILOT" run "$PAIR" baseline --standard STANDARD_MODEL --strong STRONG_MODEL
+```
+
+Replace the model placeholders with the same two distinct supported bindings for
+both arms. The routed arm uses the existing suggestion policy; record its actual
+selection and any escalation. Changed source/plan inputs or an existing arm state refuse
+launch; retain failed/partial evidence rather than restarting that arm. A live
+run requires a separately chosen `--execute`, START and normal workflow actions;
+it consumes subscription quota. No native tool-approval opt-in is added for this
+review case. Native read-only/on-request policy still applies; the instruction
+to avoid tools is not a separate isolation boundary.
+
+Grade the actual JSON answer with:
+
+```bash
+python3 "$PILOT" score --case cleanup 'MODEL_JSON_ANSWER'
+```
+
+Exit 0 requires all three facts and their evidence to pass; exit 1 records a
+wrong verdict/evidence and exit 2 records malformed input. Enter a trusted
+rubric verdict only after inspecting that result, then use the normal check and
+criterion completion flow. No model claim grants itself a pass. Record the
+pilot/runtime/Codex versions, delivery and corrections, observed tool use and
+available usage measurements for both arms. These public calibration fixtures
+require a separate held-out evaluation and independent review before broader
+quality or savings claims. Only offline fixture/scorer checks have run for C7.
