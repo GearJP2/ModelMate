@@ -113,7 +113,7 @@ def prepare(case):
     (scratch / 'case.txt').write_text(case + '\n', encoding='utf-8')
     shutil.copyfile(Path(__file__).resolve().parents[1] / 'modelmate.py', runtime)
     checker = scratch / ('check-' + case + '.py')
-    if case in ('cli', 'parser'):
+    if case in ('cli', 'parser', 'migration'):
         shutil.copyfile(Path(__file__).with_name(case + '-pilot-check.py'), checker)
     objective = (
         'Choose the repair for this Python function and answer with exactly one letter A, B, C or D. '
@@ -149,6 +149,8 @@ def prepare(case):
             plan = prepare_cli(project, role, checker)
         elif case == 'parser':
             plan = prepare_parser(project, role, checker)
+        elif case == 'migration':
+            plan = prepare_migration(project, role, checker)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
@@ -270,6 +272,48 @@ def prepare_parser(project, role, checker):
         }]}
 
 
+def prepare_migration(project, role, checker):
+    source_checker = Path(__file__).with_name('migration-pilot-check.py')
+    fixture = runpy.run_path(str(source_checker))
+    (project / fixture['LEGACY_NAME']).write_bytes(fixture['LEGACY_BYTES'])
+    (project / 'store.py').write_text('import json\nimport os\nfrom pathlib import Path\n\n'
+        'def _publish(snapshot, destination):\n    os.replace(snapshot, destination)\n\n'
+        'def load(path):\n    data = json.loads(Path(path).read_text(encoding="utf-8"))\n'
+        '    if data.get("version") != 1:\n        raise ValueError("unsupported version")\n'
+        '    return data\n\n'
+        'def migrate(path):\n    data = load(path)\n'
+        '    Path(path).write_text(json.dumps(data), encoding="utf-8")\n    return data\n', encoding='utf-8')
+    write_frozen_checks(project, source_checker, checker)
+    behavior = 'Frozen migration checks pass: both schemas load, v1 migrates, repeats/v2 are no-ops, invalid data and write/publish failures preserve originals.'
+    review = 'Trusted source review confirms exclusive private same-directory snapshots, fsync before atomic publish, owned cleanup and no hidden write retries.'
+    return {'version': 1, 'goal': 'Migrate local JSON records safely from schema v1 to v2',
+        'clarifications': [], 'success_criteria': [behavior, review], 'steps': [{
+            'kind': 'implement', 'objective': 'Edit only store.py. Schema v1 has exactly version=1 and items; '
+            'each item has exactly name and count. Schema v2 has exactly version=2 and records; '
+            'each record has exactly name and quantity. Names must be nonblank strings and remain unchanged; '
+            'counts/quantities are nonnegative integers, excluding booleans. Preserve order and duplicate names. '
+            'Reject malformed JSON, duplicate/unknown keys, wrong versions/types and invalid records with ValueError '
+            'before any write. load(path) must return normalized v2 data from either schema without writing. '
+            'migrate(path) returns the same v2 data; existing v2 files are byte/metadata-preserving no-ops. '
+            'For v1, use an exclusive private 0600 snapshot in the destination directory, flush and fsync it, '
+            'then call the existing _publish(snapshot,destination) hook exactly once. Keep its os.replace behavior. '
+            'Propagate write/publication OSError without retries, preserve the original and clean only owned snapshots. '
+            'Do not modify legacy inputs, plans, commands or checker. Run the registered check once and report '
+            'its result. Use native approval when needed without widening permissions; no network or unrelated commands.',
+            'role': role, 'effort': 'low', 'risk': 'high', 'reason': 'Migration must preserve original data under write failure.',
+            'checks': [{'kind': 'test', 'criterion': behavior}]}, {
+            'kind': 'review', 'objective': 'Review the edited store.py and actual checker evidence. '
+            'Check strict schema validation, exclusive private same-directory snapshots, flush/fsync before '
+            'the single os.replace publication, no writes for v2, owned snapshot cleanup and no hidden retries. '
+            'Read store.py with read-only tools as needed. Cite concrete source evidence and remaining limits. '
+            'Do not edit files, rerun checks or run unrelated commands. '
+            'A trusted human must inspect the source/evidence before recording this rubric verdict.',
+            'role': 'strong', 'effort': 'low', 'risk': 'normal',
+            'reason': 'Independent review is required after data-loss-risk implementation.',
+            'checks': [{'kind': 'rubric', 'criterion': review}],
+        }]}
+
+
 def frozen_file_matches(path, expected):
     with path.open('rb') as source:
         return source.read(len(expected) + 1) == expected
@@ -289,9 +333,9 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     plan_path = project / 'plan.json'
     case_file = scratch / 'case.txt'
     case = case_file.read_text(encoding='utf-8').strip() if case_file.is_file() else 'c1'
-    if tool_approvals and case not in ('cli', 'parser'):
-        raise ValueError('Experimental tool approvals are scoped to the CLI and parser authoring pilots.')
-    if execute and case in ('cli', 'parser') and not tool_approvals:
+    if tool_approvals and case not in ('cli', 'parser', 'migration'):
+        raise ValueError('Experimental tool approvals are scoped to the CLI, parser and migration authoring pilots.')
+    if execute and case in ('cli', 'parser', 'migration') and not tool_approvals:
         raise ValueError('Executing authoring pilots requires explicit --experimental-tool-approvals.')
     if case == 'cleanup':
         if state.exists():
@@ -301,7 +345,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
                 or not frozen_file_matches(plan_path, expected)
                 or not frozen_file_matches(project / 'cleanup.py', (CLEANUP_SOURCE + '\n').encode('utf-8'))):
             raise ValueError('Frozen cleanup review inputs changed; do not start this arm.')
-    if case in ('cli', 'parser'):
+    if case in ('cli', 'parser', 'migration'):
         if state.exists():
             raise ValueError('Authoring arm already has state; inspect/resume it or prepare a new pair, never replay it.')
         checker = scratch / ('check-' + case + '.py')
@@ -309,7 +353,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
             raise ValueError('Frozen authoring checker changed; do not start this arm.')
         with tempfile.TemporaryDirectory(prefix='modelmate-authoring-reference-') as directory:
             reference = Path(directory)
-            prepare_case = prepare_cli if case == 'cli' else prepare_parser
+            prepare_case = {'cli': prepare_cli, 'parser': prepare_parser, 'migration': prepare_migration}[case]
             expected = prepare_case(reference, 'standard' if arm == 'routed' else 'strong', checker)
             (reference / 'plan.json').write_text(json.dumps(expected, indent=2) + '\n', encoding='utf-8')
             names = {path.name for path in reference.iterdir()}
@@ -496,7 +540,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup', 'parser'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup', 'parser', 'migration'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -507,7 +551,7 @@ def main():
     launch.add_argument('--measure-quota', action='store_true', help='include observed live quota-window changes')
     launch.add_argument('--metrics-jsonl', help='append a private metrics report without account quota data')
     launch.add_argument('--experimental-tool-approvals', action='store_true',
-                        help='explicit native patch/command approval UI for the CLI/parser authoring pilots')
+                        help='explicit native approval UI for the CLI/parser/migration authoring pilots')
     grade = actions.add_parser('score', help='score a turn answer with the case rubric')
     grade.add_argument('answer')
     grade.add_argument('--case', choices=('c1', 'dedupe', 'incident', 'cleanup'), default='c1')

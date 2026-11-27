@@ -13,7 +13,7 @@ before requesting subscription turns.
 | C2 | [Implement an option in a small CLI](#c2-cli-authoring-pilot) | Added option works and existing input, help and exit codes stay compatible. |
 | C3 | Add stable de-duplication to an importer | Order and handling of blank and duplicate rows match fixtures. |
 | C4 | [Refactor a parser across modules](#c4-parser-refactor-pilot) | Existing API and error cases pass the same fixture suite; an independent reviewer confirms shared parsing. |
-| C5 | Migrate a local JSON schema | Old data loads, repeat migration is safe and failed writes preserve originals. |
+| C5 | [Migrate a local JSON schema](#c5-json-migration-pilot) | Old data loads, repeat migration is safe and failed writes preserve originals; Strong/human review checks publication design. |
 | C6 | Repair a concurrent local writer | Contention and crash fixtures preserve the last valid checkpoint. |
 | C7 | [Review a file cleanup change](#c7-cleanup-review-pilot) | Correctly identify seeded scope and confirmation bugs with file evidence. |
 | C8 | Implement behavior from an ambiguous request | Pause for the missing requirement before dispatch. Both arms then receive the same clarification. |
@@ -594,6 +594,71 @@ normal evidence flow. Record versions, actual selection, corrections, review
 outcome, time and available usage for each arm; include quota measurements only
 when attributable. C4 has offline reference/mutant evidence only. Live paired
 results, broader held-out quality and savings remain unmeasured.
+
+## C5 JSON-migration pilot
+
+`examples/routing-pilot.py prepare --case migration` freezes a legacy JSON
+fixture, an incomplete store.py and the same external checker for both arms.
+The task implements load(path) and migrate(path) for these exact schemas:
+
+| Stored version | Top-level data field | Each row |
+| --- | --- | --- |
+| 1 | items | name, count |
+| 2 | records | name, quantity |
+
+Names remain unchanged and nonblank; quantities are nonnegative integers,
+excluding booleans. Order and duplicate names are preserved. load returns
+normalized v2 data without writing. migrate atomically publishes v2 for old
+files and leaves existing v2 bytes/metadata unchanged. Invalid schemas, duplicate
+or unknown keys and malformed data fail before writing.
+
+The checker has 37 checks: frozen-input integrity and 36 operation observations.
+It independently checks on-disk data, permissions, inode/mtime on unchanged
+files and cleanup of owned snapshots. The existing _publish hook is the frozen
+single-publication boundary; one case injects OSError there, while another
+temporarily lowers only the child file-size soft limit to force a real snapshot
+write failure. The previous child limits are restored without increasing its
+inherited hard limit. Publication retries, swallowed errors, direct truncation,
+unneeded v2 rewrites and leaked snapshots cannot pass the relevant checks.
+
+The implementation step is high risk and is followed by a Strong review step.
+A trusted human must inspect source/evidence for exclusive private same-directory
+snapshots, fsync before os.replace, owned cleanup and no hidden retries before
+recording that review rubric. A deliberate no-fsync mutant passes the controlled
+fault tests, demonstrating why a machine pass alone cannot complete this task.
+These pre-publication faults provide no power-loss guarantee; separate crash
+and concurrent-writer verification remain necessary.
+
+Prepare and preview without subscription turns:
+
+```bash
+PILOT="$PWD/examples/routing-pilot.py"
+PAIR="$(python3 "$PILOT" prepare --case migration)"
+python3 "$PILOT" run "$PAIR" routed \
+  --standard STANDARD_MODEL --strong STRONG_MODEL --economy ECONOMY_MODEL
+python3 "$PILOT" run "$PAIR" baseline \
+  --standard STANDARD_MODEL --strong STRONG_MODEL --economy ECONOMY_MODEL
+```
+
+Use the same three distinct supported low-effort bindings for both arms. Record
+the actual suggested selection; high-risk routing may choose Strong for both
+implementation and review. Existing authoring safeguards refuse changed inputs,
+runtime/checker/command specs and already-started arms. Future live execution
+requires separately chosen --execute and --experimental-tool-approvals plus the
+normal START/model/native tool choices, and consumes quota. The registered
+command passes controlled test-copy paths to the edited Python; actual
+model-authored code must use approved native execution. Child deadlines,
+output limits and file-type checks bound observation; native policy supplies
+the filesystem/network restrictions.
+
+Checker exit 2 is an unverified outcome: retain its evidence and inspect the
+cause before any explicitly chosen correction.
+
+Machine evidence belongs to step 1/check 1, and trusted review evidence belongs
+to step 2/check 1. Both success criteria must be completed through normal evidence
+validation; a model's claim is not a review verdict. Pin all versions and record
+delivery, corrections, actual routing and available usage for both arms. No C5
+model pair, held-out quality or savings has been measured.
 
 ## C7 cleanup-review pilot
 

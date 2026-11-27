@@ -4979,3 +4979,48 @@ C4 live pairing, independent candidate review, held-out quality and G5 remain op
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 798 tests in 93.212 seconds, with no skips.
+
+### P16 C5 migration fixture and controlled write failures (2026-11-27)
+
+`examples/routing-pilot.py prepare --case migration` now prepares identical
+legacy input, store.py, schema requirements and hash-bound checks for both arms.
+The task normalizes v1 items/name/count into v2 records/name/quantity, preserves
+order/duplicate names, reads either version without writes, migrates old files
+atomically and treats current files as byte/metadata-preserving no-ops. Invalid
+data must fail before writing. The existing _publish hook provides the specified
+single os.replace publication boundary for deterministic fault injection.
+
+The checker verifies frozen-input integrity and 36 operation observations.
+It injects a publish OSError and independently forces a real file-write OSError
+using a temporary one-byte child soft file-size limit. Restoration preserves
+the inherited hard limit. Trusted parent observations compare actual file bytes,
+mode, inode/mtime, owned snapshot cleanup and exact expected return/error/call
+metadata. Expected equivalent paths are normalized; symlinks and nonregular
+data files are rejected before reads. Each worker has bounded time/output and
+owned process-group cleanup. These bounds do not replace native permissions.
+
+The implementation step is high risk and has a following Strong review step.
+Its separate trusted rubric requires exclusive private same-directory snapshots,
+flush/fsync before atomic publication, owned cleanup and no hidden retries.
+A no-fsync reference mutant passes the finite machine cases, explicitly showing
+why those checks alone cannot prove durability or complete the task. Strong's
+review proposal requires trusted human source/evidence inspection before a pass.
+Process crashes, concurrent writers, power loss and live native tool behavior
+remain outside this offline evidence.
+
+`PYTHONPATH=tests python3 -m unittest test_migration_pilot test_parser_pilot
+test_cli_pilot test_routing_pilot -q` passed 37 tests. Ten new C5 tests exercise
+baseline versus audited references (including equivalent relative paths), real
+write/publish failures, destructive/truncation/retry/swallow/no-op/cleanup mutants,
+the independent fsync-review requirement, paired previews, checker/input/state
+integrity, explicit native execution flags, timeout/private-error handling,
+stronger file limits and FIFO observation without blocking the parent. All
+candidates are developer-authored; execution-flag forwarding is mocked. No live
+Codex/account/inference/search request was made. Compile/diff checks passed.
+
+Pilot SHA-256: `87e23ec98442a8e164d3f145bc52f5fe9b7dd4b3b4015afafc5839a55c824eb8`.
+Checker SHA-256: `15684ec515f568a7a64dd52988de813188b3ba3006510fada7639dd33cd5e000`.
+Runtime SHA-256 remains
+`cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`.
+The final full offline suite passed 808 tests in 91.391 seconds with no skips. C5
+live paired quality, independent candidate review and G5 remain open.

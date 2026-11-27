@@ -890,6 +890,16 @@ integration is unavailable, so no independent clean environment was tested.
 The prepared bounded G2 command-approval probe awaits explicit live authorization.
 No release gate, live compatibility claim or evaluation result was advanced.
 
+C5 migration fixture increment (2026-11-27), MOCK_VERIFIED:
+`examples/routing-pilot.py prepare --case migration` freezes v1/v2 schema
+requirements, legacy input, a broken loader/migrator and a hash-bound checker.
+The high-risk implementation requires a later Strong review and trusted human
+rubric for publication/fsync design. Controlled publish and real file-write
+faults verify preserved originals, no-op v2/repeat behavior and owned cleanup.
+Thirty-seven targeted pilot tests pass using developer references/mutants only.
+Existing native execution opt-in, frozen-input and no-replay safeguards remain;
+no model pair, crash/power-loss proof or G5 pass is claimed.
+
 C4 parser-refactor fixture increment (2026-11-27), MOCK_VERIFIED:
 `examples/routing-pilot.py prepare --case parser` freezes two duplicated-parser
 projects, an external hash-bound API checker and the same acceptance criteria.
