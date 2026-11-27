@@ -3157,10 +3157,14 @@ def native_tool_request(message, thread_id, turn_id, previews):
     if command_request and any(params.get(key) is not None and not isinstance(params[key], list)
             for key in ('commandActions', 'proposedExecpolicyAmendment', 'proposedNetworkPolicyAmendments')):
         raise ProbeError('Malformed approval metadata; nothing approved.')
-    if (params.get('kind', 'command') != 'command' or params.get('approvalId') is not None
-            or params.get('environmentId') is not None or params.get('networkApprovalContext') is not None
-            or params.get('grantRoot') is not None or params.get('additionalPermissions') is not None):
-        raise ProbeError('Unsupported approval scope; nothing approved.')
+    unsupported_scopes = tuple(field for field in ('approvalId', 'environmentId',
+        'networkApprovalContext', 'grantRoot', 'additionalPermissions') if params.get(field) is not None)
+    if params.get('kind', 'command') != 'command':
+        unsupported_scopes = ('kind',) + unsupported_scopes
+    if unsupported_scopes:
+        error = ProbeError('Unsupported approval scope; nothing approved.')
+        error.approval_scopes = unsupported_scopes
+        raise error
     if command_request:
         # Other offered decisions stay inert; this client only sends plain accept/decline.
         decisions = params.get('availableDecisions')

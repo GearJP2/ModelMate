@@ -91,6 +91,13 @@ running it. This check has not yet supplied passing live evidence. Installed CLI
 0.172.0 has matching inspected approval schemas, which does not carry forward
 the live compatibility evidence recorded for 0.171.0.
 
+The next user-run attempt at runtime bbf5a711 passed optional-field parsing but
+stopped at the unsupported-scope guard, with all seven checks unverified. Its
+report cannot distinguish which scope was present. The verifier now reports
+`unsupportedApprovalScopes` using fixed field names only; values/IDs remain
+redacted. This diagnostic addition changes no approval policy and has offline
+evidence only. Do not remove scope guards or widen permissions to obtain a pass.
+
 A separate patch check is prepared as
 `python3 verify.py --run-live --probe-workflow-patches MODEL`. It uses at most two
 subscription turns and may accept one new synthetic marker file, then declines

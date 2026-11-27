@@ -4846,3 +4846,45 @@ is claimed. Any new live run is a separately chosen quota-consuming attempt.
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 783 tests in 51.632 seconds, with no skips.
+
+### P09 remaining unsupported scope and redacted scope names (2026-11-27)
+
+The user ran the command approval probe with runtime SHA-256
+`bbf5a71155e6e7863b9b3507dbdc5533e9946e11c391fdc7bc23a0871eedcc18`
+and verifier SHA-256
+`3ee3e27c75db2d37c6cfa39f8c24a3c8c7cc9e9989927e8544db24166b15d5e9`.
+The result stayed in approve/await_approval with all seven checks unverified.
+Its source location was native_tool_request line 3163, the combined unsupported
+scope guard. This locates a later rejection than the previous unknown-field
+failure; it does not identify which scope condition was true or pass G2.
+
+Read-only checks of the retained synthetic checkpoint and its scoped native
+artifacts did not recover the original App Server approval request. No raw
+session logs, native IDs, account data or scratch paths are copied here. No new
+App Server, model turn, native command or network request was started, and the
+retained scratch/native threads were not resumed or replayed.
+
+The previous guard combined kind, approvalId, environmentId,
+networkApprovalContext, grantRoot and additionalPermissions into one ProbeError.
+It now collects every rejected field name into a tuple on that same exception.
+The predicates and error text are unchanged. The approval verifier emits
+unsupportedApprovalScopes only for a bounded tuple of those six fixed names;
+field values, messages, exception locals and payloads remain excluded. Invalid
+diagnostic attributes are ignored. This provides the information required to
+assess a supported adapter change instead of guessing which policy to relax;
+no additional scope is accepted by this increment.
+
+`PYTHONPATH=tests python3 -m unittest test_live test_native_permissions
+test_workflow_approval_probe -q` passed 47 tests. The new fake-server case rejects
+five simultaneous scope conditions, reports their names without private values,
+sends no accept and starts no second case. Existing non-null overlay and manual
+rejection tests still pass; a private/invalid exception attribute cannot appear
+in the report. Compilation and diff checks passed. Updated runtime SHA-256:
+`cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`;
+updated verifier SHA-256:
+`b57bbc6f3a9b98008834b0795b8f59826c57cbe8828acbfd427a84d408b4c423`.
+The cause's exact scope remains unresolved until a report contains the scope
+names; any further live attempt is separately chosen and consumes quota again.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 784 tests in 65.579 seconds, with no skips.

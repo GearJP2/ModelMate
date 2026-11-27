@@ -849,6 +849,11 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
                 result['diagnosticLocation'] = {'file': filename,
                     'function': trace.tb_frame.f_code.co_name, 'line': trace.tb_lineno}
             trace = trace.tb_next
+        scopes = getattr(exc, 'approval_scopes', ())
+        if (isinstance(scopes, tuple) and 0 < len(scopes) <= 6
+                and all(isinstance(scope, str) and scope in ('kind', 'approvalId', 'environmentId',
+                    'networkApprovalContext', 'grantRoot', 'additionalPermissions') for scope in scopes)):
+            result['unsupportedApprovalScopes'] = list(scopes)
         return result
     finally:
         if connection is not None:

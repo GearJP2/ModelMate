@@ -498,6 +498,16 @@ remain declined. The synthetic reproduction failed at the same old source line
 and now completes both cases; 46 targeted tests passed. No live retry/pass is
 claimed, and the original request's exact extra fields were not retained.
 
+P09 unsupported-scope diagnosis (2026-11-27), IN_PROGRESS: the user reran the
+updated runtime bbf5a711 and reached the scope-rejection guard at line 3163,
+after optional-field validation. All seven checks stayed unverified. The old
+report does not distinguish kind/callback/environment/network/root/permission
+overlay, and retained artifacts did not recover the original request. The shared
+parser now attaches only the fixed rejected scope names to the same ProbeError;
+the verifier reports an allowlisted unsupportedApprovalScopes array. No scope is
+newly accepted, no value is emitted, and no live replay was run. Forty-seven
+targeted tests passed; the next live attempt must be explicitly chosen.
+
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
 declines the pending request and expires the token, even if the old diff returns.
