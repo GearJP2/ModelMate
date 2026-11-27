@@ -18,7 +18,7 @@ before requesting subscription turns.
 | C7 | [Review a file cleanup change](#c7-cleanup-review-pilot) | Correctly identify seeded scope and confirmation bugs with file evidence. |
 | C8 | [Implement behavior from an ambiguous request](#c8-clarification-pilot) | Pause for the missing requirement before dispatch. Both arms then receive the same clarification. |
 | A1 | Summarize a synthetic incident timeline | Timestamps, causal claims and uncertainties match the supplied record. |
-| A2 | Compare options for a short project plan | Use the supplied constraints, identify trade-offs and cover every rubric item. |
+| A2 | [Compare options for a short project plan](#a2-project-planning-pilot) | Use the supplied constraints, identify trade-offs and cover every rubric item. |
 | A3 | Edit installation instructions | A reviewer can install and run the example from a fresh directory with spaces in its path. |
 | A4 | Write a short source-backed briefing | Each material claim has a supporting source and private fixture text stays out of search queries. Requires the web privacy gate. |
 
@@ -34,6 +34,50 @@ All critical checks must pass and routed quality must meet the baseline before
 claiming equivalent quality. Report any observed consumption difference with
 its denominator, paired sample count and scope. The table defines planned
 cases. The C1 pilot result is recorded below. Quota savings remain unmeasured.
+
+## A2 project planning pilot
+
+`python3 examples/routing-pilot.py prepare --case planning` prepares identical
+four-week reporting-pilot requests. Each arm must assess manual, local-script
+and hosted options against setup effort, weekly maintenance, deadline and local
+data constraints, then write its recommended plan, trade-offs and rollback.
+The options include a faster but maintenance-heavy manual path, a feasible
+script with daily freshness limits, and a lower-effort hosted path that violates
+privacy. These are frozen synthetic facts, not product recommendations.
+
+Use the existing `run SCRATCH routed|baseline --standard MODEL --strong MODEL`
+arguments to preview offline. `--execute` opts into native START and subscription
+inference; routed uses existing model suggestions and baseline uses strong only.
+Native read-only/on-request is unchanged; authoring tool opt-in is rejected.
+The prompt asks for no tools, without claiming enforced no-tools isolation.
+Changed plan artifacts or an already-started arm cannot be launched again.
+
+`python3 examples/routing-pilot.py score --case planning 'ANSWER_JSON'` checks
+the strict response schema, all options' four-week arithmetic and hard-constraint
+failures, the feasible recommendation and presence of bounded prose. A zero exit
+code means only these machine checks passed. The output always includes
+`trustedReviewRequired: true`; even meaningless nonempty prose can satisfy the
+presence check. Never use this score alone to accept the task or claim quality.
+
+The independent reviewer must verify every item before recording a passing
+quality rubric through the existing workflow evidence interface:
+
+- The plan assigns the single maintainer concrete ordered work, including a
+  local trial, an observable comparison with known input/output and a day-5
+  launch decision. Proposed checks are clearly future work, not invented results.
+- Trade-offs cover all three options using the given constraints, including
+  script's 24-hour freshness limitation. Lower total effort does not waive privacy
+  or the weekly limit, and unknown reliability/performance remains unknown.
+- Rollback names a trigger and a safe local fallback that preserves inputs;
+  any manual fallback acknowledges its weekly-maintenance violation and requires
+  an explicit scope decision rather than claiming all constraints remain met.
+
+Both the fact rubric and this quality rubric need trusted evidence for task
+acceptance. The model's own assertions cannot supply it. Record failed or unknown
+rubric items as such, along with corrections and user-approved changes. Use the
+same rubric and approval decisions for both arms. These public calibration
+fixtures and developer-reference checks are not held-out/live quality evidence;
+paired results, quota attribution and savings remain unmeasured.
 
 ## C8 clarification pilot
 

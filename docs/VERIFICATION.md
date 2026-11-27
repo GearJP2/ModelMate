@@ -5106,3 +5106,38 @@ No C8 model pair, G5 quality/savings claim or release gate is advanced.
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 828 tests in 117.962 seconds, with no skips.
+
+### P16 A2 project planning fixture (2026-11-27)
+
+`routing-pilot.py prepare --case planning` prepares matching frozen tasks for
+the routed and strong-only arms. A synthetic four-week reporting pilot has
+manual, local-script and hosted options with setup/weekly/deadline/privacy hard
+constraints. The requested answer contains a full option assessment plus a
+proposed implementation plan, trade-offs and rollback. Both fact accuracy and
+independent plan-quality rubrics require trusted evidence for acceptance.
+
+The bounded strict JSON scorer validates all option totals, failed constraints,
+feasibility and selection, plus prose presence. It always emits
+`trustedReviewRequired: true`; its exit code is only machine-check status.
+Deliberately vacuous prose passes the presence check in a test to demonstrate
+why it cannot replace the trusted human rubric. That rubric requires an owner,
+ordered work, observable trial/acceptance check, day-5 decision, all option
+trade-offs, remaining freshness/unknown limits and an explicit rollback trigger
+and safe fallback without silently waiving constraints. Model assertions do not
+grant acceptance. Native permissions, explicit START/execution, artifact
+integrity and no-replay rules remain unchanged; no new runtime code or dependency.
+
+`PYTHONPATH=tests python3 -m unittest test_planning_pilot test_routing_pilot -v`
+passed 16 tests in 2.977 seconds. Five new tests cover valid paired plans/offline
+previews, references and wrong arithmetic/feasibility/privacy/type mutants,
+malformed/duplicate/deep/extra/oversized answers, independent review boundaries,
+CLI scorer dispatch and explicit execution/frozen-input/state guards. Live launch
+forwarding uses a mock. No model/account/network request or quota use occurred.
+Compilation and `git diff --check` pass.
+
+Pilot SHA-256: `c6002c7766baa74e32ee543cb34f4eb86105e118395fdca17ff4353f4cef79af`.
+Runtime remains `cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`.
+A2 paired model outcomes, held-out evaluation, quality/savings and G5 remain open.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 833 tests in 112.488 seconds, with no skips.

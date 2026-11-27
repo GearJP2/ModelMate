@@ -890,6 +890,15 @@ integration is unavailable, so no independent clean environment was tested.
 The prepared bounded G2 command-approval probe awaits explicit live authorization.
 No release gate, live compatibility claim or evaluation result was advanced.
 
+A2 project-planning fixture increment (2026-11-27), MOCK_VERIFIED:
+`examples/routing-pilot.py prepare --case planning` freezes a three-option,
+four-constraint reporting pilot requiring an actual plan, trade-offs and rollback.
+The bounded strict scorer checks facts/arithmetic/feasibility only and always
+requires trusted review. Separate fact and plan-quality rubrics prevent a
+correct option or vacuous prose from becoming a full acceptance verdict.
+Sixteen targeted planning/shared-pilot tests pass; frozen-input, explicit native
+execution and no-replay safeguards remain. No live quality/savings gate passes.
+
 C8 clarification fixture increment (2026-11-27), MOCK_VERIFIED:
 `examples/routing-pilot.py prepare --case ambiguous` separates a question-only
 task from dependent CLI implementation. A trusted reviewer must accept the

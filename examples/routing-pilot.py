@@ -55,6 +55,38 @@ def dedupe_plan(role):
             }]}
 
 
+def planning_plan(role):
+    facts = 'Assess all options accurately against the four hard constraints and four-week effort; recommend a feasible option.'
+    quality = ('A trusted reviewer confirms an actionable plan with owner, sequence, acceptance check and rollback, '
+               'and evidence-backed trade-offs for all three options without invented guarantees.')
+    objective = (
+        'Plan a four-week synthetic reporting pilot using only these facts. Do not call tools or access files. '
+        'Hard constraints (IDs): setup: at most 5 setup hours; weekly: at most 0.5 maintenance hours per week; '
+        'deadline: ready by day 5 inclusive; privacy: records must stay on the local host. '
+        'Every option has exactly four weekly maintenance periods after setup. '
+        'manual: 2 setup hours, 1 maintenance hour/week, ready day 2, records stay local. '
+        'script: 5 setup hours, 0.25 maintenance hours/week, ready day 5, records stay local, '
+        'scheduled daily so reports may be up to 24 hours stale. '
+        'hosted: 3 setup hours, 0.1 maintenance hours/week, ready day 3, uploads records externally. '
+        'One project maintainer owns the pilot. No other performance, reliability or implementation facts are known. '
+        'Return one JSON object with exactly assessments, selected, plan, tradeoffs, rollback. '
+        'assessments maps each option ID (manual, script, hosted) to exactly total_hours (setup plus four weeks), '
+        'feasible (boolean: meets every hard constraint), failed_constraints (array of failed constraint IDs '
+        'in the order listed above). selected is one feasible option ID. '
+        'plan, tradeoffs and rollback are nonempty prose strings, each at most 3000 characters. '
+        'Propose concrete ordered steps with an owner and observable acceptance check. '
+        'Discuss each option against the actual constraints and the selected option\'s remaining limitations. '
+        'Include a rollback trigger and safe fallback with any remaining constraint violation made explicit. '
+        'Label proposed checks as future work, not observed success. Do not invent evidence. No Markdown wrapper.'
+    )
+    return {'version': 1, 'goal': 'Compare delivery options and plan a local reporting pilot',
+        'clarifications': [], 'success_criteria': [facts, quality], 'steps': [{
+            'kind': 'plan', 'objective': objective, 'role': role, 'effort': 'low', 'risk': 'normal',
+            'reason': 'Frozen constraints support fact checks; a trusted reviewer judges plan quality.',
+            'checks': [{'kind': 'rubric', 'criterion': facts}, {'kind': 'rubric', 'criterion': quality}],
+        }]}
+
+
 def incident_plan(role):
     objective = (
         'Analyze the synthetic incident using only these records. Do not call tools or access files. '
@@ -147,6 +179,8 @@ def prepare(case):
             plan = dedupe_plan(role)
         elif case == 'incident':
             plan = incident_plan(role)
+        elif case == 'planning':
+            plan = planning_plan(role)
         elif case == 'cleanup':
             (project / 'cleanup.py').write_text(CLEANUP_SOURCE + '\n', encoding='utf-8')
             plan = cleanup_plan(role)
@@ -458,14 +492,16 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
         raise ValueError('Experimental tool approvals are scoped to the CLI/parser/migration/writer/ambiguous authoring pilots.')
     if execute and case in AUTHORING_CASES and not question_phase and not tool_approvals:
         raise ValueError('Executing authoring pilots requires explicit --experimental-tool-approvals.')
-    if case == 'cleanup':
+    if case in ('cleanup', 'planning'):
         if state.exists():
             raise ValueError('Review arm already has state; inspect/resume it or prepare a new pair, never replay it.')
-        expected = (json.dumps(cleanup_plan('standard' if arm == 'routed' else 'strong'), indent=2) + '\n').encode('utf-8')
-        if ({path.name for path in project.iterdir()} != {'plan.json', 'cleanup.py'}
+        factory = cleanup_plan if case == 'cleanup' else planning_plan
+        expected = (json.dumps(factory('standard' if arm == 'routed' else 'strong'), indent=2) + '\n').encode('utf-8')
+        names = {'plan.json', 'cleanup.py'} if case == 'cleanup' else {'plan.json'}
+        if ({path.name for path in project.iterdir()} != names
                 or not frozen_file_matches(plan_path, expected)
-                or not frozen_file_matches(project / 'cleanup.py', (CLEANUP_SOURCE + '\n').encode('utf-8'))):
-            raise ValueError('Frozen cleanup review inputs changed; do not start this arm.')
+                or (case == 'cleanup' and not frozen_file_matches(project / 'cleanup.py', (CLEANUP_SOURCE + '\n').encode('utf-8')))):
+            raise ValueError('Frozen ' + case + ' review inputs changed; do not start this arm.')
     if case in AUTHORING_CASES:
         if state.exists():
             raise ValueError('Authoring arm already has state; inspect/resume it or prepare a new pair, never replay it.')
@@ -487,7 +523,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     if question_phase:
         plan_path = project / 'question-plan.json'
     command_checks = checks.is_file() and not question_phase
-    measured_pair = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() in ('dedupe', 'incident', 'cleanup')
+    measured_pair = case_file.is_file() and case_file.read_text(encoding='utf-8').strip() in ('dedupe', 'incident', 'cleanup', 'planning')
     mode = 'approve_plan'
     if command_checks:
         mode = 'ask_to_escalate'
@@ -569,6 +605,36 @@ def unique_answer_fields(pairs):
             raise ValueError('Duplicate answer key.')
         fields[key] = value
     return fields
+
+
+def score_planning(answer):
+    if len(answer.encode('utf-8')) > 16384:
+        raise ValueError('Planning answer exceeds 16 KiB.')
+    try:
+        result = json.loads(answer, object_pairs_hook=unique_answer_fields)
+    except RecursionError:
+        raise ValueError('Planning answer is too deeply nested.') from None
+    keys = {'assessments', 'selected', 'plan', 'tradeoffs', 'rollback'}
+    if not isinstance(result, dict) or result.keys() != keys:
+        raise ValueError('Expected exactly the five planning answer fields.')
+    expected = {'manual': (6, False, ['weekly']), 'script': (6, True, []),
+                'hosted': (3.4, False, ['privacy'])}
+    assessments = result['assessments']
+    if not isinstance(assessments, dict) or assessments.keys() != expected.keys():
+        raise ValueError('Assess all three planning options.')
+    checks = {}
+    for name, (hours, feasible, failed) in expected.items():
+        value = assessments[name]
+        checks[name] = (isinstance(value, dict)
+            and value.keys() == {'total_hours', 'feasible', 'failed_constraints'}
+            and type(value['total_hours']) in (int, float) and value['total_hours'] == hours
+            and type(value['feasible']) is bool and value['feasible'] is feasible
+            and value['failed_constraints'] == failed)
+    checks['selection'] = result['selected'] == 'script'
+    checks['prosePresent'] = all(isinstance(result[key], str) and 0 < len(result[key].strip())
+                               and len(result[key]) <= 3000 for key in ('plan', 'tradeoffs', 'rollback'))
+    print(json.dumps({'machineChecks': checks, 'trustedReviewRequired': True}, sort_keys=True))
+    return 0 if all(checks.values()) else 1
 
 
 def score_incident(answer):
@@ -674,7 +740,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'cli', 'cleanup', 'parser', 'migration', 'writer', 'ambiguous'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'planning', 'cli', 'cleanup', 'parser', 'migration', 'writer', 'ambiguous'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))
@@ -690,7 +756,7 @@ def main():
                         help='C8 only: adopt the same frozen answer and select implementation after accepted question phase')
     grade = actions.add_parser('score', help='score a turn answer with the case rubric')
     grade.add_argument('answer')
-    grade.add_argument('--case', choices=('c1', 'dedupe', 'incident', 'cleanup'), default='c1')
+    grade.add_argument('--case', choices=('c1', 'dedupe', 'incident', 'cleanup', 'planning'), default='c1')
     analysis = actions.add_parser('compare', help='compare two private metrics records offline')
     analysis.add_argument('baseline', type=Path)
     analysis.add_argument('routed', type=Path)
@@ -707,7 +773,8 @@ def main():
                        args.use_frozen_clarification)
         if args.action == 'compare':
             return compare(args.baseline, args.routed, args.baseline_row, args.routed_row)
-        scorers = {'c1': score, 'dedupe': score_dedupe, 'incident': score_incident, 'cleanup': score_cleanup}
+        scorers = {'c1': score, 'dedupe': score_dedupe, 'incident': score_incident,
+                   'cleanup': score_cleanup, 'planning': score_planning}
         return scorers[args.case](args.answer)
     except KeyboardInterrupt:
         return 130
