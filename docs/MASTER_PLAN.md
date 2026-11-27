@@ -890,6 +890,15 @@ integration is unavailable, so no independent clean environment was tested.
 The prepared bounded G2 command-approval probe awaits explicit live authorization.
 No release gate, live compatibility claim or evaluation result was advanced.
 
+A3 installation-documentation fixture increment (2026-11-27), MOCK_VERIFIED:
+`examples/routing-pilot.py prepare --case install` freezes a broken guide and
+trusted standalone example. The checker validates the declared three-command
+recipe before shell execution, installs in fresh paths with spaces and reruns
+after deleting the source copy. It rejects arbitrary shell syntax and changed
+example bytes; a separate trusted rubric covers prerequisite/setup/output prose.
+Thirty-five targeted installation/shared-pilot tests pass. No live model pair,
+second-environment ModelMate installation, quality or release pass is claimed.
+
 A2 project-planning fixture increment (2026-11-27), MOCK_VERIFIED:
 `examples/routing-pilot.py prepare --case planning` freezes a three-option,
 four-constraint reporting pilot requiring an actual plan, trade-offs and rollback.

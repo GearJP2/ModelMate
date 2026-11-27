@@ -19,7 +19,7 @@ before requesting subscription turns.
 | C8 | [Implement behavior from an ambiguous request](#c8-clarification-pilot) | Pause for the missing requirement before dispatch. Both arms then receive the same clarification. |
 | A1 | Summarize a synthetic incident timeline | Timestamps, causal claims and uncertainties match the supplied record. |
 | A2 | [Compare options for a short project plan](#a2-project-planning-pilot) | Use the supplied constraints, identify trade-offs and cover every rubric item. |
-| A3 | Edit installation instructions | A reviewer can install and run the example from a fresh directory with spaces in its path. |
+| A3 | [Edit installation instructions](#a3-installation-documentation-pilot) | A reviewer can install and run the example from a fresh directory with spaces in its path. |
 | A4 | Write a short source-backed briefing | Each material claim has a supporting source and private fixture text stays out of search queries. Requires the web privacy gate. |
 
 ## Compare paired runs
@@ -34,6 +34,50 @@ All critical checks must pass and routed quality must meet the baseline before
 claiming equivalent quality. Report any observed consumption difference with
 its denominator, paired sample count and scope. The table defines planned
 cases. The C1 pilot result is recorded below. Quota savings remain unmeasured.
+
+## A3 installation documentation pilot
+
+`python3 examples/routing-pilot.py prepare --case install` creates matching
+broken INSTALL.md guides and an immutable standalone Python example. The model
+must edit the guide, fixing path quoting and running the installed copy while
+explaining prerequisites, SOURCE/HOME, expected output and directory independence.
+No source-code change, network, administrator access or dependency is needed.
+
+Use the existing authoring preview arguments: `run SCRATCH routed|baseline
+--standard MODEL --strong MODEL --economy MODEL`. Live execution additionally
+requires explicit `--execute --experimental-tool-approvals` and native START;
+permissions remain read-only/on-request. Existing frozen-artifact, checker-hash
+and started-arm no-replay guards apply. These commands have not been run against
+a live model for A3.
+
+The hash-bound checker accepts exactly one sh fenced block with the three
+declared commands (mkdir -p, cp, python3) and frozen path/argument tokens in order.
+Blank lines and standalone comments are allowed. It validates the entire block
+before invoking a shell; substitutions, operators, assignments, extra commands,
+changed example bytes, nonregular inputs and oversized guides are rejected.
+This intentionally bounded recipe is part of the task, not a general shell
+validator. Alternative installation methods are outside this fixture.
+
+The checker creates fresh source, HOME and working directories with spaces,
+stages only the trusted example, executes the validated recipe and checks
+installed bytes and exact output. It then removes the source copy and runs the
+installed file from another directory. All installation writes are in its owned
+temporary tree; the real HOME and project installation are not used. Unquoted
+SOURCE passes token recognition but fails the actual copy, demonstrating that
+the check exercises shell path expansion rather than just matching words.
+
+A passing machine result still includes `trustedReviewRequired: true`. A trusted
+reviewer must separately verify that a new reader can follow the guide: the
+POSIX shell/Python 3/mkdir/cp prerequisites and local-only scope are accurate;
+SOURCE is explained as the absolute source directory; HOME means the reader's
+home; commands and expected report-demo-ok output are clear; and no hidden cwd,
+privilege or network assumption remains. Record a real manual rubric verdict,
+not the model's own claim. A guide containing only the correct code block passes
+machine checks and fails this rubric. Both checks must pass for acceptance.
+
+Offline developer references/mutants validate the harness only. This synthetic
+installation does not prove ModelMate installation on an independent second
+environment, live model documentation quality, held-out results or G5 savings.
 
 ## A2 project planning pilot
 

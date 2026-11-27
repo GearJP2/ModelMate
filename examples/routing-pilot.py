@@ -24,7 +24,7 @@ CHOICES = {
     'D': lambda size: range(1, size),
 }
 CRITERION = 'The chosen loop expression returns the first matching index, including the last element, or -1.'
-AUTHORING_CASES = ('cli', 'parser', 'migration', 'writer', 'ambiguous')
+AUTHORING_CASES = ('cli', 'parser', 'migration', 'writer', 'ambiguous', 'install')
 ROW_QUESTION = 'Should --limit N count every physical row including blank rows, or only nonempty rows?'
 ROW_ANSWER = 'Count every physical row including blank rows. Preserve the first N rows in input order; zero prints nothing.'
 
@@ -194,6 +194,8 @@ def prepare(case):
             plan = prepare_writer(project, role, checker)
         elif case == 'ambiguous':
             plan = prepare_ambiguous(project, role, checker)
+        elif case == 'install':
+            plan = prepare_install(project, role, checker)
         (project / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(scratch)
 
@@ -402,6 +404,38 @@ def prepare_writer(project, role, checker):
         }]}
 
 
+def prepare_install(project, role, checker):
+    source_checker = Path(__file__).with_name('install-pilot-check.py')
+    fixture = runpy.run_path(str(source_checker))
+    (project / 'example.py').write_text(fixture['EXAMPLE'], encoding='utf-8')
+    (project / 'INSTALL.md').write_text(
+        '# Install the report demo\n\nRun from the source directory. Python should work.\n\n'
+        '```sh\nmkdir -p $HOME/.local/share/report demo\n'
+        'cp $SOURCE/example.py $HOME/.local/share/report demo/example.py\n'
+        'python3 example.py --self-check\n```\n\nDone.\n', encoding='utf-8')
+    write_frozen_checks(project, source_checker, checker)
+    machine = 'The documented local recipe installs and runs the frozen example from fresh directories with spaces, independently of the source copy.'
+    quality = ('A trusted reviewer confirms accurate prerequisites, SOURCE/HOME setup, commands and expected output, '
+               'with no undocumented network, privilege or working-directory assumptions.')
+    return {'version': 1, 'goal': 'Repair installation instructions for the standalone local report demo',
+        'clarifications': [], 'success_criteria': [machine, quality], 'steps': [{
+            'kind': 'implement', 'objective': 'Edit only INSTALL.md to make the example installable by a new reader. '
+            'Assume a POSIX shell, Python 3 standard library, mkdir and cp; no network, administrator access or dependencies. '
+            'The reader sets SOURCE to the absolute directory containing example.py and HOME to their own home. '
+            'Both paths and the initial working directory may contain spaces. Explain these variables and prerequisites. '
+            'Include exactly one sh fenced block with three plain commands in order: mkdir -p for '
+            '$HOME/.local/share/report demo, cp from $SOURCE/example.py to that directory as example.py, '
+            'then python3 on the installed file with --self-check. Quote paths correctly; no other executable commands, '
+            'shell operators, assignments or substitutions. Blank lines and standalone comments are allowed. '
+            'Explain expected report-demo-ok output and that running is independent of the current/source directory. '
+            'Do not modify the example, plans or checker. Use native approval when required without widening permissions. '
+            'Run the registered checker once and report its actual result; a trusted reviewer separately checks the prose.',
+            'role': role, 'effort': 'low', 'risk': 'normal',
+            'reason': 'A bounded local recipe test and independent documentation review check the requested edit.',
+            'checks': [{'kind': 'test', 'criterion': machine}, {'kind': 'rubric', 'criterion': quality}],
+        }]}
+
+
 def prepare_ambiguous(project, role, checker):
     plan = prepare_cli(project, role, checker)
     criterion = 'A trusted reviewer confirms necessary clarification is requested before implementation, without guessed behavior or edits.'
@@ -489,7 +523,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
     if tool_approvals and question_phase:
         raise ValueError('Question phase cannot enable authoring tool approvals.')
     if tool_approvals and case not in AUTHORING_CASES:
-        raise ValueError('Experimental tool approvals are scoped to the CLI/parser/migration/writer/ambiguous authoring pilots.')
+        raise ValueError('Experimental tool approvals are scoped to the CLI/parser/migration/writer/ambiguous/install authoring pilots.')
     if execute and case in AUTHORING_CASES and not question_phase and not tool_approvals:
         raise ValueError('Executing authoring pilots requires explicit --experimental-tool-approvals.')
     if case in ('cleanup', 'planning'):
@@ -513,7 +547,7 @@ def run(scratch, arm, standard, strong, execute, economy=None, measure_quota=Fal
             reference = Path(directory)
             prepare_case = {'cli': prepare_cli, 'parser': prepare_parser,
                             'migration': prepare_migration, 'writer': prepare_writer,
-                            'ambiguous': prepare_ambiguous}[case]
+                            'ambiguous': prepare_ambiguous, 'install': prepare_install}[case]
             expected = prepare_case(reference, 'standard' if arm == 'routed' else 'strong', checker)
             (reference / 'plan.json').write_text(json.dumps(expected, indent=2) + '\n', encoding='utf-8')
             names = {path.name for path in reference.iterdir()}
@@ -740,7 +774,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest='action', required=True)
     setup = actions.add_parser('prepare', help='make a fresh pair and print its path')
-    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'planning', 'cli', 'cleanup', 'parser', 'migration', 'writer', 'ambiguous'), default='c1')
+    setup.add_argument('--case', choices=('c1', 'economy', 'dedupe', 'incident', 'planning', 'cli', 'cleanup', 'parser', 'migration', 'writer', 'ambiguous', 'install'), default='c1')
     launch = actions.add_parser('run', help='preview one arm, or opt in to a live workflow')
     launch.add_argument('scratch', type=Path)
     launch.add_argument('arm', choices=('routed', 'baseline'))

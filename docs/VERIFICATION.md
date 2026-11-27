@@ -5141,3 +5141,44 @@ A2 paired model outcomes, held-out evaluation, quality/savings and G5 remain ope
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 833 tests in 112.488 seconds, with no skips.
+
+### P16 A3 installation documentation fixture (2026-11-27)
+
+`routing-pilot.py prepare --case install` prepares identical broken guides,
+trusted example bytes and hash-bound checks for both arms. The model edits only
+INSTALL.md, explaining prerequisites, SOURCE/HOME, quoting, installed invocation
+and expected output. A bounded local checker and independent prose rubric are
+both required. Existing explicit native execution/tool opt-in, frozen inputs,
+separate arms and no replay remain; runtime permissions are unchanged.
+
+The checker accepts one sh block with exactly three declared commands and
+frozen argument tokens. It validates all lines before invoking the shell, rejects
+other syntax/commands and never executes changed example code. Installation uses
+only owned temporary source, HOME and working paths containing spaces. It checks
+actual installed bytes/output, removes the source copy and reruns from another
+fresh directory. No real home installation, external network or account is used.
+The finite allowlist is part of this fixture, not a general shell sandbox.
+
+Every valid machine result emits `trustedReviewRequired: true`. Human review must
+establish that the guide can be followed with accurate prerequisites, variable
+setup, output and directory-independent behavior. The tests deliberately show
+that a bare correct command block can pass machine checks without this prose;
+that result alone cannot satisfy the separate rubric or task criteria.
+
+`PYTHONPATH=tests python3 -m unittest test_install_pilot test_cli_pilot
+test_ambiguous_pilot test_routing_pilot -v` passed 35 tests in 9.029 seconds.
+Eight new tests cover broken/reference guides, unquoted SOURCE/literal-variable
+failures in a real shell, operator/substitution/extra-command injection with
+untouched sentinels, changed example and checker rejection, symlink/FIFO/size
+guards, prose-review limits, paired previews and execution/input/state guards.
+Developer-authored recipes only; live launch forwarding uses a mock. Compile
+and diff checks pass. No live model/search request or inference quota was used.
+
+Pilot SHA-256: `a644ed5f833f78877975b1fdd4dd93ab23f3da0d78aebba1be057d48143eaf11`.
+Checker SHA-256: `afa6285b8b71838818ed5af61654962793853e3b809f208911fb856823a971a9`.
+Runtime remains `cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`.
+A3 live paired outcomes, independent second-environment ModelMate installation,
+held-out quality, savings and release gates remain open.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 841 tests in 112.506 seconds, with no skips.
