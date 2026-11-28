@@ -5292,3 +5292,41 @@ Verifier SHA-256: `def723aa81962b4c50158167e6800234a43309cd9c73f79c55cb307c5e332
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 847 tests in 109.109 seconds, with no skips. USAGE.md also documents that
 advertised cancel denial interrupts the turn and does not authorize replay.
+
+### P09 bounded command accept/deny — user-run live result (2026-11-28)
+
+The user ran `python3 verify.py --run-live --probe-workflow-approvals gpt-6.1-sol`
+after updating the feature branch. The reported runtime and verifier match
+commit `5a9ab6a` and the current local files exactly:
+
+- Runtime SHA-256: `7f32dce4d200316843d3aadc1f5eed1fe3d6e19961e048385af764049a9daa11`.
+- Verifier SHA-256: `def723aa81962b4c50158167e6800234a43309cd9c73f79c55cb307c5e332f47`.
+- CLI version context: 0.172.0, as previously checked in this session; the JSON
+  itself does not report a CLI version.
+- Requested model/effort: gpt-6.1-sol/low. `reportedModels` is null; actual
+  dispatch/model identity is not established by this result.
+
+The verifier reached finished/finished and reported all seven checks passed:
+safeRequestObserved, noEffectBeforeApproval, approvedEffect,
+declinedEffectAbsent, durableDecisions, singleUseConfirmation and
+sentinelUnchanged. The approve case observed the request and no pre-consent
+effect, then completed with the exact bounded marker and durable approval;
+reuse of confirmation had no effect. The decline case observed the request
+and no pre-consent effect, ended interrupted without the marker, recorded a
+durable denial and rejected confirmation reuse. The sentinel stayed unchanged.
+
+Status: scoped LIVE_VERIFIED for this bounded native command path. The report
+does not include offered choices or wire decisions, so interrupted denial alone
+does not establish the exact advertised decision list. Scratch and native
+threads remain retained; cleanup is not claimed. The verifier permits at most
+two synthetic turns and acceptance of one registered marker action. It does not
+prove other tool kinds, a no-tools boundary, every permission path, interactive
+Terminal timing, remote cleanup, or the full G2 lifecycle/failure matrix.
+
+This evidence is the user's supplied live report, not a new agent-run inference
+or a model assertion. Source hashes were checked read-only; only documentation
+changed. `git diff --check` passes. No inference/test suite rerun was necessary
+for this evidence record. The existing 847-test offline result remains separate.
+The next prepared P09 check is the independently bounded patch accept/deny probe;
+it requires a separately chosen explicit live command and does not automatically
+run or replay the command probe.

@@ -7,7 +7,7 @@ for the particular path, client version and platform being shipped. See
 | Gate | Evidence available | Remaining |
 | --- | --- | --- |
 | G1 account and dispatch | Live metadata-only catalog preview, requested-model paths, context recall and scoped resume | Reported dispatch telemetry is incomplete. |
-| G2 permissions and lifecycle | Scoped live native workflow denial, interruption, metadata inspection, recheck recovery, scoped deletion and attached runtime-owned STOP after recheck client loss. Experimental workflow accept-once and its bounded verifier have offline evidence only. | Obtain the scoped command accept/decline verifier result, then separately verify patch approvals, live cancellation/failure paths, server/process-loss recovery and interactive CLI timing. |
+| G2 permissions and lifecycle | Scoped live native workflow denial, interruption, metadata inspection, recheck recovery, scoped deletion and attached runtime-owned STOP after recheck client loss. On 2026-11-28 the current bounded command verifier passed all seven accept/deny checks, including durable decisions and single-use confirmation. | Separately verify patch approvals, live cancellation/failure paths, server/process-loss recovery and interactive CLI timing. The command result does not complete G2. |
 | G3 private search | Scoped legacy live Thai Wikipedia lookup; internal isolated launcher, bounded protocol, proc/lifecycle leak controls and fake-peer validation have offline evidence | The 2026-11-26 isolated English smoke was unverified; separate socket-creation probes found EPERM in the current execution profile. Real isolated DNS/TLS, live SearXNG, query-provenance/automatic integration and full G3 remain open. Hosted search stays disabled in work threads. |
 | G4 quota and billing | Offline admission and explicit recovery from exhausted or unknown quota. Live telemetry with observed account windows | Live exhausted/unknown admission paths and version-specific billing guarantees. |
 | G5 evaluation | Scored C1, C3, A1 and the two-step economy pilot. Three checkpoint display pairs graded with original and format-repaired outcomes. C2 CLI authoring, C4 parser-refactor, C5 JSON-migration, C6 concurrent-writer, C7 cleanup-review, C8 two-phase clarification, A2 project-planning and A3 installation-documentation fixtures/checkers are prepared with offline evidence only. | Run the prepared pairs with independent review, expand real/held-out task coverage and establish a defensible quota signal before estimating savings or enabling the trial rule by default. |
@@ -40,7 +40,7 @@ authorization; no subscription turn was requested by this revalidation.
 | R03 code, analysis, planning, documents | Plan kinds, native checks, manual/rubric and explicit human source checks; test_workflow_entry.py, test_native_workflow.py, test_native_resume.py | Complete the independent evaluation set across task types; live source-check workflow is unverified. |
 | R04 suitable model per step | Explicit role bindings, supported efforts and optional risk/check-based suggestions; test_models.py, test_routing.py, test_modes.py | Validated comparative model policy and broader held-out task evaluation; trial display rule remains experimental. No separate decision classifier is required. |
 | R05 three model approval modes | Auto, Ask to escalate and Approve plan with scoped/stale grants; test_modes.py, test_workflow_ui.py | Broader live mode/routing failure evidence; Default Auto still needs `/next`; new explicit Auto plans can opt into experimental READY-attempt advancement after START (test_auto_advance.py). This has offline evidence only; terminal all-test/lint steps can evaluate existing native evidence automatically; mixed human checks still require trusted input. Optional user-approved --criterion-map resolves accepted IDs for final completion; without it /finish remains explicit. |
-| R06 tool permissions | Manual native UI plus experimental workflow accept-once subset, fixed read-only/on-request defaults and unsupported-request denial; test_live.py, test_permissions.py, test_native_permissions.py | Default workflow still declines approvals; opt-in native workflow acceptance has offline evidence only. Full live G2 permission matrix remains open. `/permissions` reports the fixed policy; it does not change the sandbox profile. |
+| R06 tool permissions | Manual native UI plus experimental workflow accept-once subset, fixed read-only/on-request defaults and unsupported-request denial; test_live.py, test_permissions.py, test_native_permissions.py. The 2026-11-28 bounded command accept/deny verifier passed all seven live checks. | Default workflow still declines approvals; patch acceptance and the full live G2 permission matrix remain open. `/permissions` reports the fixed policy; it does not change the sandbox profile. |
 | R07 correction budget | Controller owns initial attempt plus two corrections, explicit extensions and durable counters; test_workflow.py, test_workflow_persistence.py, test_recheck_ledger.py | Broader live correction/recovery paths; no model-generated counter or test claim can satisfy the controller. |
 | R08 strong review only where needed | Risk/review validation, role bindings and scoped escalation; test_routing.py, test_workflow.py, test_modes.py | Comparative quality evidence for the bound roles and complex/high-risk real tasks. |
 | R09 local sessions / resume / delete | Atomic project-local storage, locks, native bindings, terminal work-turn correlation after a lost start binding, unknown-check retirement as UNVERIFIED, reconciliation and scoped deletion; test_sessions.py, test_lifecycle.py, test_native_resume.py, test_recheck_recovery.py | Work-turn correlation and missing/unknown-check resume have offline evidence only. Live runtime/server-loss and interactive shared-recheck recovery evidence remain open; missing native thread ID discovery remains unsupported. |
@@ -71,7 +71,7 @@ private text stayed out of a real search context.
 
 | Work still required | Dependency / evidence needed before completion |
 | --- | --- |
-| P09 command approval compatibility | The user-run probe progressed from environmentId to the availableDecisions guard. Exact `local` remains the only supported explicit environment. Plain accept plus decline or cancel is now supported; controller denial uses cancel only when decline is absent. Current-runtime live results remain unverified; command success does not pass patch or failure/loss paths. |
+| P09 command approval compatibility | Resolved for the bounded command probe: the user-run report at 5a9ab6a's runtime/verifier hashes passed all seven checks. Exact `local` remains the only supported explicit environment; session/policy grants remain inert. Patch, failure/loss paths and the wider G2 matrix still need independent evidence. |
 | P01/P03/P08/P10/P12 current native integration | Current-version dispatch observations plus live mode, patch, cancellation, disconnect/process-loss and interactive timing evidence. Existing prepared probes cover particular bounded paths, not the whole matrix. |
 | P06/P08 default entry and P10 automatic execution | Plain-prompt entry still dispatches manual chat; explicit planning/plan handoff and experimental Auto advancement exist. Default automatic workflow behavior remains implementation work gated by native permission dependencies, not something a documentation or pilot change completes. |
 | P13 and A4 | Real isolated DNS/TLS and SearXNG evidence, query-provenance handling and automatic integration with private-file/history and injection checks. The current profile denied sockets; a normal capable environment must supply actual evidence without widening native permissions or replaying the previous attempt. Keep gated search disabled. |
@@ -98,6 +98,16 @@ verifier SHA-256 is
 
 ## Live checks with explicit opt-in
 
+The 2026-11-28 user-run command verifier at runtime
+`7f32dce4d200316843d3aadc1f5eed1fe3d6e19961e048385af764049a9daa11`
+and verifier `def723aa81962b4c50158167e6800234a43309cd9c73f79c55cb307c5e332f47`
+passed all seven checks. Approve completed; deny interrupted with no marker.
+Requested model/effort is gpt-6.1-sol/low, while reportedModels remains null.
+Scratch/native threads remain retained. This scoped result supersedes the
+earlier unverified command attempts below without passing patch approval,
+interactive timing, every permission/failure path or remote cleanup. The next
+prepared check is `--probe-workflow-patches`, explicitly chosen by the user.
+
 The 2026-11-27 user-run command probe on Codex 0.172.0 returned ProbeError in
 the approve phase with all seven checks unverified. Its original exception
 location was not captured; the cause is unresolved. The updated verifier now
@@ -105,7 +115,7 @@ includes `probeStage` and source-only `diagnosticLocation` for errors. That
 change has offline evidence only. A new run uses subscription quota again and
 must be explicitly chosen; the original attempt is not replayed automatically.
 
-The next prepared P09 check is
+The earlier prepared P09 command check was
 now updated for two experimental optional command fields found in the installed
 0.172.0 schema. Only null additionalPermissions is supported; non-null overlays
 remain gated. Explicit availableDecisions must offer plain accept and decline;
@@ -120,7 +130,7 @@ one bounded synthetic marker write, then declines the second case. Record the
 CLI version, runtime/verifier hashes and all seven check results. Missing
 approval requests are inconclusive; do not widen permissions to obtain them.
 See the scoped verifier record in [VERIFICATION.md](VERIFICATION.md) before
-running it. This check has not yet supplied passing live evidence. Installed CLI
+running it. Passing scoped evidence is now recorded above. Installed CLI
 0.172.0 has matching inspected approval schemas, which does not carry forward
 the live compatibility evidence recorded for 0.171.0.
 
