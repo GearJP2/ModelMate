@@ -71,7 +71,7 @@ private text stayed out of a real search context.
 
 | Work still required | Dependency / evidence needed before completion |
 | --- | --- |
-| P09 command approval compatibility | Obtain `unsupportedApprovalScopes` from the updated user-run probe. The last observed request was rejected by the scope guard; the actual unsupported field is unknown. Preserve denial until its semantics and supported handling are established. Then obtain all seven scoped accept/decline results; command success does not pass patch or failure/loss paths. |
+| P09 command approval compatibility | The 2026-11-28 user-run report identifies environmentId; its value is not exposed. The parser now supports only exact `local` alongside legacy absent/null and displays it before approval. Remote/unknown values remain rejected. Obtain current-runtime scoped accept/decline results; command success does not pass patch or failure/loss paths. |
 | P01/P03/P08/P10/P12 current native integration | Current-version dispatch observations plus live mode, patch, cancellation, disconnect/process-loss and interactive timing evidence. Existing prepared probes cover particular bounded paths, not the whole matrix. |
 | P06/P08 default entry and P10 automatic execution | Plain-prompt entry still dispatches manual chat; explicit planning/plan handoff and experimental Auto advancement exist. Default automatic workflow behavior remains implementation work gated by native permission dependencies, not something a documentation or pilot change completes. |
 | P13 and A4 | Real isolated DNS/TLS and SearXNG evidence, query-provenance handling and automatic integration with private-file/history and injection checks. The current profile denied sockets; a normal capable environment must supply actual evidence without widening native permissions or replaying the previous attempt. Keep gated search disabled. |
@@ -79,9 +79,9 @@ private text stayed out of a real search context.
 | P16 quality and routing policy | Execute prepared pairs with independent acceptance; obtain authorized real-task examples with frozen rubric and separate calibration/held-out sets. No such held-out dataset is supplied by the public pilots. Do not mine PR history into a benchmark or invent quality/quota savings. |
 | P15 release installation | A genuinely independent clean target environment, then final packaging/user-guide validation after relevant gates. Two Python versions on this host and A3's temporary example installation are not that evidence. |
 
-There is no release-completion verdict. The next actionable native diagnosis is
-the pending user-run scope report, not a guessed scope exception or another
-automatic quota-consuming probe. Runtime SHA-256 remains
+There is no release-completion verdict. At this audit's revision the next native
+diagnosis was the pending user-run scope report, not a guessed exception or an
+automatic quota-consuming probe. The historical audit's runtime SHA-256 was
 `cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`;
 verifier SHA-256 is
 `b57bbc6f3a9b98008834b0795b8f59826c57cbe8828acbfd427a84d408b4c423`.
@@ -130,6 +130,16 @@ report cannot distinguish which scope was present. The verifier now reports
 `unsupportedApprovalScopes` using fixed field names only; values/IDs remain
 redacted. This diagnostic addition changes no approval policy and has offline
 evidence only. Do not remove scope guards or widen permissions to obtain a pass.
+
+The 2026-11-28 user-run probe at runtime cd764b6c now identifies only
+`environmentId` as unsupported; all seven checks stayed unverified. The shared
+parser supports exact literal `local`, whose reserved local identity is defined
+in upstream's environment manager, and shows it in the command preview. Missing
+or null remains compatible; every other value is still rejected, as are network,
+callback and additional permission scopes. The result does not reveal whether
+the actual environment was local. This compatibility change is offline-tested
+only and does not change environment selection or native permission policy.
+Any new live probe is a separately chosen quota-consuming run, not a replay.
 
 A separate patch check is prepared as
 `python3 verify.py --run-live --probe-workflow-patches MODEL`. It uses at most two

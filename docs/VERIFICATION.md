@@ -5202,3 +5202,43 @@ policy. No inference, HTTP, account request, probe replay or new test run was
 performed; this is documentation-only follow-up to the recorded 841-test run.
 `git diff --check` passes. See RELEASE_CHECKLIST.md for the concrete remaining
 work and dependency/evidence boundaries.
+
+### P09 explicit local environment identifier (2026-11-28)
+
+The user's bounded command probe on Codex 0.172.0 at runtime
+`cd764b6cca6fc078d9a93554642a4ceeef1ec06a7fd250b55fdf3589e35eac11`
+and verifier `b57bbc6f3a9b98008834b0795b8f59826c57cbe8828acbfd427a84d408b4c423`
+stopped in approve/await_approval at native_tool_request line 3167, reporting
+`unsupportedApprovalScopes: ["environmentId"]`. All seven checks were unverified;
+no effect/approval success is inferred from that report. The value was not
+captured, so the report alone does not prove a local environment.
+
+A fresh installed `codex app-server generate-json-schema --experimental` export
+describes environmentId as a nullable string identifying where the command runs.
+Upstream's [environment manager](https://github.com/openai/codex/blob/main/codex-rs/exec-server/src/environment.rs)
+defines LOCAL_ENVIRONMENT_ID as `local` and rejects provider registration using
+that reserved name. This is upstream semantic evidence, not a version-pinned
+live compatibility test. The shared parser now accepts only exact `local` or
+legacy absent/null, includes the value in the command preview protected by the
+existing approval digest, and rejects all other values. It sends no environment
+selection, new permission profile, policy amendment or session-level decision.
+Callback, network and additional-permission scopes remain unsupported.
+
+`PYTHONPATH=tests python3 -m unittest test_live test_native_permissions
+test_workflow_approval_probe -q` passed 49 tests in 2.634 seconds. New cases verify
+the displayed local identity before a single manual accept and both synthetic
+verifier accept/decline cases. Remote, empty, case/whitespace variants, booleans,
+objects and arrays are denied without a token. The other unsupported-scope and
+durable single-use tests continue passing. These are offline fake-server tests;
+no live inference/account/command replay was requested. Compilation and diff
+checks pass. The first new test assertion mistakenly expected `pass` instead of
+the verifier's existing `passed`; the assertion was corrected, with no runtime
+verdict change.
+
+Runtime SHA-256: `dc4d2ac72139000aea8de7d507eb4c7aa6e45f5021de2bd74dda9989d75d5b24`.
+Verifier SHA-256 remains `b57bbc6f3a9b98008834b0795b8f59826c57cbe8828acbfd427a84d408b4c423`.
+Live success is still unverified. A nonlocal environment will continue failing
+closed; this change does not promise that the next user-run probe will pass.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 843 tests in 109.500 seconds, with no skips.

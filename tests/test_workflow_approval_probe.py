@@ -76,6 +76,15 @@ class WorkflowApprovalProbeTests(unittest.TestCase):
         self.assertNotIn('printf', json.dumps(result))
         self.assertIsNone(result['reportedModels'])
 
+    def test_explicit_local_environment_supports_both_bounded_approval_cases(self):
+        source = PROBE_SERVER.replace('  emit(request)',
+            "  params['environmentId']='local'\n  emit(request)")
+        result = self.probe(source)
+        self.assertTrue(all(result[key] == 'passed' for key in WORKFLOW_APPROVAL_KEYS), result)
+        self.assertEqual(self.count, 2)
+        self.assertEqual([r['result']['decision'] for r in self.records() if 'result' in r],
+                         ['accept', 'decline'])
+
     def test_connect_error_reports_source_location_without_private_message(self):
         private='PRIVATE /private/account/path MM-secret'
         error=ProbeError(private);error.approval_scopes=('PRIVATE-SCOPE',)

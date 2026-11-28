@@ -3158,7 +3158,8 @@ def native_tool_request(message, thread_id, turn_id, previews):
             for key in ('commandActions', 'proposedExecpolicyAmendment', 'proposedNetworkPolicyAmendments')):
         raise ProbeError('Malformed approval metadata; nothing approved.')
     unsupported_scopes = tuple(field for field in ('approvalId', 'environmentId',
-        'networkApprovalContext', 'grantRoot', 'additionalPermissions') if params.get(field) is not None)
+        'networkApprovalContext', 'grantRoot', 'additionalPermissions') if params.get(field) is not None
+        and (field != 'environmentId' or params[field] != 'local'))
     if params.get('kind', 'command') != 'command':
         unsupported_scopes = ('kind',) + unsupported_scopes
     if unsupported_scopes:
@@ -3175,7 +3176,8 @@ def native_tool_request(message, thread_id, turn_id, previews):
         command, cwd = params.get('command'), params.get('cwd')
         if not isinstance(command, str) or not command.strip() or not isinstance(cwd, str) or not os.path.isabs(cwd):
             raise ProbeError('Cannot display the exact command; nothing approved.')
-        preview = json.dumps({'command': command, 'cwd': cwd, 'reason': params.get('reason')}, ensure_ascii=True)
+        preview = json.dumps({'command': command, 'cwd': cwd, 'reason': params.get('reason'),
+                              'environmentId': params.get('environmentId')}, ensure_ascii=True)
     else:
         preview = previews.get(params['itemId'])
         if preview is None:

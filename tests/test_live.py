@@ -220,6 +220,8 @@ class LiveBackendTests(unittest.TestCase):
     def test_unrepresented_native_approval_scopes_never_get_an_accept_token(self):
         for field, value in [('kind', 'writeStdin'), ('kind', 'humanCommand'),
                              ('approvalId', 'callback'), ('environmentId', 'remote'),
+                             ('environmentId', ''), ('environmentId', 'LOCAL'), ('environmentId', ' local'),
+                             ('environmentId', True), ('environmentId', {}), ('environmentId', ['local']),
                              ('networkApprovalContext', {'host': 'example.org'}), ('grantRoot', '/tmp'),
                              ('additionalPermissions', {'fileSystem': {'write': ['/tmp']}}),
                              ('additionalPermissions', {}),
@@ -241,6 +243,17 @@ class LiveBackendTests(unittest.TestCase):
                 self.assertIsNone(c.shell.pending)
                 self.assertFalse(c._approvals)
                 c.send.assert_called_once_with({'id': 'request', 'result': {'decision': 'decline'}})
+
+    def test_explicit_local_environment_is_displayed_before_accept_once(self):
+        c = self.backend(); c.turn_id = 'turn'; c.shell.active = True
+        c.handle_event({'id': 'request', 'method': 'item/commandExecution/requestApproval', 'params': {
+            'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item',
+            'command': 'printf synthetic', 'cwd': '/tmp', 'environmentId': 'local'}})
+        c.send.assert_not_called()
+        self.assertIn('"environmentId": "local"', c.shell.output.getvalue())
+        c.shell.line('/approve ' + c.shell.pending['token'])
+        c.send.assert_called_once_with({'id': 'request', 'result': {'decision': 'accept'}})
+        self.assertEqual(c.shell.permissions, 'read_only')
 
     def test_known_schema_metadata_keeps_accept_once_without_selecting_amendments(self):
         c = self.backend();c.turn_id = 'turn';c.shell.active = True

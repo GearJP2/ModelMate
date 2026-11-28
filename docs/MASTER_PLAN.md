@@ -508,6 +508,19 @@ the verifier reports an allowlisted unsupportedApprovalScopes array. No scope is
 newly accepted, no value is emitted, and no live replay was run. Forty-seven
 targeted tests passed; the next live attempt must be explicitly chosen.
 
+P09 explicit local environment compatibility (2026-11-28), MOCK_VERIFIED:
+the latest user-run probe at runtime cd764b6c identifies environmentId as the
+only rejected scope; all seven checks remain unverified. Installed 0.172.0's
+experimental schema describes it as the command execution environment. Upstream
+reserves literal `local` for its local environment and disallows remote providers
+from registering that name. The shared parser now accepts only absent/null or
+exact `local`, displays the value in the command approval preview, and retains
+all other scope guards. No environment is selected or changed by this client.
+Forty-nine targeted tests pass, including both synthetic verifier decisions and
+rejection of remote/malformed values. The user's result does not expose the
+actual value; a nonlocal value will still be rejected. Current live success and
+the rest of G2 remain unverified; no inference replay was run by the agent.
+
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
 declines the pending request and expires the token, even if the old diff returns.
