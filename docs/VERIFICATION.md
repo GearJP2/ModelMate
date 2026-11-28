@@ -5330,3 +5330,39 @@ for this evidence record. The existing 847-test offline result remains separate.
 The next prepared P09 check is the independently bounded patch accept/deny probe;
 it requires a separately chosen explicit live command and does not automatically
 run or replay the command probe.
+
+### P09 bounded patch accept/deny — user-run live result (2026-11-28)
+
+The user ran `python3 verify.py --run-live --probe-workflow-patches gpt-6.1-sol`
+after updating the feature branch. Runtime SHA-256
+`7f32dce4d200316843d3aadc1f5eed1fe3d6e19961e048385af764049a9daa11`
+and verifier SHA-256 `def723aa81962b4c50158167e6800234a43309cd9c73f79c55cb307c5e332f47`
+match commit `5a9ab6a` and current local files. The CLI version context remains
+0.172.0 from the prior session check; the JSON does not report CLI version.
+Requested model/effort is gpt-6.1-sol/low. `reportedModels` remains null, so this
+result does not establish actual model dispatch.
+
+The verifier finished both phases and reported all seven checks passed:
+safeRequestObserved, noEffectBeforeApproval, approvedEffect,
+declinedEffectAbsent, durableDecisions, singleUseConfirmation and
+sentinelUnchanged. Both cases observed the expected request and no pre-consent
+effect. Approve completed with the registered marker addition and durable
+approval; denial completed without the marker and with a durable declined
+decision. Both rejected confirmation reuse; the sentinel stayed unchanged.
+The denial's completed terminal status does not imply execution or approval.
+
+Status: scoped LIVE_VERIFIED for the bounded native patch path, alongside the
+separately verified command path. This permits at most two synthetic turns and
+acceptance of one registered marker addition. Other tool kinds/change formats,
+a no-tools boundary, every permission/lifecycle/failure path, interactive Terminal
+timing and remote cleanup are outside scope. Scratch/native threads remain
+retained; no cleanup is claimed. P09 and G2 remain IN_PROGRESS.
+
+Evidence is the user-supplied verifier report, not a model assertion or an
+agent-run inference. Source hashes were checked; only documentation changed.
+`git diff --check` passes. No test-suite or inference rerun is needed for this
+record; the existing 847-test offline result stays separate. The independent
+next zero-inference capability check is the existing isolated Wikipedia verifier
+from a normal capable Terminal with fresh SEARCH confirmation. Its earlier
+restricted-profile failure is not replayed or converted into a pass; G3 still
+requires actual DNS/TLS, provenance, isolation and integration evidence.

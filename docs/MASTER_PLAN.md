@@ -211,7 +211,7 @@ Session grant ที่ขยายสิทธิ์ต้องชัดเจ
 | P06 | Plan schema / policy routing | P04, P05 | MOCK_VERIFIED: explicit plan validation and selected-model draft; default prompt entry/live draft remain open; no decision classifier | จำเป็น |
 | P07 | สามโหมดและ grants | P06 | MOCK_VERIFIED (offline policy) | จำเป็น |
 | P08 | Terminal chat shell | P02, P07 | IN_PROGRESS: explicit-plan CLI/command-check happy path user LIVE_VERIFIED; broader routing/recovery pending | ไม่จำเป็นถ้าไม่แตะ policy |
-| P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: command accept/deny scoped LIVE_VERIFIED; patch UI MOCK_VERIFIED; broader G2 open | จำเป็น |
+| P09 | Tool approval UI และ enforcement | P03, P08 | IN_PROGRESS: command/patch accept/deny scoped LIVE_VERIFIED; broader G2 open | จำเป็น |
 | P10 | Workflow / checks / correction limit | P07, P09 | IN_PROGRESS: explicit-plan command-check happy path user LIVE_VERIFIED; broader permission/recovery gates pending | จำเป็น |
 | P11 | Local session persistence | P02 | MOCK_VERIFIED: storage API และ manual live checkpoints | ตรวจ data loss/privacy |
 | P12 | Resume / cancel / delete | P10, P11 | IN_PROGRESS: manual resume and synthetic tool recheck happy paths scoped LIVE_VERIFIED; native workflow cancellation scoped LIVE_VERIFIED; synthetic two-root scoped cleanup LIVE_VERIFIED | จำเป็น |
@@ -545,6 +545,18 @@ This verifies the scoped command path, not patch approval, every permission kind
 interactive Terminal timing, all disconnect/recovery paths or cleanup. P09/G2
 remain IN_PROGRESS. The next prepared independent live check is the bounded
 patch accept/deny verifier, explicitly chosen by the user; no automatic replay.
+
+P09 patch accept/deny milestone (2026-11-28), scoped LIVE_VERIFIED: the user-run
+patch verifier at the same 5a9ab6a runtime/verifier hashes passed all seven checks.
+Approve completed with the bounded marker addition; deny completed without it.
+Pre-consent absence, durable decisions, single-use confirmation and unchanged
+sentinel passed. Reported models remain null and scratch/native threads retained.
+The completed denial is a terminal observation, not an approval. Both bounded
+command and patch paths now have live evidence; P09/G2 remain IN_PROGRESS for
+other permission/failure paths, interactive timing and lifecycle coverage.
+An independent next check is the existing zero-inference isolated Wikipedia
+probe from a normal capable Terminal, with fresh explicit SEARCH confirmation;
+it neither replays the failed agent-profile lookup nor completes G3 by itself.
 
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
