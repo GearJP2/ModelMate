@@ -74,6 +74,11 @@ Preflight ไม่ใช่การจอง quota หรือ hard spending 
 - ไม่มี patch preview, คำขอซ้อน หรือคำขอที่ยังไม่รองรับ จะปฏิเสธ/หยุด
 - คง managed restrictions; ไม่อ้างว่า native readable roots จำกัดเฉพาะโปรเจกต์
 
+ถ้า server เสนอ `cancel` แทน `decline` สำหรับคำสั่ง การปฏิเสธจะใช้ `cancel`
+และหยุด turn ด้วย โดย preview จะแสดง `denialDecision` ก่อนตอบ token
+ถ้าเสนอทั้งสองแบบจะใช้ `decline` การปฏิเสธยังบันทึกเป็น declined ไม่ใช่การอนุมัติ
+พฤติกรรมนี้ใช้กับ manual chat และ experimental workflow approval; ไม่รันงานซ้ำเอง
+
 ปิด hosted web search, apps/plugins และ agents ผ่าน config ของเส้นทาง live
 แต่ยังไม่อ้างว่าเป็น universal no-tools isolation; native local tools ยังมีได้
 project/user Codex configuration และ managed policy ยังมีผล

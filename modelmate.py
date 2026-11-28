@@ -3134,6 +3134,15 @@ def cache_native_patch_preview(previews, item_id, changes):
             raise ProbeError('Too many pending file changes.')
 
 
+def native_denial_decision(message):
+    params = message.get('params', {})
+    decisions = params.get('availableDecisions') if isinstance(params, dict) else None
+    if (message.get('method') == 'item/commandExecution/requestApproval'
+            and isinstance(decisions, list) and 'decline' not in decisions and 'cancel' in decisions):
+        return 'cancel'
+    return 'decline'
+
+
 def native_tool_request(message, thread_id, turn_id, previews):
     params, method = message.get('params', {}), message.get('method')
     if (method not in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval')
@@ -3167,17 +3176,21 @@ def native_tool_request(message, thread_id, turn_id, previews):
         error.approval_scopes = unsupported_scopes
         raise error
     if command_request:
-        # Other offered decisions stay inert; this client only sends plain accept/decline.
+        # Session/policy grants stay inert; cancel is a denial that also interrupts the turn.
         decisions = params.get('availableDecisions')
         if decisions is not None and (not isinstance(decisions, list) or len(decisions) > 64
                 or any(not isinstance(option, (str, dict)) for option in decisions)
-                or 'accept' not in decisions or 'decline' not in decisions):
-            raise ProbeError('Command approval does not offer accept-once and decline; nothing approved.')
+                or 'accept' not in decisions or not any(option in decisions for option in ('decline', 'cancel'))):
+            error = ProbeError('Command approval does not offer accept-once and a supported denial; nothing approved.')
+            error.approval_decisions = tuple(name for name in ('accept', 'decline', 'cancel', 'acceptForSession')
+                                            if isinstance(decisions, list) and name in decisions)
+            raise error
         command, cwd = params.get('command'), params.get('cwd')
         if not isinstance(command, str) or not command.strip() or not isinstance(cwd, str) or not os.path.isabs(cwd):
             raise ProbeError('Cannot display the exact command; nothing approved.')
         preview = json.dumps({'command': command, 'cwd': cwd, 'reason': params.get('reason'),
-                              'environmentId': params.get('environmentId')}, ensure_ascii=True)
+                              'environmentId': params.get('environmentId'),
+                              'denialDecision': native_denial_decision(message)}, ensure_ascii=True)
     else:
         preview = previews.get(params['itemId'])
         if preview is None:
@@ -3630,7 +3643,7 @@ class LiveChatConnection(Connection):
                 self.shell.pending = None
                 raise ProbeError('Patch changed or completed after preview; nothing approved. Request a fresh preview.')
         self.send({'id': request['id'], 'result': {
-            'decision': 'accept' if choice == 'approve' else 'decline'}})
+            'decision': 'accept' if choice == 'approve' else request.get('denial_decision', 'decline')}})
 
     def _expire_patch_approvals(self, item_id):
         for token, request in list(self._approvals.items()):
@@ -3660,7 +3673,7 @@ class LiveChatConnection(Connection):
                     or not isinstance(params.get('itemId'), str) or not params['itemId']):
                 raise ProbeError('Unsupported or stale server request; nothing approved.')
             if self.shell.stopping:
-                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                self.send({'id': message['id'], 'result': {'decision': native_denial_decision(message)}})
                 return
             if self._approvals or self.shell.pending:
                 # Never replace a visible approval with a second pending action.
@@ -3671,19 +3684,20 @@ class LiveChatConnection(Connection):
                             self.shell.pending = None
                         self.shell.write('Duplicate approval request ID; previous token expired.')
                         return
-                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                self.send({'id': message['id'], 'result': {'decision': native_denial_decision(message)}})
                 self.shell.write('ปฏิเสธคำขอซ้อนระหว่างรออนุมัติ')
                 return
             try:
                 _, preview = native_tool_request(message, self.thread_id, self.turn_id, self._previews)
             except ProbeError as exc:
-                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                self.send({'id': message['id'], 'result': {'decision': native_denial_decision(message)}})
                 self.shell.write(str(exc))
                 return
             token = uuid.uuid4().hex
             self.checkpoint(state='AWAITING_TOOL_APPROVAL')
             self._approvals[token] = {'id': message['id'], 'thread_id': self.thread_id,
                 'turn_id': self.turn_id, 'item_id': params['itemId'],
+                'denial_decision': native_denial_decision(message),
                 'patch_preview': preview if method == 'item/fileChange/requestApproval' else None}
             self.shell.event({'type': 'tool_approval', 'token': token, 'preview': preview})
             return
@@ -4226,7 +4240,8 @@ class NativeWorkflowConnection(Connection):
                 and self._approval_previews.get(native['binding']['item_id']) != native['preview']):
             raise ProbeError('Native patch changed; nothing approved.')
         self._native_tool = None  # A failed send has unknown outcome; never replay the decision.
-        self.send({'id': native['binding']['request_id'], 'result': {'decision': response['decision']}})
+        decision = native.get('denial_decision', 'decline') if response['decision'] == 'decline' else 'accept'
+        self.send({'id': native['binding']['request_id'], 'result': {'decision': decision}})
 
     def _offer_native_tool(self, message):
         params = message.get('params', {})
@@ -4240,16 +4255,17 @@ class NativeWorkflowConnection(Connection):
                 self.host.answer_tool_approval(self.controller.snapshot()['tool_request']['token'], 'decline')
                 self.host._halt('unsupported_capability')
             else:
-                self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                self.send({'id': message['id'], 'result': {'decision': native_denial_decision(message)}})
             return
         try:
             binding, preview = native_tool_request(message, active['thread_id'], active['turn_id'], self._approval_previews)
         except ProbeError:
-            self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+            self.send({'id': message['id'], 'result': {'decision': native_denial_decision(message)}})
             self.host._halt('unsupported_capability')
             raise
         self._native_tool = dict(binding=binding, preview=preview,
-                                command=params.get('command'), cwd=params.get('cwd'))
+                                command=params.get('command'), cwd=params.get('cwd'),
+                                denial_decision=native_denial_decision(message))
         self.host.offer_tool_approval(binding, preview)
 
     def _observe_tool_preview(self, message):
@@ -4325,7 +4341,7 @@ class NativeWorkflowConnection(Connection):
                     self._offer_native_tool(message)
                     continue
                 if message['method'] in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval'):
-                    self.send({'id': message['id'], 'result': {'decision': 'decline'}})
+                    self.send({'id': message['id'], 'result': {'decision': native_denial_decision(message)}})
                 self.host.observe_native(message)
             else:
                 if self.experimental_tool_approvals:

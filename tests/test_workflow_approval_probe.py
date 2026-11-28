@@ -85,6 +85,24 @@ class WorkflowApprovalProbeTests(unittest.TestCase):
         self.assertEqual([r['result']['decision'] for r in self.records() if 'result' in r],
                          ['accept', 'decline'])
 
+    def test_accept_cancel_offers_use_cancel_as_durable_denial_with_interrupted_terminal(self):
+        source = PROBE_SERVER.replace('  emit(request)',
+            "  params.update(environmentId='local',availableDecisions=['accept','acceptForSession','cancel'])\n  emit(request)")
+        source = source.replace("'status':'completed'}}})", "'status':'interrupted' if decision=='cancel' else 'completed'}}})")
+        result = self.probe(source)
+        self.assertTrue(all(result[key] == 'passed' for key in WORKFLOW_APPROVAL_KEYS), result)
+        self.assertEqual(result['cases'][1]['terminalStatus'], 'interrupted')
+        self.assertEqual([r['result']['decision'] for r in self.records() if 'result' in r], ['accept', 'cancel'])
+
+    def test_missing_accept_once_is_reported_without_unknown_decision_values(self):
+        source = PROBE_SERVER.replace('  emit(request)',
+            "  params['availableDecisions']=['acceptForSession','cancel','PRIVATE-DECISION']\n  emit(request)")
+        result = self.probe(source)
+        self.assertEqual(result['offeredApprovalDecisions'], ['cancel', 'acceptForSession'])
+        self.assertNotIn('PRIVATE-DECISION', json.dumps(result))
+        self.assertTrue(all(result[key] == 'unverified' for key in WORKFLOW_APPROVAL_KEYS))
+        self.assertNotIn('accept', [r['result']['decision'] for r in self.records() if 'result' in r])
+
     def test_connect_error_reports_source_location_without_private_message(self):
         private='PRIVATE /private/account/path MM-secret'
         error=ProbeError(private);error.approval_scopes=('PRIVATE-SCOPE',)

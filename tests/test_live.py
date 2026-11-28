@@ -255,6 +255,28 @@ class LiveBackendTests(unittest.TestCase):
         c.send.assert_called_once_with({'id': 'request', 'result': {'decision': 'accept'}})
         self.assertEqual(c.shell.permissions, 'read_only')
 
+    def test_cancel_only_denial_offer_never_selects_a_session_grant(self):
+        for choice, expected in (('approve', 'accept'), ('decline', 'cancel'), ('pause', 'cancel')):
+            with self.subTest(choice=choice):
+                c = self.backend(); c.turn_id = 'turn'; c.shell.active = True
+                c.handle_event({'id': 'request', 'method': 'item/commandExecution/requestApproval', 'params': {
+                    'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item',
+                    'command': 'printf synthetic', 'cwd': '/tmp',
+                    'availableDecisions': ['accept', 'acceptForSession', 'cancel']}})
+                c.send.assert_not_called()
+                self.assertIn('"denialDecision": "cancel"', c.shell.output.getvalue())
+                c._answer_tool(c.shell.pending['token'], choice)
+                c.send.assert_called_once_with({'id': 'request', 'result': {'decision': expected}})
+                self.assertEqual(c.shell.permissions, 'read_only')
+
+    def test_unsupported_scope_with_cancel_offer_is_cancelled_without_token(self):
+        c = self.backend(); c.turn_id = 'turn'; c.shell.active = True
+        c.handle_event({'id': 'request', 'method': 'item/commandExecution/requestApproval', 'params': {
+            'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item', 'command': 'printf synthetic',
+            'cwd': '/tmp', 'environmentId': 'remote', 'availableDecisions': ['accept', 'cancel']}})
+        self.assertIsNone(c.shell.pending)
+        c.send.assert_called_once_with({'id': 'request', 'result': {'decision': 'cancel'}})
+
     def test_known_schema_metadata_keeps_accept_once_without_selecting_amendments(self):
         c = self.backend();c.turn_id = 'turn';c.shell.active = True
         params = {'threadId': 'thread', 'turnId': 'turn', 'itemId': 'item',

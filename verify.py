@@ -675,7 +675,7 @@ class ApprovalVerificationConnection(NativeWorkflowConnection):
                 raise ProbeError('Unarmed verifier acceptance blocked.')
             self.armed = None
         super().send(message)
-        if decision in ('accept', 'decline'):
+        if decision in ('accept', 'decline', 'cancel'):
             self.decisions.append(decision)
 
 
@@ -795,8 +795,8 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
             token = request['token']
             if choice == 'approve':connection.armed = (request['binding']['request_id'], request['action_digest'])
             result['probeStage'] = 'respond_once'
+            expected = 'accept' if choice == 'approve' else connection._native_tool.get('denial_decision', 'decline')
             shell.line('/' + choice + ' ' + token)
-            expected = 'accept' if choice == 'approve' else 'decline'
             if connection.decisions != [expected]:return result
             before = list(connection.decisions)
             checkpoint = controller.export_checkpoint()
@@ -854,6 +854,11 @@ def probe_workflow_approvals(model, timeout, *, patch=False):
                 and all(isinstance(scope, str) and scope in ('kind', 'approvalId', 'environmentId',
                     'networkApprovalContext', 'grantRoot', 'additionalPermissions') for scope in scopes)):
             result['unsupportedApprovalScopes'] = list(scopes)
+        decisions = getattr(exc, 'approval_decisions', None)
+        if (isinstance(decisions, tuple) and len(decisions) <= 4
+                and all(isinstance(name, str) and name in ('accept', 'decline', 'cancel', 'acceptForSession')
+                        for name in decisions)):
+            result['offeredApprovalDecisions'] = list(decisions)
         return result
     finally:
         if connection is not None:

@@ -521,6 +521,20 @@ rejection of remote/malformed values. The user's result does not expose the
 actual value; a nonlocal value will still be rejected. Current live success and
 the rest of G2 remain unverified; no inference replay was run by the agent.
 
+P09 advertised denial compatibility (2026-11-28), MOCK_VERIFIED: the next
+user-run probe at runtime dc4d2ac7 passed the scope guard and stopped at the
+availableDecisions guard (line 3175); all seven checks remain unverified. That
+report does not contain the offered choices. Installed protocol and upstream
+support cancel (deny plus interrupt) alongside decline (deny plus continue).
+The shared parser now requires plain accept and either supported denial; it
+prefers decline and otherwise maps controller denial to advertised cancel.
+The preview identifies this behavior and the durable controller verdict stays
+declined. Manual, workflow, default rejection and verifier paths are updated;
+session/policy decisions remain inert. Fifty-three targeted tests pass, including
+synthetic accept/cancel with interrupted terminal status. Missing accept-once
+still rejects and now emits only recognized decision names in diagnostics.
+No live replay or G2 pass is claimed.
+
 Manual patch approval hardening: each token retains its thread/turn/item and
 displayed diff. A changed, invalid, completed or type-reused item immediately
 declines the pending request and expires the token, even if the old diff returns.

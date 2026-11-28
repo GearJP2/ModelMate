@@ -71,7 +71,7 @@ private text stayed out of a real search context.
 
 | Work still required | Dependency / evidence needed before completion |
 | --- | --- |
-| P09 command approval compatibility | The 2026-11-28 user-run report identifies environmentId; its value is not exposed. The parser now supports only exact `local` alongside legacy absent/null and displays it before approval. Remote/unknown values remain rejected. Obtain current-runtime scoped accept/decline results; command success does not pass patch or failure/loss paths. |
+| P09 command approval compatibility | The user-run probe progressed from environmentId to the availableDecisions guard. Exact `local` remains the only supported explicit environment. Plain accept plus decline or cancel is now supported; controller denial uses cancel only when decline is absent. Current-runtime live results remain unverified; command success does not pass patch or failure/loss paths. |
 | P01/P03/P08/P10/P12 current native integration | Current-version dispatch observations plus live mode, patch, cancellation, disconnect/process-loss and interactive timing evidence. Existing prepared probes cover particular bounded paths, not the whole matrix. |
 | P06/P08 default entry and P10 automatic execution | Plain-prompt entry still dispatches manual chat; explicit planning/plan handoff and experimental Auto advancement exist. Default automatic workflow behavior remains implementation work gated by native permission dependencies, not something a documentation or pilot change completes. |
 | P13 and A4 | Real isolated DNS/TLS and SearXNG evidence, query-provenance handling and automatic integration with private-file/history and injection checks. The current profile denied sockets; a normal capable environment must supply actual evidence without widening native permissions or replaying the previous attempt. Keep gated search disabled. |
@@ -140,6 +140,18 @@ callback and additional permission scopes. The result does not reveal whether
 the actual environment was local. This compatibility change is offline-tested
 only and does not change environment selection or native permission policy.
 Any new live probe is a separately chosen quota-consuming run, not a replay.
+
+The next user-run probe at runtime dc4d2ac7 stopped at the availableDecisions
+guard instead of a scope guard. All seven checks remain unverified and the
+actual choices are not in that report. The current parser supports plain accept
+with either decline (deny/continue) or cancel (deny/interrupt), preferring decline
+when both are offered. It displays the denial decision and preserves a durable
+declined controller verdict. The verifier accepts an observed cancelled denial
+only with its existing file, terminal, durable and single-use checks. No session
+or policy grant is selected. If plain accept or a supported denial is missing,
+the new `offeredApprovalDecisions` diagnostic exposes only recognized enum names,
+never arbitrary response text or unknown values. This change has offline
+evidence only; the actual live request may still be unsupported.
 
 A separate patch check is prepared as
 `python3 verify.py --run-live --probe-workflow-patches MODEL`. It uses at most two

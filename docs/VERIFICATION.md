@@ -5242,3 +5242,53 @@ closed; this change does not promise that the next user-run probe will pass.
 
 Full offline verification (`python3 -m unittest discover -s tests -v`) passed
 all 843 tests in 109.500 seconds, with no skips.
+
+### P09 advertised cancel as denial (2026-11-28)
+
+The user-run command probe at runtime
+`dc4d2ac72139000aea8de7d507eb4c7aa6e45f5021de2bd74dda9989d75d5b24`
+and verifier `b57bbc6f3a9b98008834b0795b8f59826c57cbe8828acbfd427a84d408b4c423`
+reached approve/await_approval, then failed native_tool_request at line 3175.
+This is the availableDecisions guard, not the earlier environment scope guard.
+All seven checks stayed unverified. The report does not reveal whether the
+list was malformed, lacked plain accept, or offered cancel instead of decline.
+
+The installed experimental schema defines decline as denial that continues the
+turn, and cancel as denial that also interrupts it. Upstream's
+[approval UI](https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/approval_overlay.rs)
+also exercises an accept/cancel offer. The parser previously required decline
+specifically, rejecting that legitimate combination. It now requires plain
+accept and either decline or cancel. Session/policy amendments remain inert;
+all existing environment/network/callback/permission guards remain unchanged.
+
+The shared native adapter selects decline when available, otherwise offered
+cancel. This choice is included in the command preview and saved in the
+in-memory pending request before the user's decision. Controller history still
+records declined, while wire cancel may yield interrupted terminal status.
+Manual decline/pause, pending-request invalidation, malformed/unsupported
+request rejection, duplicate/nested requests, default workflow rejection and
+experimental workflow responses use the same denial mapping where applicable.
+No temporary grant is restored, and interruption does not authorize a retry.
+
+The verifier records cancel as a wire denial and checks the expected choice
+captured before consuming the request. All pre-consent, file/marker, terminal,
+durable and single-use checks remain. Missing plain accept still fails closed.
+A bounded allowlisted `offeredApprovalDecisions` error field now identifies known
+simple enum names without exposing unknown strings or amendment values, avoiding
+another source-line-only report if this request remains unsupported.
+
+`PYTHONPATH=tests python3 -m unittest test_live test_native_permissions
+test_workflow_approval_probe -q` passed 53 tests in 3.153 seconds. New cases cover
+manual approve/decline/pause on accept/session/cancel offers without selecting a
+session grant, cancellation of an unsupported remote request without a token,
+both synthetic verifier turns with cancel/interrupted denial, and redacted
+diagnostics when accept-once is missing. No live inference or account turn was
+run; the user-supplied result is the only new live evidence. Compile/diff checks
+pass. Current actual live choices and full G2 success remain unverified.
+
+Runtime SHA-256: `7f32dce4d200316843d3aadc1f5eed1fe3d6e19961e048385af764049a9daa11`.
+Verifier SHA-256: `def723aa81962b4c50158167e6800234a43309cd9c73f79c55cb307c5e332f47`.
+
+Full offline verification (`python3 -m unittest discover -s tests -v`) passed
+all 847 tests in 109.109 seconds, with no skips. USAGE.md also documents that
+advertised cancel denial interrupts the turn and does not authorize replay.
